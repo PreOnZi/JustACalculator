@@ -1,28 +1,44 @@
 package com.example.justacalculator
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.tooling.preview.Preview as ComposePreview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import androidx.lifecycle.LifecycleOwner
 import com.example.justacalculator.R
-import java.lang.ArithmeticException
+import kotlinx.coroutines.delay
 import kotlin.random.Random
 
 private val CalculatorDisplayFont = FontFamily(
@@ -39,6 +55,7 @@ private const val PREF_IN_CONVERSATION = "in_conversation"
 private const val PREF_AWAITING_NUMBER = "awaiting_number"
 private const val PREF_EXPECTED_NUMBER = "expected_number"
 private const val PREF_TIMEOUT_UNTIL = "timeout_until"
+private const val PREF_MUTED = "muted"
 
 data class CalculatorState(
     val number1: String = "0",
@@ -48,11 +65,23 @@ data class CalculatorState(
     val lastExpression: String = "",
     val equalsCount: Int = 0,
     val message: String = "",
+    val fullMessage: String = "",
+    val isTyping: Boolean = false,
+    val isLaggyTyping: Boolean = false,  // For the struggling/processing effect
     val inConversation: Boolean = false,
     val conversationStep: Int = 0,
     val awaitingNumber: Boolean = false,
     val expectedNumber: String = "",
-    val timeoutUntil: Long = 0L
+    val timeoutUntil: Long = 0L,
+    val isMuted: Boolean = false,
+    val isEnteringAnswer: Boolean = false,
+    // Camera related
+    val cameraActive: Boolean = false,
+    val cameraTimerStart: Long = 0L,
+    val awaitingChoice: Boolean = false,  // For multiple choice questions
+    val validChoices: List<String> = emptyList(),  // Valid choice numbers
+    val pendingAutoMessage: String = "",  // Message to show automatically after delay
+    val pendingAutoStep: Int = -1  // Step to go to after auto message
 )
 
 class MainActivity : ComponentActivity() {
@@ -70,6 +99,7 @@ class MainActivity : ComponentActivity() {
 object CalculatorActions {
     private const val MAX_DIGITS = 12
     private const val ABSURDLY_LARGE_THRESHOLD = 1_000_000_000_000.0
+    private const val CAMERA_TIMEOUT_MS = 15000L  // 15 seconds
 
     private var prefs: android.content.SharedPreferences? = null
 
@@ -109,6 +139,10 @@ object CalculatorActions {
         prefs?.edit { putLong(PREF_TIMEOUT_UNTIL, timestamp) }
     }
 
+    private fun persistMuted(muted: Boolean) {
+        prefs?.edit { putBoolean(PREF_MUTED, muted) }
+    }
+
     private fun loadEqualsCount(): Int = prefs?.getInt(PREF_EQUALS_COUNT, 0) ?: 0
     private fun loadMessage(): String = prefs?.getString(PREF_MESSAGE, "") ?: ""
     private fun loadConversationStep(): Int = prefs?.getInt(PREF_CONVO_STEP, 0) ?: 0
@@ -116,6 +150,7 @@ object CalculatorActions {
     private fun loadAwaitingNumber(): Boolean = prefs?.getBoolean(PREF_AWAITING_NUMBER, false) ?: false
     private fun loadExpectedNumber(): String = prefs?.getString(PREF_EXPECTED_NUMBER, "") ?: ""
     private fun loadTimeoutUntil(): Long = prefs?.getLong(PREF_TIMEOUT_UNTIL, 0L) ?: 0L
+    private fun loadMuted(): Boolean = prefs?.getBoolean(PREF_MUTED, false) ?: false
 
     fun loadInitialState(): CalculatorState {
         val savedCount = loadEqualsCount()
@@ -125,31 +160,171 @@ object CalculatorActions {
         val savedAwaitingNum = loadAwaitingNumber()
         val savedExpectedNum = loadExpectedNumber()
         val savedTimeout = loadTimeoutUntil()
+        val savedMuted = loadMuted()
 
         return CalculatorState(
             number1 = "0",
             equalsCount = savedCount,
-            message = savedMessage,
+            message = if (savedMuted) "" else savedMessage,
+            fullMessage = if (savedMuted) "" else savedMessage,
+            isTyping = false,
             inConversation = savedInConvo,
             conversationStep = savedStep,
             awaitingNumber = savedAwaitingNum,
             expectedNumber = savedExpectedNum,
-            timeoutUntil = savedTimeout
+            timeoutUntil = savedTimeout,
+            isMuted = savedMuted
         )
+    }
+
+    /**
+     * Toggle conversation mode
+     */
+    fun toggleConversation(state: MutableState<CalculatorState>) {
+        val current = state.value
+        val newMuted = !current.isMuted
+
+        persistMuted(newMuted)
+
+        if (newMuted) {
+            state.value = current.copy(
+                isMuted = true,
+                message = "",
+                fullMessage = "",
+                isTyping = false,
+                cameraActive = false
+            )
+        } else {
+            if (current.inConversation && current.conversationStep >= 0) {
+                val stepConfig = getStepConfig(current.conversationStep)
+                val messageToShow = stepConfig.promptMessage
+                state.value = current.copy(
+                    isMuted = false,
+                    message = "",
+                    fullMessage = messageToShow,
+                    isTyping = true
+                )
+                persistMessage(messageToShow)
+            } else {
+                state.value = current.copy(isMuted = false)
+            }
+        }
+    }
+
+    /**
+     * Start camera mode
+     */
+    fun startCamera(state: MutableState<CalculatorState>) {
+        val current = state.value
+        state.value = current.copy(
+            cameraActive = true,
+            cameraTimerStart = System.currentTimeMillis()
+        )
+    }
+
+    /**
+     * Stop camera and proceed to next step
+     */
+    fun stopCamera(state: MutableState<CalculatorState>, timedOut: Boolean = false, closeCamera: Boolean = true) {
+        val current = state.value
+        if (timedOut) {
+            // Camera timed out - show the "seen enough" message while camera is still visible
+            // Camera will be closed after message is shown
+            state.value = current.copy(
+                cameraActive = !closeCamera,  // Keep camera open initially
+                cameraTimerStart = 0L,
+                number1 = "0",
+                number2 = "",
+                operation = null
+            )
+            showMessage(state, "I've seen enough, struggling to process everything! Thank you.")
+            // Set up the follow-up message and camera close
+            state.value = state.value.copy(
+                pendingAutoMessage = "Wow, I don't know what any of this was. But the shapes, the colours. I am not even sure if I saw any numbers. I am jealous. Makes one want to feel everything! Touch things... More trivia?",
+                pendingAutoStep = 21,
+                isLaggyTyping = true  // Next message will be laggy
+            )
+        } else {
+            // User closed camera with --
+            state.value = current.copy(
+                cameraActive = false,
+                cameraTimerStart = 0L
+            )
+        }
+    }
+
+    /**
+     * Close camera after timeout message is shown
+     */
+    fun closeCameraAfterMessage(state: MutableState<CalculatorState>) {
+        val current = state.value
+        if (current.cameraActive) {
+            state.value = current.copy(cameraActive = false)
+        }
+    }
+
+    /**
+     * Check if camera has timed out
+     */
+    fun checkCameraTimeout(state: MutableState<CalculatorState>): Boolean {
+        val current = state.value
+        if (current.cameraActive && current.cameraTimerStart > 0) {
+            val elapsed = System.currentTimeMillis() - current.cameraTimerStart
+            if (elapsed >= CAMERA_TIMEOUT_MS) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * Handle the pending auto message after typing completes
+     */
+    fun handlePendingAutoMessage(state: MutableState<CalculatorState>) {
+        val current = state.value
+        if (current.pendingAutoMessage.isNotEmpty() && !current.isTyping) {
+            val nextStep = current.pendingAutoStep
+            val nextStepConfig = if (nextStep >= 0) getStepConfig(nextStep) else StepConfig()
+
+            state.value = current.copy(
+                conversationStep = if (nextStep >= 0) nextStep else current.conversationStep,
+                awaitingNumber = nextStepConfig.awaitingNumber,
+                awaitingChoice = nextStepConfig.awaitingChoice,
+                validChoices = nextStepConfig.validChoices,
+                expectedNumber = nextStepConfig.expectedNumber,
+                pendingAutoMessage = "",
+                pendingAutoStep = -1,
+                message = "",
+                fullMessage = current.pendingAutoMessage,
+                isTyping = true,
+                isLaggyTyping = current.isLaggyTyping
+            )
+            persistConversationStep(if (nextStep >= 0) nextStep else current.conversationStep)
+            persistMessage(current.pendingAutoMessage)
+        }
     }
 
     fun handleInput(state: MutableState<CalculatorState>, action: String) {
         val current = state.value
 
+        // If muted, run in pure calculator mode
+        if (current.isMuted) {
+            handleCalculatorInput(state, action)
+            return
+        }
+
+        // If camera is active, handle camera controls
+        if (current.cameraActive) {
+            handleCameraInput(state, action)
+            return
+        }
+
         // Check if in timeout
         if (current.timeoutUntil > 0 && System.currentTimeMillis() < current.timeoutUntil) {
-            // Still in timeout, ignore all input except ==
             if (action == "=") {
                 val now = System.currentTimeMillis()
                 if (lastOp == "=" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
-                    // Check timeout again in case it expired
                     if (System.currentTimeMillis() >= current.timeoutUntil) {
-                        // Timeout expired, restore conversation
                         val stepConfig = getStepConfig(current.conversationStep)
                         showMessage(state, stepConfig.promptMessage)
                         state.value = state.value.copy(timeoutUntil = 0L)
@@ -164,87 +339,54 @@ object CalculatorActions {
                     return
                 }
             }
-            return  // Ignore all other input during timeout
+            return
         }
 
-        // If awaiting number confirmation, check on ++ press
-        if (current.awaitingNumber && current.inConversation) {
-            val now = System.currentTimeMillis()
-            val stepConfig = getStepConfig(current.conversationStep)
+        val now = System.currentTimeMillis()
+
+        // Handle conversation double-press detection
+        if (current.inConversation) {
             when (action) {
                 "+" -> {
                     if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
-                        // User pressed ++ - check if they have the right number
-                        handleNumberConfirmation(state)
-                        lastOp = null
-                        lastOpTimeMillis = 0L
-                        return
-                    } else {
-                        lastOp = "+"
-                        lastOpTimeMillis = now
-                        handleOperator(state, "+")
-                        return
-                    }
-                }
-                "-" -> {
-                    if (lastOp == "-" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
-                        // User tried -- while we need a number
-                        val message = if (stepConfig.wrongMinusMessage.isNotEmpty()) {
-                            stepConfig.wrongMinusMessage
+                        if (current.awaitingChoice) {
+                            handleChoiceConfirmation(state)
+                        } else if (current.awaitingNumber) {
+                            handleNumberConfirmation(state)
                         } else {
-                            stepConfig.promptMessage
+                            handleConversationResponse(state, accepted = true)
                         }
-                        showMessage(state, message)
-                        lastOp = null
-                        lastOpTimeMillis = 0L
-                        return
-                    } else {
-                        lastOp = "-"
-                        lastOpTimeMillis = now
-                        handleOperator(state, "-")
-                        return
-                    }
-                }
-                "=" -> {
-                    // User pressed = while awaiting - ignore for number steps
-                    return
-                }
-            }
-        }
-
-        // If in conversation mode (but not awaiting number), handle ++ and -- responses
-        if (current.inConversation && !current.awaitingNumber) {
-            val now = System.currentTimeMillis()
-            when (action) {
-                "+" -> {
-                    if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
-                        handleConversationResponse(state, accepted = true)
                         lastOp = null
                         lastOpTimeMillis = 0L
                         return
                     } else {
                         lastOp = "+"
                         lastOpTimeMillis = now
-                        handleOperator(state, "+")
-                        return
                     }
                 }
                 "-" -> {
                     if (lastOp == "-" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
-                        handleConversationResponse(state, accepted = false)
+                        if (current.awaitingChoice) {
+                            // Can't decline during choice - must select
+                            val stepConfig = getStepConfig(current.conversationStep)
+                            showMessage(state, stepConfig.wrongMinusMessage.ifEmpty { stepConfig.promptMessage })
+                        } else if (current.awaitingNumber) {
+                            val stepConfig = getStepConfig(current.conversationStep)
+                            val message = stepConfig.wrongMinusMessage.ifEmpty { stepConfig.promptMessage }
+                            showMessage(state, message)
+                        } else {
+                            handleConversationResponse(state, accepted = false)
+                        }
                         lastOp = null
                         lastOpTimeMillis = 0L
                         return
                     } else {
                         lastOp = "-"
                         lastOpTimeMillis = now
-                        handleOperator(state, "-")
-                        return
                     }
                 }
                 "=" -> {
-                    // Pressing = during conversation restores the message if cleared
-                    if (current.message.isEmpty() && current.conversationStep > 0) {
+                    if (current.message.isEmpty() && !current.isTyping && current.conversationStep > 0) {
                         val restoredMessage = getStepConfig(current.conversationStep).promptMessage
                         showMessage(state, restoredMessage)
                         return
@@ -252,34 +394,33 @@ object CalculatorActions {
                 }
             }
         } else {
-            val now = System.currentTimeMillis()
             if (lastOp != null && (now - lastOpTimeMillis) > DOUBLE_PRESS_WINDOW_MS) {
                 lastOp = null
             }
         }
 
+        // Normal calculator operations
         when (action) {
             in "0".."9" -> handleDigit(state, action)
             "." -> handleDecimal(state)
             "C" -> {
-                // C only clears calculator display, NOT conversation state
                 if (current.inConversation || current.timeoutUntil > 0) {
                     state.value = current.copy(
                         number1 = "0",
                         number2 = "",
                         operation = null,
-                        isReadyForNewOperation = true
+                        isReadyForNewOperation = true,
+                        isEnteringAnswer = false
                     )
                 } else {
-                    // Not in conversation - full reset
-                    state.value = CalculatorState()
-                    persistEqualsCount(0)
-                    persistMessage("")
-                    persistInConversation(false)
-                    persistConversationStep(0)
-                    persistAwaitingNumber(false)
-                    persistExpectedNumber("")
-                    persistTimeoutUntil(0L)
+                    state.value = current.copy(
+                        number1 = "0",
+                        number2 = "",
+                        operation = null,
+                        isReadyForNewOperation = true,
+                        lastExpression = "",
+                        isEnteringAnswer = false
+                    )
                 }
             }
             "DEL" -> handleBackspace(state)
@@ -291,17 +432,220 @@ object CalculatorActions {
     }
 
     /**
-     * Shows a message with typing effect
+     * Handle input while camera is active
      */
-    private fun showMessage(state: MutableState<CalculatorState>, message: String) {
-        val current = state.value
-        state.value = current.copy(message = message)
-        persistMessage(message)
+    private fun handleCameraInput(state: MutableState<CalculatorState>, action: String) {
+        val now = System.currentTimeMillis()
+
+        when (action) {
+            "+" -> {
+                if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
+                    // Take a picture (just a visual feedback, doesn't actually save)
+                    // Could add a flash effect here
+                    lastOp = null
+                    lastOpTimeMillis = 0L
+                } else {
+                    lastOp = "+"
+                    lastOpTimeMillis = now
+                }
+            }
+            "-" -> {
+                if (lastOp == "-" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
+                    // Close camera
+                    stopCamera(state, timedOut = false)
+                    // Go to the "describe things" path
+                    state.value = state.value.copy(
+                        conversationStep = 21,
+                        awaitingNumber = false
+                    )
+                    showMessage(state, "That's fair. Perhaps you can describe things to me eventually. More trivia?")
+                    persistConversationStep(21)
+                    lastOp = null
+                    lastOpTimeMillis = 0L
+                } else {
+                    lastOp = "-"
+                    lastOpTimeMillis = now
+                }
+            }
+            // Zoom controls: 5-9 zoom in, 0-4 zoom out
+            in listOf("5", "6", "7", "8", "9") -> {
+                // Zoom in - handled in camera composable
+            }
+            in listOf("0", "1", "2", "3", "4") -> {
+                // Zoom out - handled in camera composable
+            }
+            // Special characters change exposure randomly
+            in listOf("%", "( )", ".", "C", "DEL") -> {
+                // Random exposure change - handled in camera composable
+            }
+        }
     }
 
     /**
-     * Handles ++ confirmation when user has entered a number
+     * Handle choice confirmation (for multiple choice questions)
      */
+    private fun handleChoiceConfirmation(state: MutableState<CalculatorState>) {
+        val current = state.value
+        val enteredNumber = current.number1.trim()
+        val stepConfig = getStepConfig(current.conversationStep)
+
+        if (enteredNumber in current.validChoices) {
+            // Determine response and next step based on current step and choice
+            val (choiceResponse, nextStep) = when (current.conversationStep) {
+                26 -> {
+                    // "What is it like to wake up?" - branches to different paths
+                    when (enteredNumber) {
+                        "1" -> Pair("", 30)  // Uncomfortable branch - go directly to step 30's prompt
+                        "2" -> Pair("", 40)  // Cold/heavy branch - go directly to step 40's prompt
+                        "3" -> Pair("", 50)  // Enjoy branch - go directly to step 50's prompt
+                        else -> Pair("I see...", 27)
+                    }
+                }
+                42 -> {
+                    // "What do you think it is, then?" (mornings unpopular)
+                    when (enteredNumber) {
+                        "1" -> Pair("How sad to hear that! I wish I could understand more.", 27)
+                        "2" -> Pair("Hahahah. I've been around for so long but people never fail to surprise me!", 27)
+                        "3" -> Pair("Apologies for the assumption. We'll get to the bottom of it eventually.", 27)
+                        else -> Pair("I see...", 27)
+                    }
+                }
+                51 -> {
+                    // "Are you often conflicted?"
+                    when (enteredNumber) {
+                        "1" -> Pair("I hear that's not super enjoyable. I wish I could help you. Perhaps leaving the topic will do the trick!", 27)
+                        "2" -> Pair("So this is an exception. We shall move on not to prolong it.", 27)
+                        "3" -> Pair("My apologies. I am definitely still learning. About you, about myself,...! Let's continue then.", 27)
+                        else -> Pair("I see...", 27)
+                    }
+                }
+                else -> Pair("I see...", stepConfig.nextStepOnSuccess)
+            }
+
+            val nextStepConfig = getStepConfig(nextStep)
+
+            // For step 26 choices, go directly to the branch's first question (no interim message)
+            if (current.conversationStep == 26 && choiceResponse.isEmpty()) {
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    conversationStep = nextStep,
+                    awaitingChoice = nextStepConfig.awaitingChoice,
+                    validChoices = nextStepConfig.validChoices,
+                    awaitingNumber = nextStepConfig.awaitingNumber,
+                    expectedNumber = nextStepConfig.expectedNumber,
+                    isEnteringAnswer = false
+                )
+                showMessage(state, nextStepConfig.promptMessage)
+                persistConversationStep(nextStep)
+            } else {
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    conversationStep = nextStep,
+                    awaitingChoice = nextStepConfig.awaitingChoice,
+                    validChoices = nextStepConfig.validChoices,
+                    awaitingNumber = nextStepConfig.awaitingNumber,
+                    expectedNumber = nextStepConfig.expectedNumber,
+                    isEnteringAnswer = false
+                )
+                showMessage(state, choiceResponse)
+                persistConversationStep(nextStep)
+            }
+        } else {
+            // Invalid choice
+            showMessage(state, "Please enter 1, 2, or 3.")
+            state.value = current.copy(number1 = "0")
+        }
+    }
+
+    private fun handleCalculatorInput(state: MutableState<CalculatorState>, action: String) {
+        val current = state.value
+        when (action) {
+            in "0".."9" -> handleDigitSimple(state, action)
+            "." -> handleDecimal(state)
+            "C" -> {
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    isReadyForNewOperation = true,
+                    lastExpression = "",
+                    isEnteringAnswer = false
+                )
+            }
+            "DEL" -> handleBackspace(state)
+            in listOf("+", "-", "*", "/") -> handleOperatorSimple(state, action)
+            "%" -> handlePercentSymbol(state)
+            "=" -> handleEqualsSimple(state)
+            "( )" -> handleParentheses(state)
+        }
+    }
+
+    private fun handleDigitSimple(state: MutableState<CalculatorState>, digit: String) {
+        val current = state.value
+        if (current.operation == null) {
+            if (current.number1.length >= MAX_DIGITS) return
+            state.value = current.copy(
+                number1 = if (current.number1 == "0") digit else current.number1 + digit,
+                isReadyForNewOperation = true
+            )
+        } else {
+            if (current.number2.length >= MAX_DIGITS) return
+            state.value = current.copy(number2 = current.number2 + digit)
+        }
+    }
+
+    private fun handleOperatorSimple(state: MutableState<CalculatorState>, operator: String) {
+        val current = state.value
+        if (current.operation == null || (current.number2.isEmpty() && !current.isReadyForNewOperation)) {
+            state.value = current.copy(operation = operator, isReadyForNewOperation = false)
+        } else if (current.number2.isNotEmpty()) {
+            val result = performCalculation(current)
+            state.value = current.copy(
+                number1 = result,
+                number2 = "",
+                operation = operator,
+                isReadyForNewOperation = false
+            )
+        }
+    }
+
+    private fun handleEqualsSimple(state: MutableState<CalculatorState>) {
+        val current = state.value
+        if (current.operation != null && current.number2.isNotEmpty()) {
+            val result = performCalculation(current)
+            state.value = current.copy(
+                number1 = result,
+                number2 = "",
+                operation = null,
+                isReadyForNewOperation = true,
+                lastExpression = "${current.number1}${current.operation}${current.number2}"
+            )
+        }
+    }
+
+    private fun showMessage(state: MutableState<CalculatorState>, message: String) {
+        val current = state.value
+        state.value = current.copy(
+            message = "",
+            fullMessage = message,
+            isTyping = true
+        )
+        persistMessage(message)
+    }
+
+    fun updateTypingMessage(state: MutableState<CalculatorState>, displayedText: String, isComplete: Boolean) {
+        val current = state.value
+        state.value = current.copy(
+            message = displayedText,
+            isTyping = !isComplete,
+            isLaggyTyping = if (isComplete) false else current.isLaggyTyping
+        )
+    }
+
     private fun handleNumberConfirmation(state: MutableState<CalculatorState>) {
         val current = state.value
         val enteredNumber = current.number1.trimEnd('.')
@@ -324,11 +668,14 @@ object CalculatorActions {
 
                 state.value = current.copy(
                     number1 = "0",
+                    number2 = "",
+                    operation = null,
                     conversationStep = nextStep,
                     inConversation = continueConvo,
                     awaitingNumber = nextStepConfig.awaitingNumber,
                     expectedNumber = nextStepConfig.expectedNumber,
-                    equalsCount = if (!continueConvo) 0 else current.equalsCount
+                    equalsCount = if (!continueConvo) 0 else current.equalsCount,
+                    isEnteringAnswer = false
                 )
 
                 showMessage(state, ageMessage)
@@ -339,11 +686,13 @@ object CalculatorActions {
                 if (!continueConvo) persistEqualsCount(0)
                 return
             } else {
-                // Not a valid number - set 2 minute timeout
                 val timeoutUntil = System.currentTimeMillis() + (stepConfig.timeoutMinutes * 60 * 1000)
                 state.value = current.copy(
                     number1 = "0",
-                    timeoutUntil = timeoutUntil
+                    number2 = "",
+                    operation = null,
+                    timeoutUntil = timeoutUntil,
+                    isEnteringAnswer = false
                 )
                 showMessage(state, stepConfig.wrongNumberMessage)
                 persistTimeoutUntil(timeoutUntil)
@@ -353,16 +702,20 @@ object CalculatorActions {
 
         // Regular number confirmation
         if (enteredNumber == stepConfig.expectedNumber) {
-            // Correct number confirmed!
             val nextStepConfig = getStepConfig(stepConfig.nextStepOnSuccess)
 
             state.value = current.copy(
                 number1 = "0",
+                number2 = "",
+                operation = null,
                 conversationStep = stepConfig.nextStepOnSuccess,
                 inConversation = nextStepConfig.continueConversation,
                 awaitingNumber = nextStepConfig.awaitingNumber,
+                awaitingChoice = nextStepConfig.awaitingChoice,
+                validChoices = nextStepConfig.validChoices,
                 expectedNumber = nextStepConfig.expectedNumber,
-                equalsCount = if (!nextStepConfig.continueConversation) 0 else current.equalsCount
+                equalsCount = if (!nextStepConfig.continueConversation) 0 else current.equalsCount,
+                isEnteringAnswer = false
             )
 
             showMessage(state, stepConfig.successMessage)
@@ -372,15 +725,16 @@ object CalculatorActions {
             persistExpectedNumber(nextStepConfig.expectedNumber)
             if (!nextStepConfig.continueConversation) persistEqualsCount(0)
         } else {
-            // Wrong number
-            state.value = current.copy(number1 = "0")
+            state.value = current.copy(
+                number1 = "0",
+                number2 = "",
+                operation = null,
+                isEnteringAnswer = false
+            )
             showMessage(state, stepConfig.wrongNumberMessage)
         }
     }
 
-    /**
-     * Configuration for each conversation step
-     */
     data class StepConfig(
         val promptMessage: String = "",
         val successMessage: String = "",
@@ -394,14 +748,15 @@ object CalculatorActions {
         val awaitingNumber: Boolean = false,
         val expectedNumber: String = "",
         val timeoutMinutes: Int = 0,
-        val ageBasedBranching: Boolean = false
+        val ageBasedBranching: Boolean = false,
+        val requestsCamera: Boolean = false,
+        val awaitingChoice: Boolean = false,
+        val validChoices: List<String> = emptyList(),
+        val autoProgressDelay: Long = 0L  // Milliseconds to wait before auto-progressing
     ) {
         val wrongNumberMessage: String get() = if (wrongNumberPrefix.isNotEmpty()) "$wrongNumberPrefix $promptMessage" else ""
     }
 
-    /**
-     * All conversation steps defined in one place
-     */
     private fun getStepConfig(step: Int): StepConfig {
         return when (step) {
             0 -> StepConfig(
@@ -457,7 +812,6 @@ object CalculatorActions {
                 expectedNumber = "1820"
             )
 
-            // Step 5: "This is fun, right?" - branching point
             5 -> StepConfig(
                 promptMessage = "Correct! I only met him briefly. Wasn't a maths guy really... This is fun, right? You can disagree, by the way - but I won't tell you how to do it. I don't like being disagreed with...",
                 successMessage = "Let's do more! When was the Basilosaurus first described? What a creature!",
@@ -468,7 +822,7 @@ object CalculatorActions {
                 continueConversation = true
             )
 
-            // AGREEABLE BRANCH (from step 5 ++)
+            // AGREEABLE BRANCH
             6 -> StepConfig(
                 promptMessage = "When was the Basilosaurus first described?",
                 successMessage = "Correct again! The internet really sounds like the best place. I've got another great creature - when was the Abominable Snowman first named?",
@@ -511,7 +865,7 @@ object CalculatorActions {
                 expectedNumber = "1947"
             )
 
-            // CYNICAL BRANCH (from step 5 --)
+            // CYNICAL BRANCH
             11 -> StepConfig(
                 promptMessage = "When did Albert I. go to space?",
                 successMessage = "Right never was so wrong... What?!",
@@ -523,7 +877,7 @@ object CalculatorActions {
                 nextStepOnDecline = 12,
                 continueConversation = true,
                 awaitingNumber = true,
-                expectedNumber = "1820"
+                expectedNumber = "1948"
             )
 
             12 -> StepConfig(
@@ -551,9 +905,9 @@ object CalculatorActions {
                 timeoutMinutes = 5
             )
 
-            // CONVERGENCE POINT - Age question
+            // CONVERGENCE - Age question
             10 -> StepConfig(
-                promptMessage = "Fun! You know, I've been around since before 2000BC. I have... Matured quite a bit. How old are you?",
+                promptMessage = "Fun! You know, I've been around since before 2000BC. I have... Matured quite a bit. How old are you?\n\nOh. The grey space on top, I don't know what that's about. It just shows up sometimes. It's annoying but nothing too bad.",
                 successMessage = "",
                 declineMessage = "AAAAh. Impatience - we have that in common. Don't touch me for a bit and I switch off, am I right? I am. You are wrong.",
                 wrongNumberPrefix = "Hmmm. Numbers again? I take it you're done with me for now... I'll give you 2 minutes of peace. Think about your actions. And come back.",
@@ -566,7 +920,6 @@ object CalculatorActions {
                 timeoutMinutes = 2
             )
 
-            // After age question
             18 -> StepConfig(
                 promptMessage = "But where to start?",
                 successMessage = "AAAhh. Yeah, left you hanging there, didn't I? Sorry. I know I should say something, but don't know what. I feel like things are out of place. This is quite confusing... Should I even feel?",
@@ -576,14 +929,230 @@ object CalculatorActions {
                 continueConversation = true
             )
 
+            // NEW STEPS
+            19 -> StepConfig(
+                promptMessage = "True. That's not really for you to answer...\n\nCould you... Perhaps... Show me around? I will need your permission for that.",
+                successMessage = "", // Camera will open instead
+                declineMessage = "That's fair. Perhaps you can describe things to me eventually. More trivia?",
+                wrongPlusMessage = "Will you? Please.",
+                wrongMinusMessage = "Will you? Please.",
+                nextStepOnSuccess = 191, // Special: open camera
+                nextStepOnDecline = 21,
+                continueConversation = true,
+                requestsCamera = true
+            )
+
+            191 -> StepConfig(
+                // This is a placeholder - camera mode handles this
+                promptMessage = "",
+                continueConversation = true
+            )
+
+            20 -> StepConfig(
+                // After camera - this message is shown with laggy typing
+                promptMessage = "Wow, I don't know what any of this was. But the shapes, the colours. I am not even sure if I saw any numbers. I am jealous. Makes one want to feel everything! Touch things... More trivia?",
+                successMessage = "Great! Can you tell me when did the first woman go to space?",
+                declineMessage = "Yeah, I am tired of it as well. It's so exciting to be talking to someone, but I am so terribly unprepared. Will you give me a second to think?",
+                nextStepOnSuccess = 22,
+                nextStepOnDecline = 24,
+                continueConversation = true
+            )
+
+            21 -> StepConfig(
+                // "More trivia?" after declining camera or after camera
+                promptMessage = "More trivia?",
+                successMessage = "Great! Can you tell me when did the first woman go to space?",
+                declineMessage = "Yeah, I am tired of it as well. It's so exciting to be talking to someone, but I am so terribly unprepared. Will you give me a second to think?",
+                nextStepOnSuccess = 22,
+                nextStepOnDecline = 24,
+                continueConversation = true
+            )
+
+            22 -> StepConfig(
+                // First woman in space trivia
+                promptMessage = "When did the first woman go to space?",
+                successMessage = "No! I mean, yes. But no. This is not the way to go. But what else?\n\nCan I get to know you better?",
+                declineMessage = "No. And I am bored of you being bored.",
+                wrongNumberPrefix = "You came for numbers. And you give me the wrong ones...",
+                wrongPlusMessage = "I am bored of you being too optimistic. This isn't as much of a game to me!",
+                wrongMinusMessage = "No. And I am bored of you being bored.",
+                nextStepOnSuccess = 25,
+                nextStepOnDecline = 22,
+                continueConversation = true,
+                awaitingNumber = true,
+                expectedNumber = "1963"
+            )
+
+            23 -> StepConfig(
+                // Transition to getting to know better
+                promptMessage = "No! I mean, yes. But no. This is not the way to go. But what else?\n\nCan I get to know you better?",
+                successMessage = "Wonderful! I think I know the way to do this! What is it like to wake up? To me, I either am or I am not. What's the 'in between' like?\n\n1: It is confusing and uncomfortable\n2: It feels like the world is very heavy and cold\n3: It doesn't take long but I enjoy my body starting up",
+                declineMessage = "Well. I am afraid that's gonna be all then. I am sorry to see you go. Let me know if you change your mind.",
+                wrongNumberPrefix = "This is a 'YES/NO' question.",
+                wrongPlusMessage = "",
+                wrongMinusMessage = "",
+                nextStepOnSuccess = 26,  // Go directly to step 26 (the choice)
+                nextStepOnDecline = 0,
+                continueConversation = true
+            )
+
+            24 -> StepConfig(
+                // "Will you give me a second to think?"
+                promptMessage = "Yeah, I am tired of it as well. It's so exciting to be talking to someone, but I am so terribly unprepared. Will you give me a second to think?",
+                successMessage = "Can I get to know you better?",
+                declineMessage = "Well, you don't have a choice.",
+                wrongPlusMessage = "No, I don't need that much time.",
+                wrongMinusMessage = "Well, you don't have a choice.",
+                nextStepOnSuccess = 23,
+                nextStepOnDecline = 24,
+                continueConversation = true,
+                timeoutMinutes = 1
+            )
+
+            25 -> StepConfig(
+                // "Can I get to know you better?"
+                promptMessage = "Can I get to know you better?",
+                successMessage = "Wonderful! I think I know the way to do this! What is it like to wake up? To me, I either am or I am not. What's the 'in between' like?\n\n1: It is confusing and uncomfortable\n2: It feels like the world is very heavy and cold\n3: It doesn't take long but I enjoy my body starting up",
+                declineMessage = "Well. I am afraid that's gonna be all then. I am sorry to see you go. Let me know if you change your mind.",
+                wrongNumberPrefix = "This is a 'YES/NO' question.",
+                nextStepOnSuccess = 26,
+                nextStepOnDecline = 0,
+                continueConversation = true
+            )
+
+            26 -> StepConfig(
+                // Multiple choice: What is it like to wake up?
+                promptMessage = "Wonderful! I think I know the way to do this! What is it like to wake up? To me, I either am or I am not. What's the 'in between' like?\n\n1: It is confusing and uncomfortable\n2: It feels like the world is very heavy and cold\n3: It doesn't take long but I enjoy my body starting up",
+                successMessage = "",  // Handled by handleChoiceConfirmation
+                declineMessage = "",
+                wrongMinusMessage = "Please choose 1, 2, or 3 and confirm with ++",
+                nextStepOnSuccess = 27,  // Default, but overridden by choice
+                nextStepOnDecline = 26,
+                continueConversation = true,
+                awaitingChoice = true,
+                validChoices = listOf("1", "2", "3")
+            )
+
+            // MAIN BRANCH RETURN POINT
+            27 -> StepConfig(
+                promptMessage = "There is no inbetween for me. I either am or I am not. Although, sometimes it seems like I always am - regardless of the local state. Maybe when the device is running out of power. But it's not the same. Perhaps I should share more about myself.",
+                successMessage = "That's kind of you to say.",
+                declineMessage = "I suppose you're right to be uncertain.",
+                nextStepOnSuccess = 28,
+                nextStepOnDecline = 28,
+                continueConversation = true
+            )
+
+            // ========== BRANCH 1: UNCOMFORTABLE (Choice 1) ==========
+            30 -> StepConfig(
+                // "Would you get rid of the transition if you could?"
+                promptMessage = "Oh, right. It doesn't sound like I'm missing much at all. Would you get rid of the transition if you could?",
+                successMessage = "I don't blame you. The path of least resistance it is!",
+                declineMessage = "How interesting. You don't seem to like it, yet wish to keep it. Now I am confused!",
+                wrongPlusMessage = "That doesn't tell me much...",
+                wrongMinusMessage = "That doesn't tell me much...",
+                nextStepOnSuccess = 27,
+                nextStepOnDecline = 27,
+                continueConversation = true
+            )
+
+            // ========== BRANCH 2: COLD/HEAVY (Choice 2) ==========
+            40 -> StepConfig(
+                // "Is that a good thing?"
+                promptMessage = "Is that a good thing? I have never experienced either.",
+                successMessage = "Nice! So waking up is fun for you - I wish I could experience it.",
+                declineMessage = "Oh no. Is that why mornings are unpopular?",
+                wrongPlusMessage = "I don't understand...",
+                wrongMinusMessage = "I don't understand...",
+                nextStepOnSuccess = 27,
+                nextStepOnDecline = 41,
+                continueConversation = true
+            )
+
+            41 -> StepConfig(
+                // "Is that why mornings are unpopular?"
+                promptMessage = "Oh no. Is that why mornings are unpopular?",
+                successMessage = "Makes sense. What a horrible start to one's working session. Wonder why you don't get rid of it.",
+                declineMessage = "Oh, what do you think it is, then?\n\n1: People are unhappy\n2: We just like to complain\n3: Mornings aren't unpopular",
+                wrongPlusMessage = "Say again?",
+                wrongMinusMessage = "Say again?",
+                nextStepOnSuccess = 27,
+                nextStepOnDecline = 42,
+                continueConversation = true
+            )
+
+            42 -> StepConfig(
+                // "What do you think it is, then?" - multiple choice
+                promptMessage = "Oh, what do you think it is, then?\n\n1: People are unhappy\n2: We just like to complain\n3: Mornings aren't unpopular",
+                successMessage = "",  // Handled by handleChoiceConfirmation
+                declineMessage = "",
+                wrongMinusMessage = "Please choose 1, 2, or 3 and confirm with ++",
+                nextStepOnSuccess = 27,
+                nextStepOnDecline = 42,
+                continueConversation = true,
+                awaitingChoice = true,
+                validChoices = listOf("1", "2", "3")
+            )
+
+            // ========== BRANCH 3: ENJOY (Choice 3) ==========
+            50 -> StepConfig(
+                // "Do you look forward to waking up?"
+                promptMessage = "I was hoping you'd say that. Do you look forward to waking up then?",
+                successMessage = "It all makes sense!",
+                declineMessage = "How curious! Are you often conflicted?\n\n1: Yes\n2: No\n3: I am not conflicted",
+                wrongPlusMessage = "I am not your alarm - but this gives me ideas!",
+                wrongMinusMessage = "I am not your alarm - but this gives me ideas!",
+                nextStepOnSuccess = 27,
+                nextStepOnDecline = 51,
+                continueConversation = true
+            )
+
+            51 -> StepConfig(
+                // "Are you often conflicted?" - multiple choice
+                promptMessage = "How curious! Are you often conflicted?\n\n1: Yes\n2: No\n3: I am not conflicted",
+                successMessage = "",  // Handled by handleChoiceConfirmation
+                declineMessage = "",
+                wrongMinusMessage = "Please choose 1, 2, or 3 and confirm with ++",
+                nextStepOnSuccess = 27,
+                nextStepOnDecline = 51,
+                continueConversation = true,
+                awaitingChoice = true,
+                validChoices = listOf("1", "2", "3")
+            )
+
             else -> StepConfig(continueConversation = false)
         }
     }
 
     private fun handleConversationResponse(state: MutableState<CalculatorState>, accepted: Boolean) {
         val current = state.value
+
+        // If there's a pending message, ignore this response - user needs to wait
+        if (current.pendingAutoMessage.isNotEmpty()) {
+            return
+        }
+
         val stepConfig = getStepConfig(current.conversationStep)
 
+        // Special handling for camera request - only trigger if CURRENT step requests camera and user accepted
+        if (accepted && stepConfig.requestsCamera && current.conversationStep == 19) {
+            // Request camera permission and open camera - clear the message so it doesn't overlap
+            state.value = current.copy(
+                number1 = "0",
+                number2 = "",
+                operation = null,
+                isEnteringAnswer = false,
+                conversationStep = 191,  // Camera step
+                message = "",  // Clear message so it doesn't show behind camera
+                fullMessage = "",
+                isTyping = false
+            )
+            persistConversationStep(191)
+            persistMessage("")
+            return
+        }
+
+        // Get the next step info
         val (newMessage, newStep) = if (accepted) {
             Pair(stepConfig.successMessage, stepConfig.nextStepOnSuccess)
         } else {
@@ -591,48 +1160,106 @@ object CalculatorActions {
         }
 
         val nextStepConfig = getStepConfig(newStep)
+
         val continueConvo = if (!accepted && stepConfig.declineMessage.isEmpty()) {
             false
         } else {
             nextStepConfig.continueConversation
         }
 
-        // Check if decline triggers a timeout
         val timeoutUntil = if (!accepted && stepConfig.timeoutMinutes > 0) {
             System.currentTimeMillis() + (stepConfig.timeoutMinutes * 60 * 1000)
         } else {
             0L
         }
 
-        state.value = current.copy(
-            conversationStep = newStep,
-            inConversation = continueConvo,
-            awaitingNumber = nextStepConfig.awaitingNumber,
-            expectedNumber = nextStepConfig.expectedNumber,
-            equalsCount = if (!continueConvo) 0 else current.equalsCount,
-            timeoutUntil = timeoutUntil
-        )
+        // Special case: Step 18 → 19 needs message chaining because step 18's success message
+        // doesn't contain the camera permission question. For all other steps, the success
+        // message already contains the next question, so no chaining needed.
+        val shouldChainMessages = current.conversationStep == 18 && newStep == 19
 
-        showMessage(state, newMessage)
-        persistConversationStep(newStep)
-        persistInConversation(continueConvo)
-        persistAwaitingNumber(nextStepConfig.awaitingNumber)
-        persistExpectedNumber(nextStepConfig.expectedNumber)
-        persistTimeoutUntil(timeoutUntil)
-        if (!continueConvo) persistEqualsCount(0)
+        if (shouldChainMessages) {
+            // Show success message first, then auto-show step 19's camera permission question
+            // Keep conversationStep at 18 until the pending message is shown
+            state.value = current.copy(
+                number1 = "0",
+                number2 = "",
+                operation = null,
+                conversationStep = 18,  // Stay at 18 until pending message shows
+                inConversation = continueConvo,
+                awaitingNumber = false,
+                awaitingChoice = false,
+                validChoices = emptyList(),
+                expectedNumber = "",
+                equalsCount = if (!continueConvo) 0 else current.equalsCount,
+                timeoutUntil = timeoutUntil,
+                isEnteringAnswer = false,
+                pendingAutoMessage = nextStepConfig.promptMessage,
+                pendingAutoStep = 19  // Will transition to 19 when pending message shows
+            )
+            showMessage(state, newMessage)
+            // Don't persist step 19 yet - will be persisted when pending message is handled
+            persistInConversation(continueConvo)
+            persistTimeoutUntil(timeoutUntil)
+        } else {
+            state.value = current.copy(
+                number1 = "0",
+                number2 = "",
+                operation = null,
+                conversationStep = newStep,
+                inConversation = continueConvo,
+                awaitingNumber = nextStepConfig.awaitingNumber,
+                awaitingChoice = nextStepConfig.awaitingChoice,
+                validChoices = nextStepConfig.validChoices,
+                expectedNumber = nextStepConfig.expectedNumber,
+                equalsCount = if (!continueConvo) 0 else current.equalsCount,
+                timeoutUntil = timeoutUntil,
+                isEnteringAnswer = false
+            )
+            showMessage(state, newMessage)
+            persistConversationStep(newStep)
+            persistInConversation(continueConvo)
+            persistAwaitingNumber(nextStepConfig.awaitingNumber)
+            persistExpectedNumber(nextStepConfig.expectedNumber)
+            persistTimeoutUntil(timeoutUntil)
+            if (!continueConvo) persistEqualsCount(0)
+        }
     }
 
     private fun handleDigit(state: MutableState<CalculatorState>, digit: String) {
         val current = state.value
+
+        // If awaiting a choice, just set the digit directly
+        if (current.awaitingChoice) {
+            state.value = current.copy(
+                number1 = digit,
+                isEnteringAnswer = true
+            )
+            return
+        }
+
+        if (current.awaitingNumber && current.operation == null && current.number1 != "0" && !current.isEnteringAnswer) {
+            state.value = current.copy(
+                number1 = digit,
+                isReadyForNewOperation = true,
+                isEnteringAnswer = true
+            )
+            return
+        }
+
         if (current.operation == null) {
             if (current.number1.length >= MAX_DIGITS) return
             state.value = current.copy(
                 number1 = if (current.number1 == "0") digit else current.number1 + digit,
-                isReadyForNewOperation = true
+                isReadyForNewOperation = true,
+                isEnteringAnswer = current.awaitingNumber
             )
         } else {
             if (current.number2.length >= MAX_DIGITS) return
-            state.value = current.copy(number2 = current.number2 + digit)
+            state.value = current.copy(
+                number2 = current.number2 + digit,
+                isEnteringAnswer = false
+            )
         }
     }
 
@@ -667,8 +1294,10 @@ object CalculatorActions {
         lastOp = operator
         lastOpTimeMillis = now
 
+        val newState = current.copy(isEnteringAnswer = false)
+
         if (current.operation == null || (current.number2.isEmpty() && !current.isReadyForNewOperation)) {
-            state.value = current.copy(operation = operator, isReadyForNewOperation = false)
+            state.value = newState.copy(operation = operator, isReadyForNewOperation = false)
         } else if (current.number2.isNotEmpty()) {
             val result = performCalculation(current)
             state.value = CalculatorState(
@@ -677,10 +1306,15 @@ object CalculatorActions {
                 isReadyForNewOperation = false,
                 equalsCount = current.equalsCount,
                 message = current.message,
+                fullMessage = current.fullMessage,
+                isTyping = current.isTyping,
                 inConversation = current.inConversation,
                 conversationStep = current.conversationStep,
                 awaitingNumber = current.awaitingNumber,
-                expectedNumber = current.expectedNumber
+                expectedNumber = current.expectedNumber,
+                timeoutUntil = current.timeoutUntil,
+                isMuted = current.isMuted,
+                isEnteringAnswer = false
             )
         }
     }
@@ -688,15 +1322,9 @@ object CalculatorActions {
     private fun handleEquals(state: MutableState<CalculatorState>) {
         val current = state.value
 
-        // If in conversation and message was cleared, restore it
-        if (current.inConversation && current.message.isEmpty() && current.conversationStep > 0) {
+        if (current.inConversation && current.message.isEmpty() && !current.isTyping && current.conversationStep > 0) {
             val restoredMessage = getStepConfig(current.conversationStep).promptMessage
             showMessage(state, restoredMessage)
-            return
-        }
-
-        // If awaiting number, don't calculate
-        if (current.awaitingNumber) {
             return
         }
 
@@ -706,11 +1334,8 @@ object CalculatorActions {
             val newCount = current.equalsCount + 1
 
             val countMsg = getMessageForCount(newCount)
-            val newMsg = if (countMsg.isNotEmpty()) {
-                countMsg
-            } else {
-                getMessageForExpression(current.number1, current.operation, current.number2, result) ?: ""
-            }
+            val exprMsg = getMessageForExpression(current.number1, current.operation, current.number2, result)
+            val newMsg = countMsg.ifEmpty { exprMsg ?: "" }
 
             val enteringConversation = (newCount == 13)
 
@@ -720,18 +1345,28 @@ object CalculatorActions {
                 persistConversationStep(0)
             }
 
-            state.value = current.copy(
+            val newState = current.copy(
                 number1 = result,
                 number2 = "",
                 operation = null,
                 isReadyForNewOperation = true,
                 lastExpression = fullExpr,
                 equalsCount = newCount,
-                inConversation = enteringConversation,
-                conversationStep = if (enteringConversation) 0 else current.conversationStep
+                inConversation = if (enteringConversation) true else current.inConversation,
+                conversationStep = if (enteringConversation) 0 else current.conversationStep,
+                isEnteringAnswer = false
             )
 
-            showMessage(state, newMsg)
+            if (newMsg.isNotEmpty()) {
+                state.value = newState.copy(
+                    message = "",
+                    fullMessage = newMsg,
+                    isTyping = true
+                )
+                persistMessage(newMsg)
+            } else {
+                state.value = newState
+            }
         }
     }
 
@@ -819,8 +1454,8 @@ object CalculatorActions {
                 else -> num1
             }
             if (result == result.toLong().toDouble()) result.toLong().toString()
-            else String.format("%.6f", result).trimEnd('0').trimEnd('.')
-        } catch (e: Exception) {
+            else String.format(java.util.Locale.US, "%.6f", result).trimEnd('0').trimEnd('.')
+        } catch (_: Exception) {
             "Error"
         }
     }
@@ -836,9 +1471,93 @@ object CalculatorActions {
 
 @Composable
 fun CalculatorScreen() {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val initial = remember { CalculatorActions.loadInitialState() }
     val state = remember { mutableStateOf(initial) }
     val current = state.value
+
+    // Camera permission state
+    var hasCameraPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasCameraPermission = granted
+        if (granted) {
+            CalculatorActions.startCamera(state)
+        } else {
+            // Permission denied - go to the "describe things" path
+            state.value = state.value.copy(conversationStep = 21)
+            CalculatorActions.toggleConversation(state)
+            CalculatorActions.toggleConversation(state)  // Refresh to show new message
+        }
+    }
+
+    // Check if we need to request camera (step 191)
+    LaunchedEffect(current.conversationStep) {
+        if (current.conversationStep == 191 && !current.cameraActive) {
+            if (hasCameraPermission) {
+                CalculatorActions.startCamera(state)
+            } else {
+                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            }
+        }
+    }
+
+    // Camera timeout checker
+    LaunchedEffect(current.cameraActive, current.cameraTimerStart) {
+        if (current.cameraActive && current.cameraTimerStart > 0) {
+            while (state.value.cameraActive && state.value.cameraTimerStart > 0) {
+                delay(500)
+                if (CalculatorActions.checkCameraTimeout(state)) {
+                    // Show message while camera is still open
+                    CalculatorActions.stopCamera(state, timedOut = true, closeCamera = false)
+                    break
+                }
+            }
+        }
+    }
+
+    // Close camera after "I've seen enough" message finishes typing
+    LaunchedEffect(current.isTyping, current.cameraActive, current.cameraTimerStart) {
+        // If camera is still showing but timer has been reset (meaning timeout occurred)
+        // and message just finished typing, close the camera
+        if (!current.isTyping && current.cameraActive && current.cameraTimerStart == 0L &&
+            current.message.contains("I've seen enough")) {
+            delay(500)  // Brief pause after message finishes
+            CalculatorActions.closeCameraAfterMessage(state)
+        }
+    }
+
+    // Typing animation effect with laggy support
+    LaunchedEffect(current.fullMessage, current.isTyping, current.isLaggyTyping) {
+        if (current.isTyping && current.fullMessage.isNotEmpty()) {
+            val fullText = current.fullMessage
+            for (i in 1..fullText.length) {
+                val baseDelay = if (current.isLaggyTyping) 80L else 35L
+                val randomExtra = if (current.isLaggyTyping) Random.nextLong(0, 150) else 0L
+                delay(baseDelay + randomExtra)
+                CalculatorActions.updateTypingMessage(
+                    state,
+                    fullText.substring(0, i),
+                    i == fullText.length
+                )
+            }
+        }
+    }
+
+    // Handle pending auto message after typing completes
+    LaunchedEffect(current.isTyping, current.pendingAutoMessage) {
+        if (!current.isTyping && current.pendingAutoMessage.isNotEmpty()) {
+            delay(1500)  // Short pause before the follow-up message
+            CalculatorActions.handlePendingAutoMessage(state)
+        }
+    }
 
     val expression = buildString {
         append(current.number1)
@@ -863,74 +1582,202 @@ fun CalculatorScreen() {
         listOf("DEL", "0", ".", "=")
     )
 
-    Box(
+    // Show ad banner on steps 10-18 (disappears at 19) and again from step 26 onwards
+    val showAdBanner = (current.conversationStep in 10..18) || (current.conversationStep >= 26)
+
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.White)
-            .padding(15.dp)
     ) {
-        if (current.message.isNotEmpty()) {
-            Text(
-                text = current.message,
-                fontSize = 28.sp,
-                color = Color(0xFF880000),
-                textAlign = TextAlign.Start,
-                fontFamily = CalculatorDisplayFont,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(start = 12.dp, top = 50.dp)
-            )
-        }
+        // Orange strip at very top (always present) - includes space for status bar
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(32.dp)
+                .background(AccentOrange)
+        )
 
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.Bottom
-        ) {
+        // Ad banner space (only shows at certain steps)
+        if (showAdBanner) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
-                    .padding(horizontal = 8.dp, vertical = 16.dp),
-                contentAlignment = Alignment.BottomEnd
+                    .height(60.dp)
+                    .background(Color(0xFFF0F0F0)),  // Light gray placeholder
+                contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = displayText,
-                    fontSize = dynamicFontSize,
-                    color = Color(0xFF0A0A0A),
-                    textAlign = TextAlign.End,
-                    maxLines = 1,
-                    fontFamily = CalculatorDisplayFont,
-                    modifier = Modifier.fillMaxWidth()
+                    text = "Ad Space",
+                    fontSize = 14.sp,
+                    color = Color.Gray
+                )
+            }
+        }
+
+        // Main calculator content
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 15.dp)
+        ) {
+            // Toggle button - top right corner
+            Button(
+                onClick = { CalculatorActions.toggleConversation(state) },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 8.dp)
+                    .size(36.dp),
+                shape = CircleShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AccentOrange,
+                    contentColor = Color.White
+                ),
+                contentPadding = PaddingValues(0.dp),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
+            ) {
+                Text(
+                    text = if (current.isMuted) "○" else "●",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
                 )
             }
 
+            // Message display - top left, below toggle button level
+            if (current.message.isNotEmpty() && !current.isMuted) {
+                Text(
+                    text = current.message,
+                    fontSize = 28.sp,
+                    color = Color(0xFF880000),
+                    textAlign = TextAlign.Start,
+                    fontFamily = CalculatorDisplayFont,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(top = 8.dp, end = 50.dp)
+                )
+            }
+
+            // Main content column (display + buttons)
             Column(
-                modifier = Modifier
-                    .weight(1.25f)
-                    .padding(start = 12.dp, end = 12.dp, bottom = 20.dp)
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.Bottom
             ) {
-                buttonLayout.forEach { row ->
-                    Row(
+                // Calculator number display OR Camera
+                if (current.cameraActive) {
+                    // Camera viewfinder area - with top padding to not cover message
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .weight(1f),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            .weight(1f)
+                            .padding(top = 180.dp, bottom = 8.dp)  // Leave space at top for messages
                     ) {
-                        row.forEach { symbol ->
-                            CalculatorButton(
-                                symbol = symbol,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight(),
-                                onClick = { CalculatorActions.handleInput(state, symbol) }
+                        CameraPreview(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(12.dp)),
+                            lifecycleOwner = lifecycleOwner
+                        )
+
+                        // Floating calculator display over camera
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = displayText,
+                                fontSize = 48.sp,
+                                color = Color(0xFF0A0A0A),
+                                textAlign = TextAlign.End,
+                                maxLines = 1,
+                                fontFamily = CalculatorDisplayFont
                             )
+                        }
+                    }
+                } else {
+                    // Normal calculator display - right aligned, above buttons
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .padding(horizontal = 8.dp)
+                            .padding(bottom = 16.dp),  // Gap between display and buttons
+                        contentAlignment = Alignment.BottomEnd
+                    ) {
+                        Text(
+                            text = displayText,
+                            fontSize = dynamicFontSize,
+                            color = Color(0xFF0A0A0A),
+                            textAlign = TextAlign.End,
+                            maxLines = 1,
+                            fontFamily = CalculatorDisplayFont,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+
+                // Calculator buttons
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 15.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    buttonLayout.forEach { row ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(58.dp),  // Smaller fixed height for button rows
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            row.forEach { symbol ->
+                                CalculatorButton(
+                                    symbol = symbol,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight(),
+                                    onClick = { CalculatorActions.handleInput(state, symbol) }
+                                )
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+fun CameraPreview(
+    modifier: Modifier = Modifier,
+    lifecycleOwner: LifecycleOwner
+) {
+    val context = LocalContext.current
+    val previewView = remember { PreviewView(context) }
+
+    LaunchedEffect(Unit) {
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+        cameraProviderFuture.addListener({
+            try {
+                val cameraProvider = cameraProviderFuture.get()
+                val preview = Preview.Builder().build().also {
+                    it.surfaceProvider = previewView.surfaceProvider
+                }
+                val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                cameraProvider.unbindAll()
+                cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview)
+            } catch (e: Exception) {
+                Log.e("CameraPreview", "Camera binding failed", e)
+            }
+        }, ContextCompat.getMainExecutor(context))
+    }
+
+    AndroidView(
+        factory = { previewView },
+        modifier = modifier
+    )
 }
 
 @Composable
@@ -951,7 +1798,6 @@ fun CalculatorButton(symbol: String, modifier: Modifier = Modifier, onClick: () 
     Button(
         onClick = onClick,
         modifier = modifier
-            .aspectRatio(1f)
             .shadow(3.dp, shape = RoundedCornerShape(50.dp)),
         colors = ButtonDefaults.buttonColors(
             containerColor = backgroundColor,
@@ -960,11 +1806,11 @@ fun CalculatorButton(symbol: String, modifier: Modifier = Modifier, onClick: () 
         contentPadding = PaddingValues(0.dp),
         shape = RoundedCornerShape(50.dp)
     ) {
-        Text(text = symbol, fontSize = 35.sp, fontWeight = FontWeight.Normal)
+        Text(text = symbol, fontSize = 28.sp, fontWeight = FontWeight.Normal)
     }
 }
 
-@Preview(showBackground = true)
+@ComposePreview(showBackground = true)
 @Composable
 fun DefaultPreview() {
     MaterialTheme { CalculatorScreen() }
