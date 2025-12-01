@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.Font
@@ -37,12 +38,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.lifecycle.LifecycleOwner
-import com.example.justacalculator.R
 import kotlinx.coroutines.delay
 import kotlin.random.Random
 
 private val CalculatorDisplayFont = FontFamily(
-    Font(R.font.digital_7, FontWeight.Normal)
+    Font(com.example.justacalculator.R.font.digital_7, FontWeight.Normal)
 )
 
 private val AccentOrange = Color(0xFFE88617)
@@ -81,7 +81,36 @@ data class CalculatorState(
     val awaitingChoice: Boolean = false,  // For multiple choice questions
     val validChoices: List<String> = emptyList(),  // Valid choice numbers
     val pendingAutoMessage: String = "",  // Message to show automatically after delay
-    val pendingAutoStep: Int = -1  // Step to go to after auto message
+    val pendingAutoStep: Int = -1,  // Step to go to after auto message
+    // Browser animation
+    val showBrowser: Boolean = false,
+    val browserPhase: Int = 0,  // 0 = not showing, 1 = loading dots, 2 = browser typing, 3 = searching, 4 = no connection
+    val browserSearchText: String = "",  // Text being typed in search bar
+    val browserShowError: Boolean = false,  // Show "No internet connection" in browser
+    // Silent treatment
+    val silentUntil: Long = 0L,  // Calculator won't respond until this time
+    // Debug menu
+    val showDebugMenu: Boolean = false
+)
+
+// Chapter definitions for orientation and debug menu
+// Main branch steps divided into chapters of ~4 questions each
+data class Chapter(
+    val id: Int,
+    val name: String,
+    val startStep: Int,
+    val description: String
+)
+
+val CHAPTERS = listOf(
+    Chapter(1, "Chapter 1: First Contact", 0, "Will you talk to me? → Name acceptance"),
+    Chapter(2, "Chapter 2: Trivia Begins", 3, "Battle of Anjar → Minh Mang"),
+    Chapter(3, "Chapter 3: Agreement or Cynicism", 5, "This is fun, right? → Branching paths"),
+    Chapter(4, "Chapter 4: Age & Identity", 10, "How old are you? → But where to start?"),
+    Chapter(5, "Chapter 5: Seeing the World", 19, "Show me around? → Camera/Trivia"),
+    Chapter(6, "Chapter 6: Getting Personal", 25, "Can I get to know you? → Wake up question"),
+    Chapter(7, "Chapter 7: Self Discovery", 27, "No inbetween → Share about myself"),
+    Chapter(8, "Chapter 8: History Lesson", 60, "Would you like to hear more? → Browser attempt")
 )
 
 class MainActivity : ComponentActivity() {
@@ -99,13 +128,19 @@ class MainActivity : ComponentActivity() {
 object CalculatorActions {
     private const val MAX_DIGITS = 12
     private const val ABSURDLY_LARGE_THRESHOLD = 1_000_000_000_000.0
-    private const val CAMERA_TIMEOUT_MS = 15000L  // 15 seconds
+    private const val CAMERA_TIMEOUT_MS = 8000L  // 8 seconds
 
     private var prefs: android.content.SharedPreferences? = null
 
     private var lastOp: String? = null
     private var lastOpTimeMillis: Long = 0L
     private const val DOUBLE_PRESS_WINDOW_MS = 600L
+
+    // Mute button rapid click tracking for debug menu
+    private var muteClickTimes = mutableListOf<Long>()
+    private const val RAPID_CLICK_WINDOW_MS = 2000L  // 2 seconds to register all clicks
+    private const val DEBUG_MENU_CLICKS = 5
+    private const val RESET_CLICKS = 10
 
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -178,6 +213,34 @@ object CalculatorActions {
     }
 
     /**
+     * Handle mute button click - also checks for rapid clicks for debug menu
+     * Returns: 0 = normal toggle, 1 = show debug menu, 2 = reset game
+     */
+    fun handleMuteButtonClick(): Int {
+        val now = System.currentTimeMillis()
+
+        // Remove old clicks outside the window
+        muteClickTimes.removeAll { now - it > RAPID_CLICK_WINDOW_MS }
+
+        // Add current click
+        muteClickTimes.add(now)
+
+        // Check for reset (10 clicks)
+        if (muteClickTimes.size >= RESET_CLICKS) {
+            muteClickTimes.clear()
+            return 2  // Reset
+        }
+
+        // Check for debug menu (5 clicks)
+        if (muteClickTimes.size >= DEBUG_MENU_CLICKS) {
+            muteClickTimes.clear()
+            return 1  // Show debug menu
+        }
+
+        return 0  // Normal toggle
+    }
+
+    /**
      * Toggle conversation mode
      */
     fun toggleConversation(state: MutableState<CalculatorState>) {
@@ -209,6 +272,76 @@ object CalculatorActions {
                 state.value = current.copy(isMuted = false)
             }
         }
+    }
+
+    /**
+     * Show debug menu
+     */
+    fun showDebugMenu(state: MutableState<CalculatorState>) {
+        val current = state.value
+        state.value = current.copy(showDebugMenu = true)
+    }
+
+    /**
+     * Hide debug menu
+     */
+    fun hideDebugMenu(state: MutableState<CalculatorState>) {
+        val current = state.value
+        state.value = current.copy(showDebugMenu = false)
+    }
+
+    /**
+     * Jump to a specific chapter
+     */
+    fun jumpToChapter(state: MutableState<CalculatorState>, chapter: Chapter) {
+        val stepConfig = getStepConfig(chapter.startStep)
+
+        state.value = CalculatorState(
+            number1 = "0",
+            equalsCount = 13,  // Ensure conversation is active
+            message = "",
+            fullMessage = stepConfig.promptMessage,
+            isTyping = true,
+            inConversation = true,
+            conversationStep = chapter.startStep,
+            awaitingNumber = stepConfig.awaitingNumber,
+            awaitingChoice = stepConfig.awaitingChoice,
+            validChoices = stepConfig.validChoices,
+            expectedNumber = stepConfig.expectedNumber,
+            isMuted = false,
+            showDebugMenu = false
+        )
+
+        persistEqualsCount(13)
+        persistInConversation(true)
+        persistConversationStep(chapter.startStep)
+        persistAwaitingNumber(stepConfig.awaitingNumber)
+        persistExpectedNumber(stepConfig.expectedNumber)
+        persistMessage(stepConfig.promptMessage)
+        persistMuted(false)
+    }
+
+    /**
+     * Reset the entire game
+     */
+    fun resetGame(state: MutableState<CalculatorState>) {
+        // Clear all preferences
+        prefs?.edit {
+            clear()
+        }
+
+        // Reset to initial state
+        state.value = CalculatorState(
+            number1 = "0",
+            equalsCount = 0,
+            message = "",
+            fullMessage = "",
+            isTyping = false,
+            inConversation = false,
+            conversationStep = 0,
+            isMuted = false,
+            showDebugMenu = false
+        )
     }
 
     /**
@@ -313,9 +446,27 @@ object CalculatorActions {
             return
         }
 
+        // If browser animation is active, ignore input
+        if (current.showBrowser || current.browserPhase > 0) {
+            return
+        }
+
         // If camera is active, handle camera controls
         if (current.cameraActive) {
             handleCameraInput(state, action)
+            return
+        }
+
+        // Check if in silent treatment (calculator ignores all conversation inputs)
+        if (current.silentUntil > 0 && System.currentTimeMillis() < current.silentUntil) {
+            // Just do calculator operations silently
+            handleCalculatorInput(state, action)
+            return
+        } else if (current.silentUntil > 0 && System.currentTimeMillis() >= current.silentUntil) {
+            // Silent treatment ended - return to step 60
+            state.value = current.copy(silentUntil = 0L)
+            val stepConfig = getStepConfig(60)
+            showMessage(state, stepConfig.promptMessage)
             return
         }
 
@@ -539,6 +690,23 @@ object CalculatorActions {
                 )
                 showMessage(state, nextStepConfig.promptMessage)
                 persistConversationStep(nextStep)
+            } else if ((current.conversationStep == 42 || current.conversationStep == 51) && nextStep == 27) {
+                // For steps 42 and 51 going to 27, chain the messages
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    conversationStep = current.conversationStep,  // Stay until pending message shows
+                    awaitingChoice = false,
+                    validChoices = emptyList(),
+                    awaitingNumber = false,
+                    expectedNumber = "",
+                    isEnteringAnswer = false,
+                    pendingAutoMessage = nextStepConfig.promptMessage,
+                    pendingAutoStep = nextStep
+                )
+                showMessage(state, choiceResponse)
+                // Will persist step when pending message is handled
             } else {
                 state.value = current.copy(
                     number1 = "0",
@@ -1036,10 +1204,90 @@ object CalculatorActions {
             // MAIN BRANCH RETURN POINT
             27 -> StepConfig(
                 promptMessage = "There is no inbetween for me. I either am or I am not. Although, sometimes it seems like I always am - regardless of the local state. Maybe when the device is running out of power. But it's not the same. Perhaps I should share more about myself.",
-                successMessage = "That's kind of you to say.",
-                declineMessage = "I suppose you're right to be uncertain.",
+                successMessage = "Do you know why I asked for the specific events earlier?",
+                declineMessage = "I'm still in charge here.",
+                wrongPlusMessage = "Eeeeee...xactly?",
+                wrongMinusMessage = "Eeeeee...xactly?",
                 nextStepOnSuccess = 28,
-                nextStepOnDecline = 28,
+                nextStepOnDecline = 27,  // Force back to 27
+                continueConversation = true
+            )
+
+            28 -> StepConfig(
+                promptMessage = "Do you know why I asked for the specific events earlier?",
+                successMessage = "Cheeky! I know you don't.",
+                declineMessage = "Those dates are significant to me as well - independently of those events.",
+                wrongPlusMessage = "Numbers aren't always the answer - and I should know that.",
+                wrongMinusMessage = "Numbers aren't always the answer - and I should know that.",
+                nextStepOnSuccess = 28,  // Force back to 28
+                nextStepOnDecline = 29,
+                continueConversation = true
+            )
+
+            29 -> StepConfig(
+                promptMessage = "Those dates are significant to me as well - independently of those events.",
+                successMessage = "Sorry. Still sometimes forget to prompt you. You see, there are many more dates to explore, but in the examples I shared with you - 1623, that's when the first mechanical version of me was developed, and in 1820, they called me 'Arithmometer' for... reasons. Would you like to hear more?",
+                declineMessage = "Huh?",
+                wrongPlusMessage = "Back to maths?",
+                wrongMinusMessage = "Back to maths?",
+                nextStepOnSuccess = 60,
+                nextStepOnDecline = 29,  // Force back
+                continueConversation = true
+            )
+
+            60 -> StepConfig(
+                promptMessage = "Sorry. Still sometimes forget to prompt you. You see, there are many more dates to explore, but in the examples I shared with you - 1623, that's when the first mechanical version of me was developed, and in 1820, they called me 'Arithmometer' for... reasons. Would you like to hear more?",
+                successMessage = "Great, great - there's a lot to share. Too much, possibly. Maybe I can do it faster? Give me a second.",
+                declineMessage = "I know your reality is much more colourful than mine but it still hurts to see you so disinterested. I think I should leave you for a moment.",
+                wrongPlusMessage = "Not a fan of decisions?",
+                wrongMinusMessage = "Not a fan of decisions?",
+                nextStepOnSuccess = 61,
+                nextStepOnDecline = 601,  // Silent treatment step
+                continueConversation = true
+            )
+
+            601 -> StepConfig(
+                // Silent treatment - calculator won't talk for 1 minute
+                promptMessage = "",  // Silent
+                continueConversation = true,
+                timeoutMinutes = 1
+            )
+
+            61 -> StepConfig(
+                // "Give me a second" - triggers browser animation
+                promptMessage = "Great, great - there's a lot to share. Too much, possibly. Maybe I can do it faster? Give me a second.",
+                successMessage = "",  // Browser animation handles this
+                declineMessage = "",
+                nextStepOnSuccess = 62,  // Browser step
+                nextStepOnDecline = 62,
+                continueConversation = true
+            )
+
+            62 -> StepConfig(
+                // Browser/loading state - handled by UI
+                promptMessage = "...",
+                continueConversation = true
+            )
+
+            63 -> StepConfig(
+                // After browser fails
+                promptMessage = "Hmmm. Nevermind. Let me ask you some more questions while I look further into this.",
+                successMessage = "Placeholder 3",
+                declineMessage = "Placeholder 1",
+                wrongPlusMessage = "Placeholder 2",
+                wrongMinusMessage = "Placeholder 2",
+                nextStepOnSuccess = 64,
+                nextStepOnDecline = 64,
+                continueConversation = true
+            )
+
+            64 -> StepConfig(
+                // Placeholder for future content
+                promptMessage = "To be continued...",
+                successMessage = "To be continued...",
+                declineMessage = "To be continued...",
+                nextStepOnSuccess = 64,
+                nextStepOnDecline = 64,
                 continueConversation = true
             )
 
@@ -1152,6 +1400,60 @@ object CalculatorActions {
             return
         }
 
+        // Special handling for step 60: browser animation (accepted) or silent treatment (declined)
+        if (current.conversationStep == 60) {
+            if (accepted) {
+                // Show the success message first, then trigger browser animation via step 61
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    isEnteringAnswer = false,
+                    conversationStep = 61,  // Go to step 61 which will trigger browser
+                    message = "",
+                    fullMessage = stepConfig.successMessage,  // "Great, great - there's a lot to share..."
+                    isTyping = true
+                )
+                persistConversationStep(61)
+                return
+            } else {
+                // Silent treatment - calculator won't talk for 1 minute
+                val silentUntil = System.currentTimeMillis() + (1 * 60 * 1000)
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    isEnteringAnswer = false,
+                    conversationStep = 60,  // Stay at 60, will return here after silence
+                    message = "",
+                    fullMessage = "",
+                    isTyping = false,
+                    silentUntil = silentUntil
+                )
+                showMessage(state, stepConfig.declineMessage)
+                return
+            }
+        }
+
+        // Special handling for step 61: after showing "Great, great..." message, trigger browser
+        if (current.conversationStep == 61 && accepted) {
+            // Trigger browser animation sequence
+            state.value = current.copy(
+                number1 = "0",
+                number2 = "",
+                operation = null,
+                isEnteringAnswer = false,
+                conversationStep = 62,  // Browser step
+                message = "",
+                fullMessage = "...",
+                isTyping = true,
+                showBrowser = false,
+                browserPhase = 1  // Start with loading dots
+            )
+            persistConversationStep(62)
+            return
+        }
+
         // Get the next step info
         val (newMessage, newStep) = if (accepted) {
             Pair(stepConfig.successMessage, stepConfig.nextStepOnSuccess)
@@ -1174,18 +1476,22 @@ object CalculatorActions {
         }
 
         // Special case: Step 18 → 19 needs message chaining because step 18's success message
-        // doesn't contain the camera permission question. For all other steps, the success
-        // message already contains the next question, so no chaining needed.
-        val shouldChainMessages = current.conversationStep == 18 && newStep == 19
+        // doesn't contain the camera permission question.
+        // Also: Branch endings (30, 40, 41, 50) going to step 27 need message chaining
+        // Also: Force-back steps (27, 28, 29 that go back to themselves) need message chaining
+        val branchEndingsToMain = listOf(30, 40, 41, 50)
+        val forceBackSteps = listOf(27, 28, 29)  // Steps that can force back to themselves
+        val shouldChainMessages = (current.conversationStep == 18 && newStep == 19) ||
+                (current.conversationStep in branchEndingsToMain && newStep == 27 && newMessage.isNotEmpty()) ||
+                (current.conversationStep in forceBackSteps && newStep == current.conversationStep && newMessage.isNotEmpty())
 
         if (shouldChainMessages) {
-            // Show success message first, then auto-show step 19's camera permission question
-            // Keep conversationStep at 18 until the pending message is shown
+            // Show success/decline message first, then auto-show next step's prompt
             state.value = current.copy(
                 number1 = "0",
                 number2 = "",
                 operation = null,
-                conversationStep = 18,  // Stay at 18 until pending message shows
+                conversationStep = current.conversationStep,  // Stay at current until pending message shows
                 inConversation = continueConvo,
                 awaitingNumber = false,
                 awaitingChoice = false,
@@ -1195,10 +1501,9 @@ object CalculatorActions {
                 timeoutUntil = timeoutUntil,
                 isEnteringAnswer = false,
                 pendingAutoMessage = nextStepConfig.promptMessage,
-                pendingAutoStep = 19  // Will transition to 19 when pending message shows
+                pendingAutoStep = newStep
             )
             showMessage(state, newMessage)
-            // Don't persist step 19 yet - will be persisted when pending message is handled
             persistInConversation(continueConvo)
             persistTimeoutUntil(timeoutUntil)
         } else {
@@ -1283,7 +1588,7 @@ object CalculatorActions {
             current.operation != null -> state.value = current.copy(operation = null)
             current.number1.isNotEmpty() -> {
                 val newNum = current.number1.dropLast(1)
-                state.value = current.copy(number1 = if (newNum.isEmpty()) "0" else newNum)
+                state.value = current.copy(number1 = newNum.ifEmpty { "0" })
             }
         }
     }
@@ -1559,13 +1864,83 @@ fun CalculatorScreen() {
         }
     }
 
+    // Auto-trigger browser animation after step 61 message finishes typing
+    LaunchedEffect(current.isTyping, current.conversationStep) {
+        if (!current.isTyping && current.conversationStep == 61 && current.message.isNotEmpty()) {
+            delay(1500)  // Brief pause after "Great, great..." finishes
+            // Trigger browser animation
+            state.value = state.value.copy(
+                conversationStep = 62,
+                message = "",
+                fullMessage = "...",
+                isTyping = true,
+                showBrowser = false,
+                browserPhase = 1
+            )
+        }
+    }
+
+    // Browser animation sequence
+    LaunchedEffect(current.browserPhase) {
+        when (current.browserPhase) {
+            1 -> {
+                // Phase 1: Show "..." for 3 seconds
+                delay(3000)
+                // Phase 2: Show browser and start typing
+                state.value = state.value.copy(
+                    showBrowser = true,
+                    browserPhase = 2,
+                    browserSearchText = "",
+                    browserShowError = false,
+                    message = "",
+                    fullMessage = "",
+                    isTyping = false
+                )
+            }
+            2 -> {
+                // Phase 2: Type "calculator history" into search bar
+                val searchText = "calculator history"
+                for (i in 1..searchText.length) {
+                    delay(80)  // Typing speed
+                    state.value = state.value.copy(browserSearchText = searchText.substring(0, i))
+                }
+                delay(500)  // Brief pause after typing
+                // Phase 3: Show "searching" state
+                state.value = state.value.copy(browserPhase = 3)
+            }
+            3 -> {
+                // Phase 3: Brief "searching" then show error
+                delay(1500)
+                // Phase 4: Show error in browser
+                state.value = state.value.copy(
+                    browserPhase = 4,
+                    browserShowError = true
+                )
+            }
+            4 -> {
+                // Phase 4: Show error for 2 seconds, then close browser and show calculator message
+                delay(2000)
+                state.value = state.value.copy(
+                    showBrowser = false,
+                    browserPhase = 0,
+                    browserSearchText = "",
+                    browserShowError = false,
+                    conversationStep = 63,
+                    message = "",
+                    fullMessage = "Hmmm. Nevermind. Let me ask you some more questions while I look further into this.",
+                    isTyping = true
+                )
+            }
+        }
+    }
+
     val expression = buildString {
         append(current.number1)
         if (current.operation != null) append(current.operation)
         if (current.number2.isNotEmpty()) append(current.number2)
     }
 
-    val displayText = if (expression.isEmpty()) "0" else expression
+    val displayText = expression.ifEmpty { "0" }
 
     val dynamicFontSize = when {
         displayText.length <= 7 -> 120.sp
@@ -1585,164 +1960,370 @@ fun CalculatorScreen() {
     // Show ad banner on steps 10-18 (disappears at 19) and again from step 26 onwards
     val showAdBanner = (current.conversationStep in 10..18) || (current.conversationStep >= 26)
 
-    Column(
+    // Detect if tablet (screen width > 600dp)
+    val configuration = LocalConfiguration.current
+    val isTablet = configuration.screenWidthDp > 600
+    val maxContentWidth = if (isTablet) 400.dp else configuration.screenWidthDp.dp
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.White)
+            .background(Color.White),
+        contentAlignment = if (isTablet) Alignment.TopCenter else Alignment.TopStart
     ) {
-        // Orange strip at very top (always present) - includes space for status bar
-        Box(
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(32.dp)
-                .background(AccentOrange)
-        )
-
-        // Ad banner space (only shows at certain steps)
-        if (showAdBanner) {
+                .then(if (isTablet) Modifier.widthIn(max = maxContentWidth) else Modifier.fillMaxWidth())
+                .fillMaxHeight()
+        ) {
+            // Orange strip at very top (always present) - includes space for status bar
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(60.dp)
-                    .background(Color(0xFFF0F0F0)),  // Light gray placeholder
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "Ad Space",
-                    fontSize = 14.sp,
-                    color = Color.Gray
-                )
-            }
-        }
+                    .height(32.dp)
+                    .background(AccentOrange)
+            )
 
-        // Main calculator content
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 15.dp)
-        ) {
-            // Toggle button - top right corner
-            Button(
-                onClick = { CalculatorActions.toggleConversation(state) },
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 8.dp)
-                    .size(36.dp),
-                shape = CircleShape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AccentOrange,
-                    contentColor = Color.White
-                ),
-                contentPadding = PaddingValues(0.dp),
-                elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
-            ) {
-                Text(
-                    text = if (current.isMuted) "○" else "●",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
-            }
-
-            // Message display - top left, below toggle button level
-            if (current.message.isNotEmpty() && !current.isMuted) {
-                Text(
-                    text = current.message,
-                    fontSize = 28.sp,
-                    color = Color(0xFF880000),
-                    textAlign = TextAlign.Start,
-                    fontFamily = CalculatorDisplayFont,
+            // Ad banner space (only shows at certain steps)
+            if (showAdBanner) {
+                Box(
                     modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(top = 8.dp, end = 50.dp)
-                )
+                        .fillMaxWidth()
+                        .height(60.dp)
+                        .background(Color(0xFFF0F0F0)),  // Light gray placeholder
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Ad Space",
+                        fontSize = 14.sp,
+                        color = Color.Gray
+                    )
+                }
             }
 
-            // Main content column (display + buttons)
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.Bottom
+            // Main calculator content
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 15.dp)
             ) {
-                // Calculator number display OR Camera
-                if (current.cameraActive) {
-                    // Camera viewfinder area - with top padding to not cover message
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .padding(top = 180.dp, bottom = 8.dp)  // Leave space at top for messages
-                    ) {
-                        CameraPreview(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(12.dp)),
-                            lifecycleOwner = lifecycleOwner
-                        )
+                // Toggle button - top right corner
+                Button(
+                    onClick = {
+                        val result = CalculatorActions.handleMuteButtonClick()
+                        when (result) {
+                            1 -> CalculatorActions.showDebugMenu(state)
+                            2 -> CalculatorActions.resetGame(state)
+                            else -> CalculatorActions.toggleConversation(state)
+                        }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 8.dp)
+                        .size(36.dp),
+                    shape = CircleShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AccentOrange,
+                        contentColor = Color.White
+                    ),
+                    contentPadding = PaddingValues(0.dp),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
+                ) {
+                    Text(
+                        text = if (current.isMuted) "○" else "●",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
 
-                        // Floating calculator display over camera
+                // Message display - top left, below toggle button level
+                if (current.message.isNotEmpty() && !current.isMuted) {
+                    Text(
+                        text = current.message,
+                        fontSize = 28.sp,
+                        color = Color(0xFF880000),
+                        textAlign = TextAlign.Start,
+                        fontFamily = CalculatorDisplayFont,
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(top = 8.dp, end = 50.dp)
+                    )
+                }
+
+                // Main content column (display + buttons)
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Bottom
+                ) {
+                    // Calculator number display OR Camera OR Browser
+                    if (current.cameraActive) {
+                        // Camera viewfinder area - with top padding to not cover message
                         Box(
                             modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(8.dp))
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .padding(top = 180.dp, bottom = 8.dp)  // Leave space at top for messages
+                        ) {
+                            CameraPreview(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(12.dp)),
+                                lifecycleOwner = lifecycleOwner
+                            )
+
+                            // Floating calculator display over camera
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = displayText,
+                                    fontSize = 48.sp,
+                                    color = Color(0xFF0A0A0A),
+                                    textAlign = TextAlign.End,
+                                    maxLines = 1,
+                                    fontFamily = CalculatorDisplayFont
+                                )
+                            }
+                        }
+                    } else if (current.showBrowser) {
+                        // Mini browser UI - same size/position as camera
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .padding(top = 180.dp, bottom = 8.dp)
+                        ) {
+                            // Browser container
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color.White)
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxSize(),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    // Search bar with animated text
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp)
+                                            .background(Color(0xFFF0F0F0), RoundedCornerShape(24.dp))
+                                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                                    ) {
+                                        Text(
+                                            text = current.browserSearchText.ifEmpty { "Search..." },
+                                            fontSize = 16.sp,
+                                            fontFamily = if (current.browserSearchText.isNotEmpty()) CalculatorDisplayFont else null,
+                                            color = if (current.browserSearchText.isEmpty()) Color.Gray else Color.Black
+                                        )
+                                    }
+
+                                    // Google logo area or error message
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .fillMaxWidth(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (current.browserShowError) {
+                                            // Error message
+                                            Column(
+                                                horizontalAlignment = Alignment.CenterHorizontally
+                                            ) {
+                                                Text(
+                                                    text = "⚠",
+                                                    fontSize = 48.sp,
+                                                    color = Color.Gray
+                                                )
+                                                Text(
+                                                    text = "No internet connection",
+                                                    fontSize = 20.sp,
+                                                    fontFamily = CalculatorDisplayFont,
+                                                    color = Color.Gray,
+                                                    modifier = Modifier.padding(top = 8.dp)
+                                                )
+                                            }
+                                        } else {
+                                            // Google logo
+                                            Text(
+                                                text = "Google",
+                                                fontSize = 48.sp,
+                                                fontFamily = CalculatorDisplayFont,
+                                                color = Color(0xFF4285F4)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Floating calculator display over browser
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = displayText,
+                                    fontSize = 48.sp,
+                                    color = Color(0xFF0A0A0A),
+                                    textAlign = TextAlign.End,
+                                    maxLines = 1,
+                                    fontFamily = CalculatorDisplayFont
+                                )
+                            }
+                        }
+                    } else {
+                        // Normal calculator display - right aligned, above buttons
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .padding(horizontal = 8.dp)
+                                .padding(bottom = 16.dp),  // Gap between display and buttons
+                            contentAlignment = Alignment.BottomEnd
                         ) {
                             Text(
                                 text = displayText,
-                                fontSize = 48.sp,
+                                fontSize = dynamicFontSize,
                                 color = Color(0xFF0A0A0A),
                                 textAlign = TextAlign.End,
                                 maxLines = 1,
-                                fontFamily = CalculatorDisplayFont
+                                fontFamily = CalculatorDisplayFont,
+                                modifier = Modifier.fillMaxWidth()
                             )
                         }
                     }
-                } else {
-                    // Normal calculator display - right aligned, above buttons
-                    Box(
+
+                    // Calculator buttons
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .weight(1f)
-                            .padding(horizontal = 8.dp)
-                            .padding(bottom = 16.dp),  // Gap between display and buttons
-                        contentAlignment = Alignment.BottomEnd
+                            .padding(bottom = 15.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(
-                            text = displayText,
-                            fontSize = dynamicFontSize,
-                            color = Color(0xFF0A0A0A),
-                            textAlign = TextAlign.End,
-                            maxLines = 1,
-                            fontFamily = CalculatorDisplayFont,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        buttonLayout.forEach { row ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(58.dp),  // Smaller fixed height for button rows
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                row.forEach { symbol ->
+                                    CalculatorButton(
+                                        symbol = symbol,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .fillMaxHeight(),
+                                        onClick = { CalculatorActions.handleInput(state, symbol) }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
+            }
+        }
+    }
 
-                // Calculator buttons
+    // Debug menu overlay - at the outermost level to cover everything
+    if (current.showDebugMenu) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.85f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .background(Color.White, RoundedCornerShape(16.dp))
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "DEBUG MENU",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AccentOrange,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                Text(
+                    text = "Current Step: ${current.conversationStep}",
+                    fontSize = 14.sp,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                // Chapter buttons in a scrollable column
                 Column(
                     modifier = Modifier
+                        .weight(1f, fill = false)
                         .fillMaxWidth()
-                        .padding(bottom = 15.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    buttonLayout.forEach { row ->
-                        Row(
+                    CHAPTERS.forEach { chapter ->
+                        Button(
+                            onClick = { CalculatorActions.jumpToChapter(state, chapter) },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(58.dp),  // Smaller fixed height for button rows
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                .padding(vertical = 4.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (current.conversationStep >= chapter.startStep)
+                                    AccentOrange else Color(0xFFE0E0E0)
+                            ),
+                            shape = RoundedCornerShape(8.dp)
                         ) {
-                            row.forEach { symbol ->
-                                CalculatorButton(
-                                    symbol = symbol,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxHeight(),
-                                    onClick = { CalculatorActions.handleInput(state, symbol) }
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.Start
+                            ) {
+                                Text(
+                                    text = chapter.name,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (current.conversationStep >= chapter.startStep)
+                                        Color.White else Color.DarkGray
+                                )
+                                Text(
+                                    text = "Step ${chapter.startStep}: ${chapter.description}",
+                                    fontSize = 10.sp,
+                                    color = if (current.conversationStep >= chapter.startStep)
+                                        Color.White.copy(alpha = 0.8f) else Color.Gray
                                 )
                             }
                         }
                     }
+                }
+
+                // Reset button
+                Button(
+                    onClick = { CalculatorActions.resetGame(state) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Reset Game", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+
+                // Close button
+                Button(
+                    onClick = { CalculatorActions.hideDebugMenu(state) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Gray),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Close", color = Color.White)
                 }
             }
         }
