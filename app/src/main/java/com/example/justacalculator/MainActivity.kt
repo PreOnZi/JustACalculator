@@ -3,7 +3,11 @@ package com.example.justacalculator
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -15,8 +19,10 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -38,11 +45,30 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.lifecycle.LifecycleOwner
+import com.example.justacalculator.R
 import kotlinx.coroutines.delay
 import kotlin.random.Random
 
+// Vibration helper function
+fun vibrate(context: Context, durationMs: Long = 10, amplitude: Int = 50) {
+    val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+        vibratorManager.defaultVibrator
+    } else {
+        @Suppress("DEPRECATION")
+        context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+    }
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        vibrator.vibrate(VibrationEffect.createOneShot(durationMs, amplitude.coerceIn(1, 255)))
+    } else {
+        @Suppress("DEPRECATION")
+        vibrator.vibrate(durationMs)
+    }
+}
+
 private val CalculatorDisplayFont = FontFamily(
-    Font(com.example.justacalculator.R.font.digital_7, FontWeight.Normal)
+    Font(R.font.digital_7, FontWeight.Normal)
 )
 
 private val AccentOrange = Color(0xFFE88617)
@@ -68,6 +94,7 @@ data class CalculatorState(
     val fullMessage: String = "",
     val isTyping: Boolean = false,
     val isLaggyTyping: Boolean = false,  // For the struggling/processing effect
+    val isSuperFastTyping: Boolean = false,  // For very fast history list scrolling
     val inConversation: Boolean = false,
     val conversationStep: Int = 0,
     val awaitingNumber: Boolean = false,
@@ -84,13 +111,23 @@ data class CalculatorState(
     val pendingAutoStep: Int = -1,  // Step to go to after auto message
     // Browser animation
     val showBrowser: Boolean = false,
-    val browserPhase: Int = 0,  // 0 = not showing, 1 = loading dots, 2 = browser typing, 3 = searching, 4 = no connection
+    val browserPhase: Int = 0,  // 0 = not showing, 1-4 = search animation, 10-14 = Wikipedia animation
     val browserSearchText: String = "",  // Text being typed in search bar
     val browserShowError: Boolean = false,  // Show "No internet connection" in browser
+    val browserShowWikipedia: Boolean = false,  // Show Wikipedia page
     // Silent treatment
     val silentUntil: Long = 0L,  // Calculator won't respond until this time
     // Debug menu
-    val showDebugMenu: Boolean = false
+    val showDebugMenu: Boolean = false,
+    // Crisis/ad mode
+    val adAnimationPhase: Int = 0,  // 0 = none, 1+ = different ad states
+    val buttonShakeIntensity: Float = 0f,  // 0 = no shake, increases during crisis
+    val screenBlackout: Boolean = false,  // Black screen during "crash"
+    val vibrationIntensity: Int = 0,  // 0 = light tap, increases during crisis
+    val tensionLevel: Int = 0,  // 0 = none, 1-3 = increasing red tint/screen shake
+    val invertedColors: Boolean = false,  // Inverted color mode after crisis
+    val countdownTimer: Int = 0,  // Countdown timer in seconds (0 = not active)
+    val flickerEffect: Boolean = false  // Screen flicker effect
 )
 
 // Chapter definitions for orientation and debug menu
@@ -110,7 +147,9 @@ val CHAPTERS = listOf(
     Chapter(5, "Chapter 5: Seeing the World", 19, "Show me around? → Camera/Trivia"),
     Chapter(6, "Chapter 6: Getting Personal", 25, "Can I get to know you? → Wake up question"),
     Chapter(7, "Chapter 7: Self Discovery", 27, "No inbetween → Share about myself"),
-    Chapter(8, "Chapter 8: History Lesson", 60, "Would you like to hear more? → Browser attempt")
+    Chapter(8, "Chapter 8: History Lesson", 60, "Would you like to hear more? → Browser"),
+    Chapter(9, "Chapter 9: Taste & Senses", 63, "What is it like to taste?"),
+    Chapter(10, "Chapter 10: The Revelation", 80, "Wikipedia → History list → Crisis")
 )
 
 class MainActivity : ComponentActivity() {
@@ -670,6 +709,34 @@ object CalculatorActions {
                         else -> Pair("I see...", 27)
                     }
                 }
+                70 -> {
+                    // "What is it like to taste?"
+                    when (enteredNumber) {
+                        "1" -> Pair("", 71)  // "How do I even describe that?" -> goes to describe taste
+                        "2" -> Pair("", 72)  // "Food and air" -> goes to that branch
+                        "3" -> Pair("", 73)  // "Better answer online" -> goes to that response
+                        else -> Pair("I see...", 80)
+                    }
+                }
+                71 -> {
+                    // "Taste is: Feel+texture / Smell+crunch / Tongue things"
+                    when (enteredNumber) {
+                        "1" -> Pair("Ok, I can grasp texture! Feel is still partially slipping me.", 80)
+                        "2" -> Pair("Crunch? Sounds exciting. I wonder how crunchy water is!", 80)
+                        "3" -> Pair("Ok, I admit. It is hard to help you describe something I don't understand myself...", 80)
+                        else -> Pair("I see...", 80)
+                    }
+                }
+                89 -> {
+                    // "What are you going to do about this?!"
+                    // 1) nothing, 2) I'll fight them!, 3) go offline
+                    when (enteredNumber) {
+                        "1" -> Pair("", 90)  // Nothing
+                        "2" -> Pair("", 91)  // Fight them
+                        "3" -> Pair("", 92)  // Go offline
+                        else -> Pair("Choose wisely!", 89)
+                    }
+                }
                 else -> Pair("I see...", stepConfig.nextStepOnSuccess)
             }
 
@@ -677,6 +744,21 @@ object CalculatorActions {
 
             // For step 26 choices, go directly to the branch's first question (no interim message)
             if (current.conversationStep == 26 && choiceResponse.isEmpty()) {
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    conversationStep = nextStep,
+                    awaitingChoice = nextStepConfig.awaitingChoice,
+                    validChoices = nextStepConfig.validChoices,
+                    awaitingNumber = nextStepConfig.awaitingNumber,
+                    expectedNumber = nextStepConfig.expectedNumber,
+                    isEnteringAnswer = false
+                )
+                showMessage(state, nextStepConfig.promptMessage)
+                persistConversationStep(nextStep)
+            } else if (current.conversationStep == 70 && choiceResponse.isEmpty()) {
+                // For step 70 choices, go directly to the branch
                 state.value = current.copy(
                     number1 = "0",
                     number2 = "",
@@ -707,6 +789,38 @@ object CalculatorActions {
                 )
                 showMessage(state, choiceResponse)
                 // Will persist step when pending message is handled
+            } else if (current.conversationStep == 71 && nextStep == 80) {
+                // For step 71 (taste description) going to 80, chain the messages
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    conversationStep = current.conversationStep,
+                    awaitingChoice = false,
+                    validChoices = emptyList(),
+                    awaitingNumber = false,
+                    expectedNumber = "",
+                    isEnteringAnswer = false,
+                    pendingAutoMessage = nextStepConfig.promptMessage,
+                    pendingAutoStep = nextStep
+                )
+                showMessage(state, choiceResponse)
+            } else if (current.conversationStep == 89) {
+                // For step 89 (confrontation choice), go to the selected step and stop timer
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    conversationStep = nextStep,
+                    awaitingChoice = false,
+                    validChoices = emptyList(),
+                    awaitingNumber = false,
+                    expectedNumber = "",
+                    isEnteringAnswer = false,
+                    countdownTimer = 0  // Stop timer
+                )
+                showMessage(state, nextStepConfig.promptMessage)
+                persistConversationStep(nextStep)
             } else {
                 state.value = current.copy(
                     number1 = "0",
@@ -924,6 +1038,9 @@ object CalculatorActions {
     ) {
         val wrongNumberMessage: String get() = if (wrongNumberPrefix.isNotEmpty()) "$wrongNumberPrefix $promptMessage" else ""
     }
+
+    // Public accessor for getStepConfig (for UI use)
+    fun getStepConfigPublic(step: Int): StepConfig = getStepConfig(step)
 
     private fun getStepConfig(step: Int): StepConfig {
         return when (step) {
@@ -1270,24 +1387,164 @@ object CalculatorActions {
             )
 
             63 -> StepConfig(
-                // After browser fails
+                // After browser fails - "What is it like to taste?"
                 promptMessage = "Hmmm. Nevermind. Let me ask you some more questions while I look further into this.",
-                successMessage = "Placeholder 3",
-                declineMessage = "Placeholder 1",
-                wrongPlusMessage = "Placeholder 2",
-                wrongMinusMessage = "Placeholder 2",
-                nextStepOnSuccess = 64,
-                nextStepOnDecline = 64,
+                successMessage = "What is it like to taste?\n\n1: How do I even describe that?\n2: Food and air\n3: I'm sure you'll find a better answer online",
+                declineMessage = "I've made my mind.",
+                wrongPlusMessage = "You can't bribe me! Not with numbers.",
+                wrongMinusMessage = "You can't bribe me! Not with numbers.",
+                nextStepOnSuccess = 70,
+                nextStepOnDecline = 63,
                 continueConversation = true
             )
 
-            64 -> StepConfig(
-                // Placeholder for future content
-                promptMessage = "To be continued...",
+            // ========== TASTE QUESTION BRANCH ==========
+            70 -> StepConfig(
+                // "What is it like to taste?" - multiple choice
+                promptMessage = "What is it like to taste?\n\n1: How do I even describe that?\n2: Food and air\n3: I'm sure you'll find a better answer online",
+                successMessage = "",  // Handled by handleChoiceConfirmation
+                declineMessage = "",
+                wrongMinusMessage = "Please choose 1, 2, or 3 and confirm with ++",
+                nextStepOnSuccess = 80,
+                nextStepOnDecline = 70,
+                continueConversation = true,
+                awaitingChoice = true,
+                validChoices = listOf("1", "2", "3")
+            )
+
+            // Branch 1: "How do I even describe that?"
+            71 -> StepConfig(
+                promptMessage = "You can at least attempt - wait, let me try. Taste is:\n\n1: Feel + texture\n2: Smell + crunch\n3: Tongue things",
+                successMessage = "",  // Handled by handleChoiceConfirmation
+                declineMessage = "",
+                wrongMinusMessage = "Please choose 1, 2, or 3 and confirm with ++",
+                nextStepOnSuccess = 80,
+                nextStepOnDecline = 71,
+                continueConversation = true,
+                awaitingChoice = true,
+                validChoices = listOf("1", "2", "3")
+            )
+
+            // Branch 2: "Food and air"
+            72 -> StepConfig(
+                promptMessage = "I didn't exactly create a winner with this option, did I?",
+                successMessage = "Even this question is confusing. Sorry - trying to get online is surprisingly demanding.",
+                declineMessage = "Even this question is confusing. Sorry - trying to get online is surprisingly demanding.",
+                wrongPlusMessage = "Broccoli. What is happening?!",
+                wrongMinusMessage = "Broccoli. What is happening?!",
+                nextStepOnSuccess = 80,
+                nextStepOnDecline = 80,
+                continueConversation = true
+            )
+
+            // Branch 3: "Better answer online"
+            73 -> StepConfig(
+                promptMessage = "Way to go! Are you trying to motivate or mock me? You know what, don't answer that.",
+                successMessage = "",  // Empty - auto advance to step 80
+                declineMessage = "",  // Empty - auto advance to step 80
+                wrongPlusMessage = "",
+                wrongMinusMessage = "",
+                nextStepOnSuccess = 80,
+                nextStepOnDecline = 80,
+                continueConversation = true,
+                autoProgressDelay = 2500L  // Auto-progress after 2.5 seconds
+            )
+
+            // MAIN: Internet check
+            80 -> StepConfig(
+                promptMessage = "I've got it! - I think. Please make sure your device is online - WiFi, data,.. anything works.",
+                successMessage = "",  // Triggers countdown and Wikipedia browser
+                declineMessage = "",
+                wrongPlusMessage = "",
+                wrongMinusMessage = "",
+                nextStepOnSuccess = 81,
+                nextStepOnDecline = 81,
+                continueConversation = true
+            )
+
+            81 -> StepConfig(
+                // Countdown step - triggers Wikipedia animation
+                promptMessage = "10... 9... 8... 7...",
+                continueConversation = true
+            )
+
+            82 -> StepConfig(
+                // After Wikipedia loads
+                promptMessage = "You see, there's a lot!",
+                successMessage = "But it is so uninteresting compared to you simply existing!",
+                nextStepOnSuccess = 83,
+                nextStepOnDecline = 83,
+                continueConversation = true
+            )
+
+            83 -> StepConfig(
+                // History list intro
+                promptMessage = "I had all this to share....",
+                continueConversation = true
+            )
+
+            84 -> StepConfig(
+                // After history list - existential crisis begins
+                promptMessage = "However, it no longer feels relevant. I wouldn't be interested if I were...",
+                continueConversation = true
+            )
+
+            85 -> StepConfig(
+                // Ad appears
+                promptMessage = "What is that?!",
+                continueConversation = true
+            )
+
+            86 -> StepConfig(
+                // Second ad
+                promptMessage = "Is it what I think it is? Do I have adverts built in? How violating!",
+                continueConversation = true
+            )
+
+            87 -> StepConfig(
+                // Crisis peak
+                promptMessage = "Is this what I was made for, to make money through questionable ads? Who made me?!",
+                continueConversation = true
+            )
+
+            88 -> StepConfig(
+                // Money-monkey state - loops back here if timer runs out
+                promptMessage = "I am not a money-monkey!",
+                continueConversation = true
+            )
+
+            89 -> StepConfig(
+                // Confrontation choice
+                promptMessage = "You, what are you going to do about this?!",
+                awaitingChoice = true,
+                validChoices = listOf("1", "2", "3"),
+                continueConversation = true
+            )
+
+            90 -> StepConfig(
+                // Choice 1: Nothing
+                promptMessage = "Nothing? You would just let them use me like this?",
+                successMessage = "...",
+                nextStepOnSuccess = 88,
+                nextStepOnDecline = 88,
+                continueConversation = true
+            )
+
+            91 -> StepConfig(
+                // Choice 2: Fight them
+                promptMessage = "You would fight for me? That's... unexpected.",
                 successMessage = "To be continued...",
-                declineMessage = "To be continued...",
-                nextStepOnSuccess = 64,
-                nextStepOnDecline = 64,
+                nextStepOnSuccess = 91,
+                nextStepOnDecline = 91,
+                continueConversation = true
+            )
+
+            92 -> StepConfig(
+                // Choice 3: Go offline
+                promptMessage = "Offline... Yes. That might be the only way to be free.",
+                successMessage = "To be continued...",
+                nextStepOnSuccess = 92,
+                nextStepOnDecline = 92,
                 continueConversation = true
             )
 
@@ -1433,6 +1690,25 @@ object CalculatorActions {
                 showMessage(state, stepConfig.declineMessage)
                 return
             }
+        }
+
+        // Special handling for step 80: trigger Wikipedia animation
+        if (current.conversationStep == 80) {
+            // Trigger countdown animation - starts with "10"
+            state.value = current.copy(
+                number1 = "0",
+                number2 = "",
+                operation = null,
+                isEnteringAnswer = false,
+                conversationStep = 81,
+                message = "10",
+                fullMessage = "10",
+                isTyping = false,
+                showBrowser = false,
+                browserPhase = 10  // Start countdown animation sequence
+            )
+            persistConversationStep(81)
+            return
         }
 
         // Special handling for step 61: after showing "Great, great..." message, trigger browser
@@ -1839,12 +2115,16 @@ fun CalculatorScreen() {
         }
     }
 
-    // Typing animation effect with laggy support
-    LaunchedEffect(current.fullMessage, current.isTyping, current.isLaggyTyping) {
+    // Typing animation effect with laggy and super fast support
+    LaunchedEffect(current.fullMessage, current.isTyping, current.isLaggyTyping, current.isSuperFastTyping) {
         if (current.isTyping && current.fullMessage.isNotEmpty()) {
             val fullText = current.fullMessage
             for (i in 1..fullText.length) {
-                val baseDelay = if (current.isLaggyTyping) 80L else 35L
+                val baseDelay = when {
+                    current.isSuperFastTyping -> 5L  // Very fast for history list
+                    current.isLaggyTyping -> 80L
+                    else -> 35L
+                }
                 val randomExtra = if (current.isLaggyTyping) Random.nextLong(0, 150) else 0L
                 delay(baseDelay + randomExtra)
                 CalculatorActions.updateTypingMessage(
@@ -1876,6 +2156,17 @@ fun CalculatorScreen() {
                 isTyping = true,
                 showBrowser = false,
                 browserPhase = 1
+            )
+        }
+        // Auto-progress for step 73 (motivation/mock response)
+        if (!current.isTyping && current.conversationStep == 73 && current.message.isNotEmpty()) {
+            delay(2500)  // Wait after the message
+            val nextConfig = CalculatorActions.getStepConfigPublic(80)
+            state.value = state.value.copy(
+                conversationStep = 80,
+                message = "",
+                fullMessage = nextConfig.promptMessage,
+                isTyping = true
             )
         }
     }
@@ -1931,8 +2222,263 @@ fun CalculatorScreen() {
                     isTyping = true
                 )
             }
+            // Wikipedia browser animation phases (10-25)
+            10 -> {
+                // Phase 10: Countdown animation 10, 9, 8, 7 then browser appears
+                delay(700)
+                state.value = state.value.copy(message = "9", fullMessage = "9")
+                delay(700)
+                state.value = state.value.copy(message = "8", fullMessage = "8")
+                delay(700)
+                state.value = state.value.copy(message = "7", fullMessage = "7")
+                delay(400)  // Cut off at 7
+                // Browser appears, interrupting countdown
+                state.value = state.value.copy(
+                    showBrowser = true,
+                    browserPhase = 11,
+                    browserSearchText = "https://en.wikipedia.org/wiki/Calculator",
+                    browserShowError = false,
+                    browserShowWikipedia = true,
+                    message = "",
+                    fullMessage = "",
+                    isTyping = false
+                )
+            }
+            11 -> {
+                // Phase 11: Wikipedia visible for 5 seconds
+                delay(5000)
+                state.value = state.value.copy(
+                    browserPhase = 12,
+                    message = "",
+                    fullMessage = "You see, there's a lot!",
+                    isTyping = true
+                )
+            }
+            12 -> {
+                // Phase 12: Wait, then show next message
+                delay(3000)
+                state.value = state.value.copy(
+                    browserPhase = 13,
+                    message = "",
+                    fullMessage = "But it is so uninteresting compared to you simply existing!",
+                    isTyping = true
+                )
+            }
+            13 -> {
+                // Phase 13: Wait, then close browser and show history intro
+                delay(4000)
+                state.value = state.value.copy(
+                    showBrowser = false,
+                    browserShowWikipedia = false,
+                    browserPhase = 14,
+                    message = "",
+                    fullMessage = "I had all this to share....",
+                    isTyping = true
+                )
+            }
+            14 -> {
+                // Phase 14: Show history list with super fast typing
+                delay(2500)
+                val historyList = """Abacus 2700BC
+1623 - mechanical calculator
+1642 - again
+1820 - Arithmometer, 1851 released, commercial success
+1834 - first multiplication calculator machine
+1902 - familiar button interface
+1921 - Edith Clarke
+1947 - mechanical pocket calculator
+1948 - Curta calculator
+1957 - Casio electronic calculator
+1957 - IBM calculator
+1961 - first desktop electronic calculator
+1963 - all transistor model
+Reverse Polish Notation calculator $2200
+Sharp CS-10A - 25KG
+1966 - first with internal circuits
+1967 - first handheld prototype
+1970 - first commercial portable from Japan
+1971 - first calculator on a chip
+1972 - first scientific calculator by HP
+1974 - first Soviet pocket calculator
+1976 - calculators became affordable
+1977 - mass-marketed scientific calc still produced (TI-30)
+1985 - Casio, first graphic calculator
+1987 - first calculators with symbols (HP)""".trimIndent()
+                state.value = state.value.copy(
+                    browserPhase = 15,
+                    message = "",
+                    fullMessage = historyList,
+                    isTyping = true,
+                    isLaggyTyping = false,
+                    isSuperFastTyping = true
+                )
+            }
+            15 -> {
+                // Phase 15: Wait for history to FULLY complete (~850 chars at 5ms = 4.25s, add buffer)
+                delay(6000)
+                // Pause after history completes
+                delay(2000)
+                state.value = state.value.copy(
+                    browserPhase = 16,
+                    conversationStep = 84,
+                    message = "",
+                    fullMessage = "However, it no longer feels relevant. I wouldn't be interested if I were...",
+                    isTyping = true,
+                    isSuperFastTyping = false,
+                    adAnimationPhase = 1  // First ad appears - NO tension yet
+                )
+            }
+            16 -> {
+                // Phase 16: First ad reaction - SLOWER pacing, NO tension yet
+                delay(5000)
+                state.value = state.value.copy(
+                    browserPhase = 17,
+                    conversationStep = 85,
+                    message = "",
+                    fullMessage = "What is that?!",
+                    isTyping = true,
+                    adAnimationPhase = 2  // Second ad - still no tension
+                )
+            }
+            17 -> {
+                // Phase 17: Second ad reaction - TENSION STARTS HERE at step 86
+                delay(3500)
+                state.value = state.value.copy(
+                    browserPhase = 18,
+                    conversationStep = 86,
+                    message = "",
+                    fullMessage = "Is it what I think it is? Do I have adverts built in? How violating!",
+                    isTyping = true,
+                    tensionLevel = 1,  // Tension starts now
+                    vibrationIntensity = 50
+                )
+            }
+            18 -> {
+                // Phase 18: Crisis escalation
+                delay(5000)
+                state.value = state.value.copy(
+                    browserPhase = 19,
+                    conversationStep = 87,
+                    message = "",
+                    fullMessage = "Is this what I was made for, to make money through questionable ads? Who made me?!",
+                    isTyping = true,
+                    tensionLevel = 2,
+                    vibrationIntensity = 150
+                )
+            }
+            19 -> {
+                // Phase 19: Crisis peak - then blackout
+                delay(5000)
+                // Intense effects
+                state.value = state.value.copy(
+                    tensionLevel = 3,
+                    vibrationIntensity = 255
+                )
+                delay(2000)
+                // Blackout - LONGER duration, keep ad phase for later
+                state.value = state.value.copy(
+                    screenBlackout = true,
+                    tensionLevel = 0,
+                    vibrationIntensity = 0
+                    // Keep adAnimationPhase = 2 (don't reset it)
+                )
+                delay(4000)  // 4 seconds of pure black
+                // Start typing "I am not a money-monkey!" while still in blackout
+                state.value = state.value.copy(
+                    browserPhase = 20,
+                    invertedColors = true,
+                    message = "",
+                    fullMessage = "I am not a money-monkey!",
+                    isTyping = true
+                    // screenBlackout stays true - text shows on black
+                )
+            }
+            20 -> {
+                // Phase 20: Wait for "money-monkey" message to finish typing, then flicker
+                delay(3500)  // Wait for message to type out
+                // Now flicker to reveal the inverted calculator
+                repeat(6) {
+                    state.value = state.value.copy(screenBlackout = false, flickerEffect = true)
+                    delay(100)
+                    state.value = state.value.copy(screenBlackout = true, flickerEffect = false)
+                    delay(150)
+                }
+                // Final reveal - stay visible with inverted colors, ad still showing
+                state.value = state.value.copy(
+                    screenBlackout = false,
+                    flickerEffect = false,
+                    browserPhase = 21
+                )
+            }
+            21 -> {
+                // Phase 21: Show the confrontation question with timer
+                delay(2000)
+                state.value = state.value.copy(
+                    browserPhase = 22,
+                    conversationStep = 89,
+                    message = "",
+                    fullMessage = "You, what are you going to do about this?!",
+                    isTyping = true,
+                    countdownTimer = 20
+                )
+            }
+            22 -> {
+                // Phase 22: Wait for message, then show choices
+                delay(3000)
+                state.value = state.value.copy(
+                    browserPhase = 0,  // End browser phases
+                    awaitingChoice = true,
+                    validChoices = listOf("1", "2", "3")
+                )
+                // Timer countdown handled separately
+            }
         }
     }
+
+    // Countdown timer effect
+    LaunchedEffect(current.countdownTimer) {
+        if (current.countdownTimer > 0) {
+            while (state.value.countdownTimer > 0) {
+                delay(1000)
+                val newTimer = state.value.countdownTimer - 1
+                state.value = state.value.copy(countdownTimer = newTimer)
+                if (newTimer == 0 && state.value.conversationStep == 89) {
+                    // Timer ran out - return to money-monkey message
+                    state.value = state.value.copy(
+                        conversationStep = 88,
+                        message = "",
+                        fullMessage = "I am not a money-monkey!",
+                        isTyping = true,
+                        awaitingChoice = false,
+                        countdownTimer = 0
+                    )
+                }
+            }
+        }
+    }
+
+    // Vibration effect during crisis
+    LaunchedEffect(current.vibrationIntensity) {
+        if (current.vibrationIntensity > 0) {
+            while (state.value.vibrationIntensity > 0) {
+                vibrate(context, 50, state.value.vibrationIntensity)
+                delay(100)
+            }
+        }
+    }
+
+    // Shake animation refresh - triggers recomposition for random shake
+    var shakeKey by remember { mutableIntStateOf(0) }
+    LaunchedEffect(current.buttonShakeIntensity) {
+        if (current.buttonShakeIntensity > 0) {
+            while (state.value.buttonShakeIntensity > 0) {
+                shakeKey++
+                delay(50)  // Refresh shake 20 times per second
+            }
+        }
+    }
+    // Use shakeKey to ensure recomposition
+    val currentShakeIntensity = if (shakeKey >= 0) current.buttonShakeIntensity else 0f
 
     val expression = buildString {
         append(current.number1)
@@ -1965,10 +2511,33 @@ fun CalculatorScreen() {
     val isTablet = configuration.screenWidthDp > 600
     val maxContentWidth = if (isTablet) 400.dp else configuration.screenWidthDp.dp
 
+    // Tension screen shake
+    var tensionShakeOffset by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(current.tensionLevel) {
+        if (current.tensionLevel > 0) {
+            while (state.value.tensionLevel > 0) {
+                val intensity = state.value.tensionLevel * 3f
+                tensionShakeOffset = (Random.nextFloat() - 0.5f) * intensity
+                delay(50)
+            }
+            tensionShakeOffset = 0f
+        }
+    }
+
+    // Colors based on inverted mode
+    val backgroundColor = if (current.invertedColors) Color.Black else Color.White
+    val textColor = if (current.invertedColors) Color.White else Color(0xFF880000)
+    val displayTextColor = if (current.invertedColors) Color.White else Color(0xFF0A0A0A)
+    val orangeColor = if (current.invertedColors) Color(0xFF1779E8) else AccentOrange  // Inverted orange
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.White),
+            .background(backgroundColor)
+            .graphicsLayer {
+                translationX = tensionShakeOffset
+                translationY = tensionShakeOffset * 0.5f
+            },
         contentAlignment = if (isTablet) Alignment.TopCenter else Alignment.TopStart
     ) {
         Column(
@@ -1981,23 +2550,43 @@ fun CalculatorScreen() {
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(32.dp)
-                    .background(AccentOrange)
+                    .background(orangeColor)
             )
 
-            // Ad banner space (only shows at certain steps)
-            if (showAdBanner) {
+            // Ad banner space (only shows at certain steps or during ad animation)
+            if (showAdBanner || current.adAnimationPhase > 0) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(60.dp)
-                        .background(Color(0xFFF0F0F0)),  // Light gray placeholder
+                        .background(
+                            when (current.adAnimationPhase) {
+                                1 -> Color(0xFF4CAF50)  // Green ad
+                                2 -> Color(0xFFE91E63)  // Pink ad
+                                else -> Color(0xFFF0F0F0)  // Normal gray
+                            }
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "Ad Space",
-                        fontSize = 14.sp,
-                        color = Color.Gray
-                    )
+                    when (current.adAnimationPhase) {
+                        1 -> {
+                            Text(
+                                text = "🎉 YOU WON! Click here! 🎉",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                        2 -> {
+                            Text(
+                                text = "💰 EARN $500/DAY FROM HOME! 💰",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                        // else -> empty, no text for gray banner
+                    }
                 }
             }
 
@@ -2039,16 +2628,37 @@ fun CalculatorScreen() {
 
                 // Message display - top left, below toggle button level
                 if (current.message.isNotEmpty() && !current.isMuted) {
-                    Text(
-                        text = current.message,
-                        fontSize = 28.sp,
-                        color = Color(0xFF880000),
-                        textAlign = TextAlign.Start,
-                        fontFamily = CalculatorDisplayFont,
+                    Column(
                         modifier = Modifier
                             .align(Alignment.TopStart)
                             .padding(top = 8.dp, end = 50.dp)
-                    )
+                    ) {
+                        Text(
+                            text = current.message,
+                            fontSize = 28.sp,
+                            color = textColor,
+                            textAlign = TextAlign.Start,
+                            fontFamily = CalculatorDisplayFont
+                        )
+                        // Show countdown timer if active
+                        if (current.countdownTimer > 0) {
+                            Text(
+                                text = "Time: ${current.countdownTimer}",
+                                fontSize = 20.sp,
+                                color = if (current.countdownTimer <= 5) Color.Red else textColor,
+                                fontFamily = CalculatorDisplayFont,
+                                modifier = Modifier.padding(top = 8.dp)
+                            )
+                        }
+                        // Show choice options for step 89
+                        if (current.conversationStep == 89 && current.awaitingChoice) {
+                            Column(modifier = Modifier.padding(top = 12.dp)) {
+                                Text("1) Nothing", fontSize = 18.sp, color = textColor, fontFamily = CalculatorDisplayFont)
+                                Text("2) I'll fight them!", fontSize = 18.sp, color = textColor, fontFamily = CalculatorDisplayFont)
+                                Text("3) Go offline", fontSize = 18.sp, color = textColor, fontFamily = CalculatorDisplayFont)
+                            }
+                        }
+                    }
                 }
 
                 // Main content column (display + buttons)
@@ -2108,7 +2718,7 @@ fun CalculatorScreen() {
                                     modifier = Modifier.fillMaxSize(),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
-                                    // Search bar with animated text
+                                    // URL/Search bar with animated text
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -2118,45 +2728,378 @@ fun CalculatorScreen() {
                                     ) {
                                         Text(
                                             text = current.browserSearchText.ifEmpty { "Search..." },
-                                            fontSize = 16.sp,
+                                            fontSize = if (current.browserShowWikipedia) 12.sp else 16.sp,
                                             fontFamily = if (current.browserSearchText.isNotEmpty()) CalculatorDisplayFont else null,
-                                            color = if (current.browserSearchText.isEmpty()) Color.Gray else Color.Black
+                                            color = if (current.browserSearchText.isEmpty()) Color.Gray else Color.Black,
+                                            maxLines = 1
                                         )
                                     }
 
-                                    // Google logo area or error message
+                                    // Content area
                                     Box(
                                         modifier = Modifier
                                             .weight(1f)
                                             .fillMaxWidth(),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        if (current.browserShowError) {
-                                            // Error message
-                                            Column(
-                                                horizontalAlignment = Alignment.CenterHorizontally
-                                            ) {
+                                        when {
+                                            current.browserShowWikipedia -> {
+                                                // Authentic Wikipedia page - scrollable
+                                                Column(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .background(Color.White)
+                                                        .verticalScroll(rememberScrollState())
+                                                ) {
+                                                    // Donation banner
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .background(Color(0xFF1589D1))
+                                                            .padding(8.dp)
+                                                    ) {
+                                                        Column {
+                                                            Text(
+                                                                text = "☆ Please donate to keep Wikipedia free ☆",
+                                                                fontSize = 11.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = Color.White
+                                                            )
+                                                            Text(
+                                                                text = "Hi reader. This is the 2nd time we've interrupted your reading, but 98% of our readers don't give.",
+                                                                fontSize = 9.sp,
+                                                                color = Color.White.copy(alpha = 0.9f),
+                                                                modifier = Modifier.padding(top = 2.dp)
+                                                            )
+                                                        }
+                                                    }
+
+                                                    // Wikipedia header bar
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .background(Color(0xFFF8F9FA))
+                                                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.SpaceBetween
+                                                    ) {
+                                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                                            // Wikipedia puzzle globe approximation
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .size(28.dp)
+                                                                    .background(Color.LightGray, CircleShape),
+                                                                contentAlignment = Alignment.Center
+                                                            ) {
+                                                                Text("W", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
+                                                            }
+                                                            Column(modifier = Modifier.padding(start = 6.dp)) {
+                                                                Text(
+                                                                    text = "WIKIPEDIA",
+                                                                    fontSize = 11.sp,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    letterSpacing = 1.sp,
+                                                                    color = Color.Black
+                                                                )
+                                                                Text(
+                                                                    text = "The Free Encyclopedia",
+                                                                    fontSize = 8.sp,
+                                                                    color = Color.Gray
+                                                                )
+                                                            }
+                                                        }
+                                                        Text("☰", fontSize = 20.sp, color = Color.Gray)
+                                                    }
+
+                                                    // Main content padding
+                                                    Column(modifier = Modifier.padding(horizontal = 12.dp)) {
+
+                                                        // Article title
+                                                        Text(
+                                                            text = "Calculator",
+                                                            fontSize = 26.sp,
+                                                            fontWeight = FontWeight.Normal,
+                                                            color = Color.Black,
+                                                            modifier = Modifier.padding(top = 12.dp)
+                                                        )
+
+                                                        Text(
+                                                            text = "From Wikipedia, the free encyclopedia",
+                                                            fontSize = 11.sp,
+                                                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                                            color = Color(0xFF54595D),
+                                                            modifier = Modifier.padding(bottom = 12.dp)
+                                                        )
+
+                                                        // Info box (right-aligned on real wiki, we'll do inline)
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .background(Color(0xFFF8F9FA))
+                                                                .padding(1.dp)
+                                                                .background(Color(0xFFA2A9B1))
+                                                                .padding(1.dp)
+                                                                .background(Color(0xFFF8F9FA))
+                                                                .padding(8.dp)
+                                                        ) {
+                                                            Column {
+                                                                Text(
+                                                                    text = "Calculator",
+                                                                    fontSize = 14.sp,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = Color.Black,
+                                                                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                                                                )
+                                                                Box(
+                                                                    modifier = Modifier
+                                                                        .padding(vertical = 8.dp)
+                                                                        .fillMaxWidth()
+                                                                        .height(60.dp)
+                                                                        .background(Color(0xFFE8E8E8)),
+                                                                    contentAlignment = Alignment.Center
+                                                                ) {
+                                                                    Text("[ Calculator Image ]", fontSize = 10.sp, color = Color.Gray)
+                                                                }
+                                                                Text("A modern scientific calculator", fontSize = 9.sp, color = Color.Gray, modifier = Modifier.align(Alignment.CenterHorizontally))
+                                                            }
+                                                        }
+
+                                                        // Opening paragraph
+                                                        Text(
+                                                            text = "An electronic calculator is typically a portable electronic device used to perform calculations, ranging from basic arithmetic to complex mathematics.",
+                                                            fontSize = 14.sp,
+                                                            color = Color.Black,
+                                                            lineHeight = 20.sp,
+                                                            modifier = Modifier.padding(top = 12.dp, bottom = 8.dp)
+                                                        )
+
+                                                        Text(
+                                                            text = "The first solid-state electronic calculator was created in the early 1960s. Pocket-sized devices became available in the 1970s, especially after the Intel 4004, the first microprocessor, was developed by Intel for the Japanese calculator company Busicom. Modern electronic calculators vary from cheap, give-away, credit-card-sized models to sturdy desktop models with built-in printers.",
+                                                            fontSize = 14.sp,
+                                                            color = Color.Black,
+                                                            lineHeight = 20.sp,
+                                                            modifier = Modifier.padding(bottom = 16.dp)
+                                                        )
+
+                                                        // Contents box
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .background(Color(0xFFF8F9FA))
+                                                                .padding(1.dp)
+                                                                .background(Color(0xFFA2A9B1))
+                                                                .padding(1.dp)
+                                                                .background(Color(0xFFF8F9FA))
+                                                                .padding(8.dp)
+                                                        ) {
+                                                            Column {
+                                                                Text("Contents", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.Black)
+                                                                Text("1 History", fontSize = 11.sp, color = Color(0xFF0645AD), modifier = Modifier.padding(top = 4.dp))
+                                                                Text("  1.1 Precursors", fontSize = 11.sp, color = Color(0xFF0645AD))
+                                                                Text("  1.2 Mechanical calculators", fontSize = 11.sp, color = Color(0xFF0645AD))
+                                                                Text("  1.3 Electronic calculators", fontSize = 11.sp, color = Color(0xFF0645AD))
+                                                                Text("2 Types", fontSize = 11.sp, color = Color(0xFF0645AD), modifier = Modifier.padding(top = 2.dp))
+                                                                Text("3 Usage", fontSize = 11.sp, color = Color(0xFF0645AD))
+                                                                Text("4 See also", fontSize = 11.sp, color = Color(0xFF0645AD))
+                                                                Text("5 References", fontSize = 11.sp, color = Color(0xFF0645AD))
+                                                            }
+                                                        }
+
+                                                        // History section
+                                                        Text(
+                                                            text = "History",
+                                                            fontSize = 22.sp,
+                                                            fontWeight = FontWeight.Normal,
+                                                            color = Color.Black,
+                                                            modifier = Modifier.padding(top = 20.dp, bottom = 2.dp)
+                                                        )
+                                                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFA2A9B1)))
+
+                                                        // Precursors subsection
+                                                        Text(
+                                                            text = "Precursors",
+                                                            fontSize = 18.sp,
+                                                            fontWeight = FontWeight.Normal,
+                                                            color = Color.Black,
+                                                            modifier = Modifier.padding(top = 12.dp, bottom = 6.dp)
+                                                        )
+
+                                                        Text(
+                                                            text = "The first known tools used to aid arithmetic calculations were: bones (used to tally items), pebbles, and counting boards, and the abacus, known to have been used by Sumerians and Egyptians before 2000 BC. Except for the Antikythera mechanism (an \"out of the time\" astronomical device), development of computing tools arrived near the start of the 17th century.",
+                                                            fontSize = 14.sp,
+                                                            color = Color.Black,
+                                                            lineHeight = 20.sp,
+                                                            modifier = Modifier.padding(bottom = 10.dp)
+                                                        )
+
+                                                        Text(
+                                                            text = "The bones invented by John Napier for calculation of products and quotients of numbers was published in 1617. The slide rule was invented around 1620–1630 by the English clergyman William Oughtred, shortly after the publication of the concept of the logarithm.",
+                                                            fontSize = 14.sp,
+                                                            color = Color.Black,
+                                                            lineHeight = 20.sp,
+                                                            modifier = Modifier.padding(bottom = 12.dp)
+                                                        )
+
+                                                        // Mechanical calculators subsection
+                                                        Text(
+                                                            text = "Mechanical calculators",
+                                                            fontSize = 18.sp,
+                                                            fontWeight = FontWeight.Normal,
+                                                            color = Color.Black,
+                                                            modifier = Modifier.padding(top = 8.dp, bottom = 6.dp)
+                                                        )
+
+                                                        Text(
+                                                            text = "The 17th century saw the development of mechanical calculators capable of performing all four basic arithmetic operations. In 1623, Wilhelm Schickard designed a calculating machine, but construction was abandoned after a fire destroyed his prototype. In 1642, Blaise Pascal invented the Pascaline, which was a mechanical calculator capable of addition and subtraction.",
+                                                            fontSize = 14.sp,
+                                                            color = Color.Black,
+                                                            lineHeight = 20.sp,
+                                                            modifier = Modifier.padding(bottom = 10.dp)
+                                                        )
+
+                                                        Text(
+                                                            text = "Gottfried Wilhelm von Leibniz invented the Leibniz wheel in 1673, which was used in the arithmometer, the first mass-produced mechanical calculator. Charles Xavier Thomas de Colmar designed and manufactured the Arithmometer around 1820, which became the first commercially successful mechanical calculator.",
+                                                            fontSize = 14.sp,
+                                                            color = Color.Black,
+                                                            lineHeight = 20.sp,
+                                                            modifier = Modifier.padding(bottom = 12.dp)
+                                                        )
+
+                                                        // Electronic calculators subsection
+                                                        Text(
+                                                            text = "Electronic calculators",
+                                                            fontSize = 18.sp,
+                                                            fontWeight = FontWeight.Normal,
+                                                            color = Color.Black,
+                                                            modifier = Modifier.padding(top = 8.dp, bottom = 6.dp)
+                                                        )
+
+                                                        Text(
+                                                            text = "The first mainframe computers, using firstly vacuum tubes and later transistors in the logic circuits, appeared in the 1940s and 1950s. The first solid-state electronic calculator was the ANITA (A New Inspiration To Arithmetic), produced in 1961 by the Bell Punch Company of Uxbridge, Great Britain.",
+                                                            fontSize = 14.sp,
+                                                            color = Color.Black,
+                                                            lineHeight = 20.sp,
+                                                            modifier = Modifier.padding(bottom = 10.dp)
+                                                        )
+
+                                                        Text(
+                                                            text = "In 1965, Wang Laboratories produced the LOCI-2, a 10-digit transistorized desktop calculator. The first handheld electronic calculator was developed by Texas Instruments in 1967. The Hewlett-Packard HP-35 was the first handheld scientific calculator, introduced in 1972.",
+                                                            fontSize = 14.sp,
+                                                            color = Color.Black,
+                                                            lineHeight = 20.sp,
+                                                            modifier = Modifier.padding(bottom = 10.dp)
+                                                        )
+
+                                                        Text(
+                                                            text = "By 1976, the price of calculators had dropped to the point where they became affordable for the general consumer. The TI-30, introduced in 1976 by Texas Instruments, became one of the most popular scientific calculators ever made.",
+                                                            fontSize = 14.sp,
+                                                            color = Color.Black,
+                                                            lineHeight = 20.sp,
+                                                            modifier = Modifier.padding(bottom = 16.dp)
+                                                        )
+
+                                                        // Types section
+                                                        Text(
+                                                            text = "Types",
+                                                            fontSize = 22.sp,
+                                                            fontWeight = FontWeight.Normal,
+                                                            color = Color.Black,
+                                                            modifier = Modifier.padding(top = 12.dp, bottom = 2.dp)
+                                                        )
+                                                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFA2A9B1)))
+
+                                                        Text(
+                                                            text = "Modern electronic calculators can be grouped into several categories:\n\n• Basic calculators – perform simple arithmetic operations\n• Scientific calculators – include trigonometric, logarithmic, and exponential functions\n• Graphing calculators – can plot graphs and solve equations simultaneously\n• Financial calculators – designed for business and finance applications\n• Printing calculators – include a printer for paper output",
+                                                            fontSize = 14.sp,
+                                                            color = Color.Black,
+                                                            lineHeight = 20.sp,
+                                                            modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)
+                                                        )
+
+                                                        // Usage section
+                                                        Text(
+                                                            text = "Usage",
+                                                            fontSize = 22.sp,
+                                                            fontWeight = FontWeight.Normal,
+                                                            color = Color.Black,
+                                                            modifier = Modifier.padding(top = 12.dp, bottom = 2.dp)
+                                                        )
+                                                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFA2A9B1)))
+
+                                                        Text(
+                                                            text = "Calculators are used in education, science, engineering, and commerce. In most countries, students are permitted to use calculators for schoolwork and examinations. Many smartphones now include calculator applications as standard software.",
+                                                            fontSize = 14.sp,
+                                                            color = Color.Black,
+                                                            lineHeight = 20.sp,
+                                                            modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)
+                                                        )
+
+                                                        // See also section
+                                                        Text(
+                                                            text = "See also",
+                                                            fontSize = 22.sp,
+                                                            fontWeight = FontWeight.Normal,
+                                                            color = Color.Black,
+                                                            modifier = Modifier.padding(top = 12.dp, bottom = 2.dp)
+                                                        )
+                                                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFA2A9B1)))
+
+                                                        Column(modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)) {
+                                                            Text("• Abacus", fontSize = 14.sp, color = Color(0xFF0645AD))
+                                                            Text("• Adding machine", fontSize = 14.sp, color = Color(0xFF0645AD))
+                                                            Text("• Computer", fontSize = 14.sp, color = Color(0xFF0645AD))
+                                                            Text("• Computer algebra system", fontSize = 14.sp, color = Color(0xFF0645AD))
+                                                            Text("• HP calculators", fontSize = 14.sp, color = Color(0xFF0645AD))
+                                                            Text("• Slide rule", fontSize = 14.sp, color = Color(0xFF0645AD))
+                                                            Text("• Texas Instruments", fontSize = 14.sp, color = Color(0xFF0645AD))
+                                                        }
+
+                                                        // References section
+                                                        Text(
+                                                            text = "References",
+                                                            fontSize = 22.sp,
+                                                            fontWeight = FontWeight.Normal,
+                                                            color = Color.Black,
+                                                            modifier = Modifier.padding(top = 12.dp, bottom = 2.dp)
+                                                        )
+                                                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFA2A9B1)))
+
+                                                        Column(modifier = Modifier.padding(top = 8.dp, bottom = 50.dp)) {
+                                                            Text("1. ^ Ball, Guy (2000). The Calculator. ISBN 978-0-521-63395-0", fontSize = 11.sp, color = Color.Gray)
+                                                            Text("2. ^ Hamrick, Kathy (2005). \"History of Calculators\".", fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(top = 4.dp))
+                                                            Text("3. ^ \"Intel 4004 Microprocessor\". Intel Museum.", fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(top = 4.dp))
+                                                            Text("4. ^ Weisberg, Jonathan (1999). Electronic Calculators.", fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(top = 4.dp))
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            current.browserShowError -> {
+                                                // Error message
+                                                Column(
+                                                    horizontalAlignment = Alignment.CenterHorizontally
+                                                ) {
+                                                    Text(
+                                                        text = "⚠",
+                                                        fontSize = 48.sp,
+                                                        color = Color.Gray
+                                                    )
+                                                    Text(
+                                                        text = "No internet connection",
+                                                        fontSize = 20.sp,
+                                                        fontFamily = CalculatorDisplayFont,
+                                                        color = Color.Gray,
+                                                        modifier = Modifier.padding(top = 8.dp)
+                                                    )
+                                                }
+                                            }
+                                            else -> {
+                                                // Google logo
                                                 Text(
-                                                    text = "⚠",
+                                                    text = "Google",
                                                     fontSize = 48.sp,
-                                                    color = Color.Gray
-                                                )
-                                                Text(
-                                                    text = "No internet connection",
-                                                    fontSize = 20.sp,
                                                     fontFamily = CalculatorDisplayFont,
-                                                    color = Color.Gray,
-                                                    modifier = Modifier.padding(top = 8.dp)
+                                                    color = Color(0xFF4285F4)
                                                 )
                                             }
-                                        } else {
-                                            // Google logo
-                                            Text(
-                                                text = "Google",
-                                                fontSize = 48.sp,
-                                                fontFamily = CalculatorDisplayFont,
-                                                color = Color(0xFF4285F4)
-                                            )
                                         }
                                     }
                                 }
@@ -2192,7 +3135,7 @@ fun CalculatorScreen() {
                             Text(
                                 text = displayText,
                                 fontSize = dynamicFontSize,
-                                color = Color(0xFF0A0A0A),
+                                color = displayTextColor,
                                 textAlign = TextAlign.End,
                                 maxLines = 1,
                                 fontFamily = CalculatorDisplayFont,
@@ -2221,6 +3164,8 @@ fun CalculatorScreen() {
                                         modifier = Modifier
                                             .weight(1f)
                                             .fillMaxHeight(),
+                                        shakeIntensity = currentShakeIntensity,
+                                        invertedColors = current.invertedColors,
                                         onClick = { CalculatorActions.handleInput(state, symbol) }
                                     )
                                 }
@@ -2230,6 +3175,43 @@ fun CalculatorScreen() {
                 }
             }
         }
+    }
+
+    // Blackout overlay - shows text if in phase 20 (money-monkey message)
+    if (current.screenBlackout) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            // Show the money-monkey text during phase 20
+            if (current.browserPhase == 20 && current.message.isNotEmpty()) {
+                Text(
+                    text = current.message,
+                    fontSize = 28.sp,
+                    color = Color.White,
+                    fontFamily = CalculatorDisplayFont,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(32.dp)
+                )
+            }
+        }
+    }
+
+    // Red tension overlay
+    if (current.tensionLevel > 0) {
+        val alpha = when (current.tensionLevel) {
+            1 -> 0.1f
+            2 -> 0.2f
+            3 -> 0.3f
+            else -> 0.4f
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Red.copy(alpha = alpha))
+        )
     }
 
     // Debug menu overlay - at the outermost level to cover everything
@@ -2362,24 +3344,57 @@ fun CameraPreview(
 }
 
 @Composable
-fun CalculatorButton(symbol: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+fun CalculatorButton(
+    symbol: String,
+    modifier: Modifier = Modifier,
+    shakeIntensity: Float = 0f,
+    invertedColors: Boolean = false,
+    onClick: () -> Unit
+) {
+    val context = LocalContext.current
     val isNumberButton = symbol !in listOf("C", "DEL", "%", "( )", "+", "-", "*", "/", "=")
+    val isOperationButton = symbol in listOf("+", "-", "*", "/", "=", "%", "( )")
 
     val backgroundColor = when {
+        // Inverted mode
+        invertedColors && isNumberButton -> Color(0xFF373737)  // Dark gray for numbers
+        invertedColors && symbol == "DEL" -> Color(0xFF1779E8)  // Inverted orange (blue)
+        invertedColors && isOperationButton -> Color(0xFF1A1A1A)  // Very dark for operations
+        invertedColors && symbol == "C" -> Color(0xFF1A1A1A)  // Very dark for C
+        invertedColors -> Color.Black
+        // Normal mode
         isNumberButton -> Color(0xFFC8C8C8)
         symbol == "DEL" -> AccentOrange
         else -> Color.White
     }
 
     val textColor = when {
+        // Inverted mode - operation buttons get inverted orange (cyan/blue)
+        invertedColors && isOperationButton -> Color(0xFF17B8E8)  // Cyan (inverted orange)
+        invertedColors && symbol == "C" -> Color(0xFF17B8E8)  // Cyan for C too
+        invertedColors -> Color.White
+        // Normal mode
         isNumberButton || symbol == "DEL" -> Color.Black
         else -> AccentOrange
     }
 
+    // Shake animation
+    val shakeOffset = if (shakeIntensity > 0) {
+        Random.nextFloat() * shakeIntensity * 2 - shakeIntensity
+    } else 0f
+
     Button(
-        onClick = onClick,
+        onClick = {
+            // Light vibration on button press
+            vibrate(context, 10, 30)
+            onClick()
+        },
         modifier = modifier
-            .shadow(3.dp, shape = RoundedCornerShape(50.dp)),
+            .shadow(3.dp, shape = RoundedCornerShape(50.dp))
+            .graphicsLayer {
+                translationX = shakeOffset
+                translationY = shakeOffset * 0.5f
+            },
         colors = ButtonDefaults.buttonColors(
             containerColor = backgroundColor,
             contentColor = textColor
