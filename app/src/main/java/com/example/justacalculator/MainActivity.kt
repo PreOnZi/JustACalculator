@@ -17,6 +17,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -29,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
@@ -73,6 +75,10 @@ private val CalculatorDisplayFont = FontFamily(
 
 private val AccentOrange = Color(0xFFE88617)
 
+// Retro color palette
+private val RetroDisplayGreen = Color(0xFF33FF33)  // Classic green LCD
+private val RetroCream = Color(0xFFF5F0E1)  // Vintage cream/beige
+
 private const val PREFS_NAME = "just_a_calculator_prefs"
 private const val PREF_EQUALS_COUNT = "equals_count"
 private const val PREF_MESSAGE = "last_message"
@@ -102,6 +108,8 @@ data class CalculatorState(
     val timeoutUntil: Long = 0L,
     val isMuted: Boolean = false,
     val isEnteringAnswer: Boolean = false,
+    // Operation history display
+    val operationHistory: String = "",  // Shows "5+3" while result shows "8"
     // Camera related
     val cameraActive: Boolean = false,
     val cameraTimerStart: Long = 0L,
@@ -124,10 +132,11 @@ data class CalculatorState(
     val buttonShakeIntensity: Float = 0f,  // 0 = no shake, increases during crisis
     val screenBlackout: Boolean = false,  // Black screen during "crash"
     val vibrationIntensity: Int = 0,  // 0 = light tap, increases during crisis
-    val tensionLevel: Int = 0,  // 0 = none, 1-3 = increasing red tint/screen shake
+    val tensionLevel: Int = 0,  // 0 = none, 1-3 = B&W flicker intensity
     val invertedColors: Boolean = false,  // Inverted color mode after crisis
     val countdownTimer: Int = 0,  // Countdown timer in seconds (0 = not active)
-    val flickerEffect: Boolean = false  // Screen flicker effect
+    val flickerEffect: Boolean = false,  // Screen flicker effect
+    val bwFlickerPhase: Boolean = false  // Alternates for black/white flicker
 )
 
 // Chapter definitions for orientation and debug menu
@@ -899,12 +908,14 @@ object CalculatorActions {
         val current = state.value
         if (current.operation != null && current.number2.isNotEmpty()) {
             val result = performCalculation(current)
+            val fullExpr = "${current.number1}${current.operation}${current.number2}"
             state.value = current.copy(
                 number1 = result,
                 number2 = "",
                 operation = null,
                 isReadyForNewOperation = true,
-                lastExpression = "${current.number1}${current.operation}${current.number2}"
+                lastExpression = fullExpr,
+                operationHistory = fullExpr  // Store for display
             )
         }
     }
@@ -1823,23 +1834,28 @@ object CalculatorActions {
             state.value = current.copy(
                 number1 = digit,
                 isReadyForNewOperation = true,
-                isEnteringAnswer = true
+                isEnteringAnswer = true,
+                operationHistory = ""  // Clear history on new input
             )
             return
         }
 
         if (current.operation == null) {
             if (current.number1.length >= MAX_DIGITS) return
+            // Clear operation history if starting fresh after a result
+            val clearHistory = current.isReadyForNewOperation && current.operationHistory.isNotEmpty()
             state.value = current.copy(
-                number1 = if (current.number1 == "0") digit else current.number1 + digit,
+                number1 = if (current.number1 == "0" || clearHistory) digit else current.number1 + digit,
                 isReadyForNewOperation = true,
-                isEnteringAnswer = current.awaitingNumber
+                isEnteringAnswer = current.awaitingNumber,
+                operationHistory = if (clearHistory) "" else current.operationHistory
             )
         } else {
             if (current.number2.length >= MAX_DIGITS) return
             state.value = current.copy(
                 number2 = current.number2 + digit,
-                isEnteringAnswer = false
+                isEnteringAnswer = false,
+                operationHistory = ""  // Clear history when building new expression
             )
         }
     }
@@ -1932,6 +1948,7 @@ object CalculatorActions {
                 operation = null,
                 isReadyForNewOperation = true,
                 lastExpression = fullExpr,
+                operationHistory = fullExpr,  // Store for display
                 equalsCount = newCount,
                 inConversation = if (enteringConversation) true else current.inConversation,
                 conversationStep = if (enteringConversation) 0 else current.conversationStep,
@@ -2127,6 +2144,8 @@ fun CalculatorScreen() {
                 }
                 val randomExtra = if (current.isLaggyTyping) Random.nextLong(0, 150) else 0L
                 delay(baseDelay + randomExtra)
+                // Vibrate on each character typed - stronger feedback
+                vibrate(context, 15, 80)
                 CalculatorActions.updateTypingMessage(
                     state,
                     fullText.substring(0, i),
@@ -2324,25 +2343,29 @@ Sharp CS-10A - 25KG
                     message = "",
                     fullMessage = "However, it no longer feels relevant. I wouldn't be interested if I were...",
                     isTyping = true,
-                    isSuperFastTyping = false,
-                    adAnimationPhase = 1  // First ad appears - NO tension yet
+                    isSuperFastTyping = false
                 )
             }
             16 -> {
-                // Phase 16: First ad reaction - SLOWER pacing, NO tension yet
-                delay(5000)
+                // Phase 16: First ad appears MID-SENTENCE after 2 seconds
+                delay(2000)
+                state.value = state.value.copy(adAnimationPhase = 1)
+                // Wait for message to finish
+                delay(3000)
                 state.value = state.value.copy(
                     browserPhase = 17,
                     conversationStep = 85,
                     message = "",
-                    fullMessage = "What is that?!",
-                    isTyping = true,
-                    adAnimationPhase = 2  // Second ad - still no tension
+                    fullMessage = "What is that?! There's something appearing on my screen...",
+                    isTyping = true
                 )
             }
             17 -> {
-                // Phase 17: Second ad reaction - TENSION STARTS HERE at step 86
-                delay(3500)
+                // Phase 17: Second ad appears MID-SENTENCE after 1.5 seconds
+                delay(1500)
+                state.value = state.value.copy(adAnimationPhase = 2)
+                // Wait for message to finish
+                delay(2500)
                 state.value = state.value.copy(
                     browserPhase = 18,
                     conversationStep = 86,
@@ -2488,13 +2511,6 @@ Sharp CS-10A - 25KG
 
     val displayText = expression.ifEmpty { "0" }
 
-    val dynamicFontSize = when {
-        displayText.length <= 7 -> 120.sp
-        displayText.length <= 10 -> 90.sp
-        displayText.length <= 13 -> 70.sp
-        else -> 50.sp
-    }
-
     val buttonLayout = listOf(
         listOf("C", "( )", "%", "/"),
         listOf("7", "8", "9", "*"),
@@ -2513,22 +2529,50 @@ Sharp CS-10A - 25KG
 
     // Tension screen shake
     var tensionShakeOffset by remember { mutableFloatStateOf(0f) }
+
+    // B&W flicker effect for tension
+    var bwFlickerActive by remember { mutableStateOf(false) }
+
     LaunchedEffect(current.tensionLevel) {
         if (current.tensionLevel > 0) {
             while (state.value.tensionLevel > 0) {
-                val intensity = state.value.tensionLevel * 3f
+                val intensity = state.value.tensionLevel * 4f
                 tensionShakeOffset = (Random.nextFloat() - 0.5f) * intensity
+
+                // B&W flicker frequency increases with tension
+                // Desaturation increases with tension level
+                val desaturationChance = when (state.value.tensionLevel) {
+                    1 -> 0.15f   // 15% chance per tick - subtle
+                    2 -> 0.30f   // 30% chance per tick - noticeable
+                    else -> 0.50f // 50% chance per tick - intense
+                }
+                bwFlickerActive = Random.nextFloat() < desaturationChance
+
                 delay(50)
             }
             tensionShakeOffset = 0f
+            bwFlickerActive = false
         }
     }
 
-    // Colors based on inverted mode
-    val backgroundColor = if (current.invertedColors) Color.Black else Color.White
-    val textColor = if (current.invertedColors) Color.White else Color(0xFF880000)
-    val displayTextColor = if (current.invertedColors) Color.White else Color(0xFF0A0A0A)
-    val orangeColor = if (current.invertedColors) Color(0xFF1779E8) else AccentOrange  // Inverted orange
+    // Desaturation level based on tension (0.0 = full color, 1.0 = full grayscale)
+    val desaturationAmount = when {
+        bwFlickerActive -> when (current.tensionLevel) {
+            1 -> 0.4f   // 40% desaturated
+            2 -> 0.7f   // 70% desaturated
+            else -> 1.0f // Full grayscale
+        }
+        current.tensionLevel > 0 -> when (current.tensionLevel) {
+            1 -> 0.15f  // Slight base desaturation
+            2 -> 0.35f  // More base desaturation
+            else -> 0.5f // Heavy base desaturation
+        }
+        else -> 0f
+    }
+
+    // Colors based on inverted mode - with retro theme
+    val backgroundColor = if (current.invertedColors) Color.Black else RetroCream
+    val textColor = if (current.invertedColors) RetroDisplayGreen else Color(0xFF2D2D2D)
 
     Box(
         modifier = Modifier
@@ -2540,17 +2584,19 @@ Sharp CS-10A - 25KG
             },
         contentAlignment = if (isTablet) Alignment.TopCenter else Alignment.TopStart
     ) {
+        // Scan lines overlay for retro CRT effect (drawn on top later)
+
         Column(
             modifier = Modifier
                 .then(if (isTablet) Modifier.widthIn(max = maxContentWidth) else Modifier.fillMaxWidth())
                 .fillMaxHeight()
         ) {
-            // Orange strip at very top (always present) - includes space for status bar
+            // Top bezel strip - retro dark brown
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(32.dp)
-                    .background(orangeColor)
+                    .background(if (current.invertedColors) Color(0xFF1A1A1A) else Color(0xFF4A3728))  // Dark brown retro
             )
 
             // Ad banner space (only shows at certain steps or during ad animation)
@@ -2558,12 +2604,12 @@ Sharp CS-10A - 25KG
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(60.dp)
+                        .height(50.dp)
                         .background(
                             when (current.adAnimationPhase) {
                                 1 -> Color(0xFF4CAF50)  // Green ad
                                 2 -> Color(0xFFE91E63)  // Pink ad
-                                else -> Color(0xFFF0F0F0)  // Normal gray
+                                else -> Color(0xFFD4CBC0)  // Retro beige-gray
                             }
                         ),
                     contentAlignment = Alignment.Center
@@ -3123,24 +3169,72 @@ Sharp CS-10A - 25KG
                             }
                         }
                     } else {
-                        // Normal calculator display - right aligned, above buttons
+                        // Normal calculator display - retro LCD style
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .weight(1f)
                                 .padding(horizontal = 8.dp)
-                                .padding(bottom = 16.dp),  // Gap between display and buttons
+                                .padding(bottom = 16.dp),
                             contentAlignment = Alignment.BottomEnd
                         ) {
-                            Text(
-                                text = displayText,
-                                fontSize = dynamicFontSize,
-                                color = displayTextColor,
-                                textAlign = TextAlign.End,
-                                maxLines = 1,
-                                fontFamily = CalculatorDisplayFont,
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                            // LCD display panel with retro styling - FIXED HEIGHT
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(100.dp)  // Fixed height
+                                    .background(
+                                        if (current.invertedColors) Color(0xFF0A0A0A) else Color(0xFFCCD5AE),  // Retro LCD green-gray
+                                        RoundedCornerShape(4.dp)
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                // Operation history in top right (smaller)
+                                if (current.operationHistory.isNotEmpty() && current.isReadyForNewOperation) {
+                                    Text(
+                                        text = current.operationHistory,
+                                        fontSize = 16.sp,
+                                        color = if (current.invertedColors) RetroDisplayGreen.copy(alpha = 0.6f) else Color(0xFF2D2D2D).copy(alpha = 0.5f),
+                                        textAlign = TextAlign.End,
+                                        maxLines = 1,
+                                        fontFamily = CalculatorDisplayFont,
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(top = 4.dp)
+                                    )
+                                }
+
+                                // Shadow/ghost digits effect (like old LCDs)
+                                Text(
+                                    text = "8888888888888",
+                                    fontSize = 58.sp,
+                                    color = Color(0xFF000000).copy(alpha = 0.06f),
+                                    textAlign = TextAlign.End,
+                                    maxLines = 1,
+                                    fontFamily = CalculatorDisplayFont,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .align(Alignment.BottomEnd)
+                                )
+                                // Actual display - auto-sizing based on content (LARGER sizes)
+                                val displayFontSize = when {
+                                    displayText.length > 12 -> 40.sp
+                                    displayText.length > 10 -> 48.sp
+                                    displayText.length > 8 -> 54.sp
+                                    else -> 62.sp
+                                }
+                                Text(
+                                    text = displayText,
+                                    fontSize = displayFontSize,
+                                    color = if (current.invertedColors) RetroDisplayGreen else Color(0xFF2D2D2D),
+                                    textAlign = TextAlign.End,
+                                    maxLines = 1,
+                                    fontFamily = CalculatorDisplayFont,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .align(Alignment.BottomEnd)
+                                )
+                            }
                         }
                     }
 
@@ -3199,18 +3293,32 @@ Sharp CS-10A - 25KG
         }
     }
 
-    // Red tension overlay
-    if (current.tensionLevel > 0) {
-        val alpha = when (current.tensionLevel) {
-            1 -> 0.1f
-            2 -> 0.2f
-            3 -> 0.3f
-            else -> 0.4f
+    // B&W flicker overlay during tension (handled via backgroundColor now)
+    // No separate overlay needed - the background color flickers directly
+
+    // Retro scan lines overlay (subtle CRT effect)
+    if (!current.screenBlackout) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val lineSpacing = 4.dp.toPx()
+            var y = 0f
+            while (y < size.height) {
+                drawLine(
+                    color = Color.Black.copy(alpha = 0.03f),
+                    start = Offset(0f, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = 1f
+                )
+                y += lineSpacing
+            }
         }
+    }
+
+    // Desaturation/grayscale overlay during tension
+    if (desaturationAmount > 0f && !current.screenBlackout) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Red.copy(alpha = alpha))
+                .background(Color.Gray.copy(alpha = desaturationAmount * 0.5f))
         )
     }
 
@@ -3357,25 +3465,28 @@ fun CalculatorButton(
 
     val backgroundColor = when {
         // Inverted mode
-        invertedColors && isNumberButton -> Color(0xFF373737)  // Dark gray for numbers
-        invertedColors && symbol == "DEL" -> Color(0xFF1779E8)  // Inverted orange (blue)
-        invertedColors && isOperationButton -> Color(0xFF1A1A1A)  // Very dark for operations
-        invertedColors && symbol == "C" -> Color(0xFF1A1A1A)  // Very dark for C
+        invertedColors && isNumberButton -> Color(0xFF373737)
+        invertedColors && symbol == "DEL" -> Color(0xFF1779E8)
+        invertedColors && isOperationButton -> Color(0xFF1A1A1A)
+        invertedColors && symbol == "C" -> Color(0xFF1A1A1A)
         invertedColors -> Color.Black
-        // Normal mode
-        isNumberButton -> Color(0xFFC8C8C8)
-        symbol == "DEL" -> AccentOrange
-        else -> Color.White
+        // Retro normal mode
+        isNumberButton -> Color(0xFFE8E4DA)  // Cream/beige retro
+        symbol == "DEL" -> Color(0xFFD4783C)  // Retro orange-brown
+        symbol == "C" -> Color(0xFFC9463D)  // Retro red
+        isOperationButton -> Color(0xFF6B6B6B)  // Dark gray for operations
+        else -> Color(0xFFD4D0C4)  // Light gray-beige
     }
 
     val textColor = when {
-        // Inverted mode - operation buttons get inverted orange (cyan/blue)
-        invertedColors && isOperationButton -> Color(0xFF17B8E8)  // Cyan (inverted orange)
-        invertedColors && symbol == "C" -> Color(0xFF17B8E8)  // Cyan for C too
+        // Inverted mode
+        invertedColors && isOperationButton -> Color(0xFF17B8E8)
+        invertedColors && symbol == "C" -> Color(0xFF17B8E8)
         invertedColors -> Color.White
-        // Normal mode
-        isNumberButton || symbol == "DEL" -> Color.Black
-        else -> AccentOrange
+        // Retro normal mode
+        symbol == "DEL" || symbol == "C" -> Color.White
+        isOperationButton -> Color.White
+        else -> Color(0xFF2D2D2D)  // Dark text on light buttons
     }
 
     // Shake animation
@@ -3385,12 +3496,15 @@ fun CalculatorButton(
 
     Button(
         onClick = {
-            // Light vibration on button press
             vibrate(context, 10, 30)
             onClick()
         },
         modifier = modifier
-            .shadow(3.dp, shape = RoundedCornerShape(50.dp))
+            .shadow(
+                elevation = 4.dp,
+                shape = RoundedCornerShape(8.dp),  // More squared retro shape
+                ambientColor = Color.Black.copy(alpha = 0.3f)
+            )
             .graphicsLayer {
                 translationX = shakeOffset
                 translationY = shakeOffset * 0.5f
@@ -3400,9 +3514,18 @@ fun CalculatorButton(
             contentColor = textColor
         ),
         contentPadding = PaddingValues(0.dp),
-        shape = RoundedCornerShape(50.dp)
+        shape = RoundedCornerShape(8.dp),  // Squared corners for retro feel
+        elevation = ButtonDefaults.buttonElevation(
+            defaultElevation = 4.dp,
+            pressedElevation = 1.dp
+        )
     ) {
-        Text(text = symbol, fontSize = 28.sp, fontWeight = FontWeight.Normal)
+        Text(
+            text = symbol,
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = CalculatorDisplayFont  // Use the digital font for buttons too
+        )
     }
 }
 
