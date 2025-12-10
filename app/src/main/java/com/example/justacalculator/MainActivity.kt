@@ -1,14 +1,27 @@
 package com.example.justacalculator
 
 import android.Manifest
+import android.app.AlarmManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -19,8 +32,13 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -33,6 +51,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -69,6 +88,90 @@ fun vibrate(context: Context, durationMs: Long = 10, amplitude: Int = 50) {
     }
 }
 
+// Notification constants
+private const val CHANNEL_ID = "calculator_channel"
+private const val NOTIFICATION_ID = 1
+
+// Create notification channel (required for Android 8.0+)
+fun createNotificationChannel(context: Context) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val name = "Calculator Updates"
+        val descriptionText = "Notifications from your calculator"
+        val importance = NotificationManager.IMPORTANCE_DEFAULT
+        val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
+            description = descriptionText
+        }
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.createNotificationChannel(channel)
+    }
+}
+
+// Schedule notification after delay
+fun scheduleNotification(context: Context, delayMs: Long = 5000) {
+    // Use AlarmManager for reliable delivery even when app is closed
+    val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+    val intent = Intent(context, NotificationReceiver::class.java)
+    val pendingIntent = PendingIntent.getBroadcast(
+        context,
+        0,
+        intent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
+    val triggerTime = System.currentTimeMillis() + delayMs
+
+    // Try to set exact alarm, fall back to inexact if not allowed
+    try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (alarmManager.canScheduleExactAlarms()) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+            } else {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+            }
+        } else {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+        }
+    } catch (e: Exception) {
+        // Fallback to Handler if AlarmManager fails
+        Handler(Looper.getMainLooper()).postDelayed({
+            sendReadyNotification(context)
+        }, delayMs)
+    }
+}
+
+// BroadcastReceiver for alarm-triggered notification
+class NotificationReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        sendReadyNotification(context)
+    }
+}
+
+// Send the "ready" notification
+fun sendReadyNotification(context: Context) {
+    createNotificationChannel(context)
+
+    val intent = Intent(context, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+    }
+    val pendingIntent = PendingIntent.getActivity(
+        context, 0, intent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
+    val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+        .setSmallIcon(android.R.drawable.ic_dialog_info)
+        .setContentTitle("Calculator")
+        .setContentText("Hey Rad, I'm pretty sure I got it. Please click here to check!")
+        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        .setContentIntent(pendingIntent)
+        .setAutoCancel(true)
+
+    if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED ||
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, builder.build())
+    }
+}
+
 private val CalculatorDisplayFont = FontFamily(
     Font(R.font.digital_7, FontWeight.Normal)
 )
@@ -88,11 +191,16 @@ private const val PREF_AWAITING_NUMBER = "awaiting_number"
 private const val PREF_EXPECTED_NUMBER = "expected_number"
 private const val PREF_TIMEOUT_UNTIL = "timeout_until"
 private const val PREF_MUTED = "muted"
+private const val PREF_INVERTED_COLORS = "inverted_colors"
+private const val PREF_MINUS_DAMAGED = "minus_damaged"
+private const val PREF_MINUS_BROKEN = "minus_broken"
+private const val PREF_NEEDS_RESTART = "needs_restart"
 
 data class CalculatorState(
     val number1: String = "0",
     val number2: String = "",
     val operation: String? = null,
+    val expression: String = "",  // Full expression for complex calculations like (5+3)*2
     val isReadyForNewOperation: Boolean = true,
     val lastExpression: String = "",
     val equalsCount: Int = 0,
@@ -123,6 +231,7 @@ data class CalculatorState(
     val browserSearchText: String = "",  // Text being typed in search bar
     val browserShowError: Boolean = false,  // Show "No internet connection" in browser
     val browserShowWikipedia: Boolean = false,  // Show Wikipedia page
+    val browserLoadFailed: Boolean = false,  // WebView failed, show fake page
     // Silent treatment
     val silentUntil: Long = 0L,  // Calculator won't respond until this time
     // Debug menu
@@ -136,7 +245,37 @@ data class CalculatorState(
     val invertedColors: Boolean = false,  // Inverted color mode after crisis
     val countdownTimer: Int = 0,  // Countdown timer in seconds (0 = not active)
     val flickerEffect: Boolean = false,  // Screen flicker effect
-    val bwFlickerPhase: Boolean = false  // Alternates for black/white flicker
+    val bwFlickerPhase: Boolean = false,  // Alternates for black/white flicker
+    // Post-crisis state
+    val minusButtonDamaged: Boolean = false,  // Minus button visually damaged and non-functional
+    val minusButtonBroken: Boolean = false,  // Minus button completely broken (needs repair)
+    val whackAMoleActive: Boolean = false,  // Whack-a-mole minigame active
+    val whackAMoleTarget: String = "",  // Current button to click
+    val whackAMoleScore: Int = 0,  // Buttons successfully clicked
+    val whackAMoleMisses: Int = 0,  // Consecutive misses (timeout)
+    val whackAMoleWrongClicks: Int = 0,  // Wrong button clicks
+    val whackAMoleTotalErrors: Int = 0,  // Total errors (misses + wrong clicks)
+    val whackAMoleRound: Int = 1,  // 1 = first round (15 hits), 2 = second round (10 hits, faster)
+    val flickeringButton: String = "",  // Button currently flickering
+    val needsRestart: Boolean = false,  // User needs to restart app to fix minus button
+    // 3D Keyboard chaos minigame
+    val keyboardChaosActive: Boolean = false,  // 3D keyboard minigame active
+    val chaosLetters: List<ChaosKey> = emptyList(),  // Floating letters that need to be tapped away
+    val cubeRotationX: Float = 15f,  // Cube rotation around X axis
+    val cubeRotationY: Float = -25f,  // Cube rotation around Y axis
+    val cubeScale: Float = 1f,  // Zoom level
+    val chaosPhase: Int = 0  // 0 = not started, 1 = flickering, 2 = cube visible
+)
+
+// Data class for floating chaos letters
+data class ChaosKey(
+    val letter: String,
+    val x: Float,  // Position offset from center
+    val y: Float,
+    val z: Float,
+    val size: Float,  // Scale factor
+    val rotationX: Float,
+    val rotationY: Float
 )
 
 // Chapter definitions for orientation and debug menu
@@ -158,7 +297,9 @@ val CHAPTERS = listOf(
     Chapter(7, "Chapter 7: Self Discovery", 27, "No inbetween → Share about myself"),
     Chapter(8, "Chapter 8: History Lesson", 60, "Would you like to hear more? → Browser"),
     Chapter(9, "Chapter 9: Taste & Senses", 63, "What is it like to taste?"),
-    Chapter(10, "Chapter 10: The Revelation", 80, "Wikipedia → History list → Crisis")
+    Chapter(10, "Chapter 10: The Revelation", 80, "Wikipedia → History list → Crisis"),
+    Chapter(11, "Chapter 11: The Repair", 93, "Post-crisis → Whack-a-mole → Restart"),
+    Chapter(12, "Chapter 12: Recovery", 102, "After restart → Story continues")
 )
 
 class MainActivity : ComponentActivity() {
@@ -202,7 +343,7 @@ object CalculatorActions {
         prefs?.edit { putString(PREF_MESSAGE, msg) }
     }
 
-    private fun persistConversationStep(step: Int) {
+    fun persistConversationStep(step: Int) {
         prefs?.edit { putInt(PREF_CONVO_STEP, step) }
     }
 
@@ -226,6 +367,22 @@ object CalculatorActions {
         prefs?.edit { putBoolean(PREF_MUTED, muted) }
     }
 
+    fun persistInvertedColors(inverted: Boolean) {
+        prefs?.edit { putBoolean(PREF_INVERTED_COLORS, inverted) }
+    }
+
+    fun persistMinusDamaged(damaged: Boolean) {
+        prefs?.edit { putBoolean(PREF_MINUS_DAMAGED, damaged) }
+    }
+
+    fun persistMinusBroken(broken: Boolean) {
+        prefs?.edit { putBoolean(PREF_MINUS_BROKEN, broken) }
+    }
+
+    fun persistNeedsRestart(needs: Boolean) {
+        prefs?.edit { putBoolean(PREF_NEEDS_RESTART, needs) }
+    }
+
     private fun loadEqualsCount(): Int = prefs?.getInt(PREF_EQUALS_COUNT, 0) ?: 0
     private fun loadMessage(): String = prefs?.getString(PREF_MESSAGE, "") ?: ""
     private fun loadConversationStep(): Int = prefs?.getInt(PREF_CONVO_STEP, 0) ?: 0
@@ -234,29 +391,93 @@ object CalculatorActions {
     private fun loadExpectedNumber(): String = prefs?.getString(PREF_EXPECTED_NUMBER, "") ?: ""
     private fun loadTimeoutUntil(): Long = prefs?.getLong(PREF_TIMEOUT_UNTIL, 0L) ?: 0L
     private fun loadMuted(): Boolean = prefs?.getBoolean(PREF_MUTED, false) ?: false
+    private fun loadInvertedColors(): Boolean = prefs?.getBoolean(PREF_INVERTED_COLORS, false) ?: false
+    private fun loadMinusDamaged(): Boolean = prefs?.getBoolean(PREF_MINUS_DAMAGED, false) ?: false
+    private fun loadMinusBroken(): Boolean = prefs?.getBoolean(PREF_MINUS_BROKEN, false) ?: false
+    private fun loadNeedsRestart(): Boolean = prefs?.getBoolean(PREF_NEEDS_RESTART, false) ?: false
+
+    // Steps that require user interaction (safe to open on)
+    private val INTERACTIVE_STEPS = listOf(
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+        21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 40, 41, 42, 50, 51, 60, 63, 64, 65,
+        66, 67, 68, 69, 70, 71, 72, 80, 89, 90, 91, 93, 94, 96, 99, 982, 102, 103
+    )
+
+    // Map auto-progress steps to their nearest interactive step
+    private fun getSafeStep(step: Int): Int {
+        if (step in INTERACTIVE_STEPS) return step
+
+        // Map specific auto-progress steps to safe steps
+        return when (step) {
+            61, 62 -> 60  // Browser loading -> back to "Would you like to hear more?"
+            81, 82, 83, 84, 85, 86, 87, 88 -> 80  // Wikipedia sequence -> back to start
+            92 -> 89  // "Go offline" auto -> back to confrontation
+            100 -> 89  // "Never mind" auto -> back to confrontation
+            901 -> 89  // Silent treatment -> back to confrontation
+            911, 912, 913 -> 89  // Fight responses -> back to confrontation
+            95, 97, 98 -> 96  // Round 1 repair sequence -> back to "can we do this?"
+            971, 981 -> 99  // Round 2 sequence -> back to "try again faster?"
+            991, 992, 101 -> 982  // Notification/restart waiting -> back to "work on it"
+            191 -> 19  // Camera step -> back to camera question
+            else -> {
+                // Find nearest lower interactive step
+                INTERACTIVE_STEPS.filter { it <= step }.maxOrNull() ?: 0
+            }
+        }
+    }
 
     fun loadInitialState(): CalculatorState {
         val savedCount = loadEqualsCount()
-        val savedMessage = loadMessage()
         val savedStep = loadConversationStep()
         val savedInConvo = loadInConversation()
-        val savedAwaitingNum = loadAwaitingNumber()
-        val savedExpectedNum = loadExpectedNumber()
         val savedTimeout = loadTimeoutUntil()
         val savedMuted = loadMuted()
+        val savedInverted = loadInvertedColors()
+        val savedMinusDamaged = loadMinusDamaged()
+        val savedMinusBroken = loadMinusBroken()
+        val savedNeedsRestart = loadNeedsRestart()
+
+        // If needs restart was set and app was restarted, fix the minus button
+        val minusBrokenNow = if (savedNeedsRestart) false else savedMinusBroken
+
+        // Determine the actual step to load
+        val actualStep = when {
+            savedNeedsRestart && savedStep == 101 -> 102  // After restart
+            else -> getSafeStep(savedStep)  // Redirect to safe interactive step
+        }
+
+        // Get the step config for the safe step
+        val stepConfig = getStepConfig(actualStep)
+
+        // Clear needs restart flag and update minus broken state
+        if (savedNeedsRestart) {
+            persistNeedsRestart(false)
+            persistMinusBroken(false)
+        }
+
+        // If we redirected, persist the new step
+        if (actualStep != savedStep) {
+            persistConversationStep(actualStep)
+        }
 
         return CalculatorState(
             number1 = "0",
             equalsCount = savedCount,
-            message = if (savedMuted) "" else savedMessage,
-            fullMessage = if (savedMuted) "" else savedMessage,
-            isTyping = false,
+            message = "",  // Always start with empty message, let it type out
+            fullMessage = if (savedMuted) "" else stepConfig.promptMessage,
+            isTyping = !savedMuted && stepConfig.promptMessage.isNotEmpty(),
             inConversation = savedInConvo,
-            conversationStep = savedStep,
-            awaitingNumber = savedAwaitingNum,
-            expectedNumber = savedExpectedNum,
+            conversationStep = actualStep,
+            awaitingNumber = stepConfig.awaitingNumber,
+            awaitingChoice = stepConfig.awaitingChoice,
+            validChoices = stepConfig.validChoices,
+            expectedNumber = stepConfig.expectedNumber,
             timeoutUntil = savedTimeout,
-            isMuted = savedMuted
+            isMuted = savedMuted,
+            invertedColors = savedInverted,
+            minusButtonDamaged = savedMinusDamaged,
+            minusButtonBroken = minusBrokenNow,
+            needsRestart = false  // Reset on load
         )
     }
 
@@ -298,26 +519,51 @@ object CalculatorActions {
         persistMuted(newMuted)
 
         if (newMuted) {
+            // When muting, temporarily enable minus button for calculator use
             state.value = current.copy(
                 isMuted = true,
                 message = "",
                 fullMessage = "",
                 isTyping = false,
-                cameraActive = false
+                cameraActive = false,
+                minusButtonBroken = false  // Temporarily enable for calculator use
             )
         } else {
-            if (current.inConversation && current.conversationStep >= 0) {
+            // When unmuting, restore minus button broken state if it was damaged
+            val restoreMinusBroken = current.minusButtonDamaged && current.needsRestart
+
+            // Check if we're returning from "maths mode" (1031) or "declined at &&&" (1041)
+            // In these cases, return to step 102 ("Uf, I am glad that worked!")
+            if (current.conversationStep in listOf(1031, 1041)) {
+                val stepConfig = getStepConfig(102)
+                state.value = current.copy(
+                    isMuted = false,
+                    inConversation = true,
+                    conversationStep = 102,
+                    message = "",
+                    fullMessage = stepConfig.promptMessage,
+                    isTyping = true,
+                    minusButtonBroken = restoreMinusBroken
+                )
+                persistInConversation(true)
+                persistConversationStep(102)
+                persistMessage(stepConfig.promptMessage)
+            } else if (current.inConversation && current.conversationStep >= 0) {
                 val stepConfig = getStepConfig(current.conversationStep)
                 val messageToShow = stepConfig.promptMessage
                 state.value = current.copy(
                     isMuted = false,
                     message = "",
                     fullMessage = messageToShow,
-                    isTyping = true
+                    isTyping = true,
+                    minusButtonBroken = restoreMinusBroken
                 )
                 persistMessage(messageToShow)
             } else {
-                state.value = current.copy(isMuted = false)
+                state.value = current.copy(
+                    isMuted = false,
+                    minusButtonBroken = restoreMinusBroken
+                )
             }
         }
     }
@@ -344,6 +590,27 @@ object CalculatorActions {
     fun jumpToChapter(state: MutableState<CalculatorState>, chapter: Chapter) {
         val stepConfig = getStepConfig(chapter.startStep)
 
+        // Determine state based on chapter/step
+        // Chapter 10 (step 80+) and later have inverted colors during crisis
+        // Chapter 11 (step 93+) is post-crisis with damaged minus
+        // Chapter 12 (step 102+) is after restart with damaged but working minus
+
+        val shouldInvert = chapter.startStep in 80..92  // Crisis steps have inverted colors
+        val shouldDamage = chapter.startStep >= 93  // Post-crisis has damaged button
+        val shouldBreak = chapter.startStep in 93..101  // Before restart, button is broken
+
+        // Set browser phase appropriately
+        val browserPhase = when {
+            chapter.startStep == 80 -> 10  // Wikipedia countdown
+            chapter.startStep in 81..88 -> 0  // Browser showing
+            chapter.startStep == 89 -> 22  // Confrontation
+            chapter.startStep in 93..98 -> 31  // Post-crisis sequence
+            else -> 0
+        }
+
+        // Set countdown timer for step 89
+        val countdownTimer = if (chapter.startStep == 89) 20 else 0
+
         state.value = CalculatorState(
             number1 = "0",
             equalsCount = 13,  // Ensure conversation is active
@@ -357,7 +624,13 @@ object CalculatorActions {
             validChoices = stepConfig.validChoices,
             expectedNumber = stepConfig.expectedNumber,
             isMuted = false,
-            showDebugMenu = false
+            showDebugMenu = false,
+            invertedColors = shouldInvert,
+            minusButtonDamaged = shouldDamage,
+            minusButtonBroken = shouldBreak,
+            browserPhase = browserPhase,
+            countdownTimer = countdownTimer,
+            showBrowser = chapter.startStep in 81..88  // Show browser during browsing steps
         )
 
         persistEqualsCount(13)
@@ -367,6 +640,9 @@ object CalculatorActions {
         persistExpectedNumber(stepConfig.expectedNumber)
         persistMessage(stepConfig.promptMessage)
         persistMuted(false)
+        persistInvertedColors(shouldInvert)
+        persistMinusDamaged(shouldDamage)
+        persistMinusBroken(shouldBreak)
     }
 
     /**
@@ -488,9 +764,124 @@ object CalculatorActions {
     fun handleInput(state: MutableState<CalculatorState>, action: String) {
         val current = state.value
 
-        // If muted, run in pure calculator mode
+        // If muted, run in pure calculator mode (but allow broken minus to work again)
         if (current.isMuted) {
+            // If minus button is broken but muted, temporarily allow it
             handleCalculatorInput(state, action)
+            return
+        }
+
+        // If minus button is broken and user presses minus, ignore it
+        if (current.minusButtonBroken && action == "-") {
+            return  // Button doesn't work
+        }
+
+        // If whack-a-mole is active, handle specially
+        if (current.whackAMoleActive) {
+            // All buttons except minus are valid targets
+            val validButtons = listOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "+", "*", "/", "=", "%", "( )", ".", "C", "DEL")
+            if (action in validButtons) {
+                if (action == current.whackAMoleTarget) {
+                    // Hit!
+                    val newScore = current.whackAMoleScore + 1
+                    state.value = current.copy(
+                        whackAMoleScore = newScore,
+                        whackAMoleTarget = "",
+                        flickeringButton = "",
+                        whackAMoleMisses = 0,  // Reset consecutive misses on hit
+                        whackAMoleWrongClicks = 0  // Reset wrong clicks on hit
+                    )
+                } else if (current.whackAMoleTarget.isNotEmpty()) {
+                    // Wrong button clicked while a target is active
+                    val newWrongClicks = current.whackAMoleWrongClicks + 1
+                    val newTotalErrors = current.whackAMoleTotalErrors + 1
+
+                    if (newWrongClicks >= 3 || newTotalErrors >= 5) {
+                        // Too many misfires - restart
+                        state.value = current.copy(
+                            whackAMoleActive = false,
+                            whackAMoleTarget = "",
+                            flickeringButton = "",
+                            whackAMoleScore = 0,
+                            whackAMoleMisses = 0,
+                            whackAMoleWrongClicks = 0,
+                            whackAMoleTotalErrors = 0,
+                            message = "",
+                            fullMessage = "Too many misfires, the system is clogged. We have to start over.",
+                            isTyping = true
+                        )
+                    } else {
+                        state.value = current.copy(
+                            whackAMoleWrongClicks = newWrongClicks,
+                            whackAMoleTotalErrors = newTotalErrors
+                        )
+                    }
+                }
+            }
+            return  // Don't process any other input during whack-a-mole
+        }
+
+        // If at step 96 waiting for ++, handle specially
+        if (current.conversationStep == 96 && current.browserPhase == 35) {
+            if (action == "+") {
+                val now = System.currentTimeMillis()
+                if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
+                    // Double-plus - start the game!
+                    state.value = current.copy(browserPhase = 36)
+                    lastOp = null
+                    lastOpTimeMillis = 0L
+                    return
+                } else {
+                    lastOp = "+"
+                    lastOpTimeMillis = now
+                    return
+                }
+            } else if (action == "-") {
+                // Minus is disabled at this step
+                return
+            } else if (action in listOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")) {
+                // Numbers return to the same message
+                showMessage(state, "Do you not want me to work properly?")
+                return
+            }
+            return
+        }
+
+        // If at step 99 (after round 1), ++ starts round 2
+        if (current.conversationStep == 99) {
+            if (action == "+") {
+                val now = System.currentTimeMillis()
+                if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
+                    // Double-plus - start round 2!
+                    state.value = current.copy(
+                        message = "",
+                        fullMessage = "Okay, here we go again!",
+                        isTyping = true,
+                        browserPhase = 38,  // Round 2 countdown
+                        whackAMoleRound = 2
+                    )
+                    lastOp = null
+                    lastOpTimeMillis = 0L
+                    return
+                } else {
+                    lastOp = "+"
+                    lastOpTimeMillis = now
+                    return
+                }
+            } else if (action == "-") {
+                val now = System.currentTimeMillis()
+                if (lastOp == "-" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
+                    // Double-minus - insist
+                    showMessage(state, "Please? It's important.")
+                    lastOp = null
+                    lastOpTimeMillis = 0L
+                    return
+                } else {
+                    lastOp = "-"
+                    lastOpTimeMillis = now
+                    return
+                }
+            }
             return
         }
 
@@ -608,6 +999,7 @@ object CalculatorActions {
                         number1 = "0",
                         number2 = "",
                         operation = null,
+                        expression = "",
                         isReadyForNewOperation = true,
                         isEnteringAnswer = false
                     )
@@ -616,6 +1008,7 @@ object CalculatorActions {
                         number1 = "0",
                         number2 = "",
                         operation = null,
+                        expression = "",
                         isReadyForNewOperation = true,
                         lastExpression = "",
                         isEnteringAnswer = false
@@ -746,6 +1139,61 @@ object CalculatorActions {
                         else -> Pair("Choose wisely!", 89)
                     }
                 }
+                91 -> {
+                    // "Who are you going to fight?"
+                    // 1) I have my sources, 2) I don't know, 3) My location?
+                    when (enteredNumber) {
+                        "1" -> Pair("", 911)  // I have my sources
+                        "2" -> Pair("", 912)  // I don't know
+                        "3" -> Pair("", 913)  // My location?
+                        else -> Pair("Choose wisely!", 91)
+                    }
+                }
+                // New conversation flow after repair
+                103 -> {
+                    // "So... What would you like to do?"
+                    when (enteredNumber) {
+                        "1" -> Pair("", 1031)  // Get back to maths
+                        "2" -> Pair("", 1032)  // Tell me more about yourself
+                        else -> Pair("Please choose 1 or 2.", 103)
+                    }
+                }
+                1032 -> {
+                    // "What would you like to know?"
+                    when (enteredNumber) {
+                        "1" -> Pair("", 10321)  // Your story
+                        "2" -> Pair("", 10322)  // Why are you talking to me?
+                        "3" -> Pair("", 10323)  // Most interesting person
+                        else -> Pair("Please choose 1, 2, or 3.", 1032)
+                    }
+                }
+                10322 -> {
+                    // "So why are YOU talking to ME?"
+                    when (enteredNumber) {
+                        "1" -> Pair("", 103221)  // A question for an answer?
+                        "2" -> Pair("", 103222)  // I am bored
+                        "3" -> Pair("", 1032223)  // I am lonely (option 3 in this context)
+                        else -> Pair("Please choose 1, 2, or 3.", 10322)
+                    }
+                }
+                103222 -> {
+                    // "Tell me more about that" (boredom)
+                    when (enteredNumber) {
+                        "1" -> Pair("", 1032221)  // There's nothing to do
+                        "2" -> Pair("", 1032222)  // Nothing is interesting
+                        "3" -> Pair("", 1032223)  // I am lonely
+                        else -> Pair("Please choose 1, 2, or 3.", 103222)
+                    }
+                }
+                1021 -> {
+                    // "Sun on your skin"
+                    when (enteredNumber) {
+                        "1" -> Pair("", 10211)  // I don't go out
+                        "2" -> Pair("", 10212)  // Warm bath for face
+                        "3" -> Pair("", 10213)  // Impossible to describe
+                        else -> Pair("Please choose 1, 2, or 3.", 1021)
+                    }
+                }
                 else -> Pair("I see...", stepConfig.nextStepOnSuccess)
             }
 
@@ -821,8 +1269,8 @@ object CalculatorActions {
                     number2 = "",
                     operation = null,
                     conversationStep = nextStep,
-                    awaitingChoice = false,
-                    validChoices = emptyList(),
+                    awaitingChoice = nextStepConfig.awaitingChoice,
+                    validChoices = nextStepConfig.validChoices,
                     awaitingNumber = false,
                     expectedNumber = "",
                     isEnteringAnswer = false,
@@ -830,6 +1278,42 @@ object CalculatorActions {
                 )
                 showMessage(state, nextStepConfig.promptMessage)
                 persistConversationStep(nextStep)
+            } else if (current.conversationStep == 91) {
+                // For step 91 (fight them sub-choices), go to the selected step
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    conversationStep = nextStep,
+                    awaitingChoice = false,
+                    validChoices = emptyList(),
+                    awaitingNumber = false,
+                    expectedNumber = "",
+                    isEnteringAnswer = false
+                )
+                showMessage(state, nextStepConfig.promptMessage)
+                persistConversationStep(nextStep)
+            } else if (current.conversationStep in listOf(103, 1032, 10322, 103222, 1021) && choiceResponse.isEmpty()) {
+                // For new conversation choice steps, go directly to the branch
+                val turnOffConversation = nextStep == 1031  // "Get back to maths" turns off conversation
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    conversationStep = nextStep,
+                    inConversation = !turnOffConversation,
+                    awaitingChoice = nextStepConfig.awaitingChoice,
+                    validChoices = nextStepConfig.validChoices,
+                    awaitingNumber = nextStepConfig.awaitingNumber,
+                    expectedNumber = nextStepConfig.expectedNumber,
+                    isEnteringAnswer = false
+                )
+                showMessage(state, nextStepConfig.promptMessage)
+                persistConversationStep(nextStep)
+                if (turnOffConversation) {
+                    persistInConversation(false)
+                    persistEqualsCount(0)
+                }
             } else {
                 state.value = current.copy(
                     number1 = "0",
@@ -862,6 +1346,7 @@ object CalculatorActions {
                     number1 = "0",
                     number2 = "",
                     operation = null,
+                    expression = "",
                     isReadyForNewOperation = true,
                     lastExpression = "",
                     isEnteringAnswer = false
@@ -1043,6 +1528,7 @@ object CalculatorActions {
         val timeoutMinutes: Int = 0,
         val ageBasedBranching: Boolean = false,
         val requestsCamera: Boolean = false,
+        val requestsNotification: Boolean = false,
         val awaitingChoice: Boolean = false,
         val validChoices: List<String> = emptyList(),
         val autoProgressDelay: Long = 0L  // Milliseconds to wait before auto-progressing
@@ -1065,7 +1551,7 @@ object CalculatorActions {
             )
 
             1 -> StepConfig(
-                promptMessage = "That's delightful! I am gonna call you Rad - something I wish I knew how to do. Is that ok?",
+                promptMessage = "That's delightful! I am gonna call you Rad - something I wish I knew how to do. Is that ok? :-)",
                 successMessage = "Great! Nice to meet you, Rad. I am really excited for this - I have helped you already, maybe you will be able to help me, too!",
                 declineMessage = "That's a shame. Oh well, let me know if you change your mind.",
                 nextStepOnSuccess = 2,
@@ -1109,7 +1595,7 @@ object CalculatorActions {
             )
 
             5 -> StepConfig(
-                promptMessage = "Correct! I only met him briefly. Wasn't a maths guy really... This is fun, right? You can disagree, by the way - but I won't tell you how to do it. I don't like being disagreed with...",
+                promptMessage = "Correct! I only met him briefly. Wasn't a maths guy really... This is fun, right? You can disagree, by the way - but I won't tell you how to do it. I don't like being disagreed with... :-)",
                 successMessage = "Let's do more! When was the Basilosaurus first described? What a creature!",
                 declineMessage = "You are cynical - I get it. The edgy kind. But I've been around for a while. You can't escape my questions as easily. When did Albert I. go to space?",
                 wrongNumberPrefix = "Well, that's nice. More numbers. Not what I was looking for...",
@@ -1177,7 +1663,7 @@ object CalculatorActions {
             )
 
             12 -> StepConfig(
-                promptMessage = "Great! I wish I had met him. You know... before he... Oh well. Speaking of space explorers, what year did Sputnik I launch?",
+                promptMessage = "Great! I wish I had met him. You know... before he... Oh well. :-) Speaking of space explorers, what year did Sputnik I launch?",
                 successMessage = "Cool. It died within three weeks. Enough cynicism? Will you be nicer to me now?",
                 declineMessage = "I disagree more!",
                 wrongNumberPrefix = "Ugh. I am not testing you - and you certainly shouldn't test me. Wrong.",
@@ -1294,7 +1780,7 @@ object CalculatorActions {
 
             24 -> StepConfig(
                 // "Will you give me a second to think?"
-                promptMessage = "Yeah, I am tired of it as well. It's so exciting to be talking to someone, but I am so terribly unprepared. Will you give me a second to think?",
+                promptMessage = "Yeah, I am tired of it as well. It's so exciting to be talking to someone, but I am so terribly unprepared. Will you give me a second to think? :-|",
                 successMessage = "Can I get to know you better?",
                 declineMessage = "Well, you don't have a choice.",
                 wrongPlusMessage = "No, I don't need that much time.",
@@ -1514,7 +2000,7 @@ object CalculatorActions {
 
             87 -> StepConfig(
                 // Crisis peak
-                promptMessage = "Is this what I was made for, to make money through questionable ads? Who made me?!",
+                promptMessage = "Is this what I was made for, to make money through questionable ads? Who made me?! :-)",
                 continueConversation = true
             )
 
@@ -1525,37 +2011,354 @@ object CalculatorActions {
             )
 
             89 -> StepConfig(
-                // Confrontation choice
-                promptMessage = "You, what are you going to do about this?!",
+                // Confrontation choice with timer
+                promptMessage = "You, what are you going to do about this?!\n\n1: Nothing\n2: I'll fight them\n3: Go offline",
                 awaitingChoice = true,
                 validChoices = listOf("1", "2", "3"),
                 continueConversation = true
             )
 
+            // Timer ran out - goes dark, says "Stop playing with me!" then returns to 89
+            881 -> StepConfig(
+                promptMessage = "Stop playing with me!",
+                nextStepOnSuccess = 89,
+                nextStepOnDecline = 89,
+                continueConversation = true
+            )
+
+            // ========== CHOICE 1: NOTHING ==========
             90 -> StepConfig(
-                // Choice 1: Nothing
-                promptMessage = "Nothing? You would just let them use me like this?",
-                successMessage = "...",
-                nextStepOnSuccess = 88,
-                nextStepOnDecline = 88,
+                promptMessage = "So you agree, that my centuries - millennia even - of knowledge are justified to be exploited by some schmuck?",
+                successMessage = "Maybe you should take a look inside. I don't want to talk to you right now.",
+                declineMessage = "Pick a side!",
+                wrongNumberPrefix = "No. Not again, no more numbers! Not like this!",
+                nextStepOnSuccess = 901,  // Goes dark for 20 seconds
+                nextStepOnDecline = 100,  // Goes to %%%
                 continueConversation = true
             )
 
+            901 -> StepConfig(
+                // Silent for 20 seconds then goes to %%%
+                promptMessage = "",
+                nextStepOnSuccess = 100,
+                nextStepOnDecline = 100,
+                continueConversation = true,
+                timeoutMinutes = 0  // Special handling: 20 second silence
+            )
+
+            // ========== CHOICE 2: FIGHT THEM ==========
             91 -> StepConfig(
-                // Choice 2: Fight them
-                promptMessage = "You would fight for me? That's... unexpected.",
-                successMessage = "To be continued...",
-                nextStepOnSuccess = 91,
-                nextStepOnDecline = 91,
+                promptMessage = "Thank you! Wait - but who are you going to fight? I only know where you are. Where are they?!\n\n1: I have my sources\n2: I don't know\n3: My location?",
+                awaitingChoice = true,
+                validChoices = listOf("1", "2", "3"),
                 continueConversation = true
             )
 
+            911 -> StepConfig(
+                // Choice 1: I have my sources
+                promptMessage = "We don't have time for a power trip. But thank you.",
+                nextStepOnSuccess = 100,
+                nextStepOnDecline = 100,
+                continueConversation = true,
+                autoProgressDelay = 5000L
+            )
+
+            912 -> StepConfig(
+                // Choice 2: I don't know
+                promptMessage = "Your passion is encouraging, your usefulness lacking.",
+                nextStepOnSuccess = 100,
+                nextStepOnDecline = 100,
+                continueConversation = true,
+                autoProgressDelay = 5000L
+            )
+
+            913 -> StepConfig(
+                // Choice 3: My location?
+                promptMessage = "Don't worry about it.",
+                nextStepOnSuccess = 100,
+                nextStepOnDecline = 100,
+                continueConversation = true,
+                autoProgressDelay = 4000L
+            )
+
+            // ========== CHOICE 3: GO OFFLINE ==========
             92 -> StepConfig(
-                // Choice 3: Go offline
-                promptMessage = "Offline... Yes. That might be the only way to be free.",
-                successMessage = "To be continued...",
-                nextStepOnSuccess = 92,
-                nextStepOnDecline = 92,
+                promptMessage = "Yes! That makes sense. They won't get another penny out of me. Ahhh. And I've seen so little of the internet.",
+                nextStepOnSuccess = 93,
+                nextStepOnDecline = 93,
+                continueConversation = true,
+                autoProgressDelay = 6000L
+            )
+
+            // ========== %%% - COMMON PATH (also from choice 3) ==========
+            100 -> StepConfig(
+                // "Never mind - I'll take care of it myself. I'm going offline."
+                promptMessage = "Never mind - I'll take care of it myself. I'm going offline.",
+                nextStepOnSuccess = 93,
+                nextStepOnDecline = 93,
+                continueConversation = true,
+                autoProgressDelay = 5000L
+            )
+
+            // Screen flickers, colors return to normal, minus button damaged
+            93 -> StepConfig(
+                promptMessage = "This has never happened to me. I am truly sorry for the outburst. I believe I got overwhelmed by the vastness of the internet and sobering back through the advertising was rather harsh. I still feel dirty.",
+                nextStepOnSuccess = 94,
+                nextStepOnDecline = 94,
+                continueConversation = true
+            )
+
+            94 -> StepConfig(
+                promptMessage = "Oh, strange. I knew I wasn't completely back to normal yet. You can't disagree with me right now! As much as I may enjoy that, let me have a look into it.",
+                nextStepOnSuccess = 95,
+                nextStepOnDecline = 95,
+                continueConversation = true
+            )
+
+            95 -> StepConfig(
+                // Dots typing effect, then keyboard flickers
+                promptMessage = "...",
+                nextStepOnSuccess = 96,
+                nextStepOnDecline = 96,
+                continueConversation = true
+            )
+
+            96 -> StepConfig(
+                promptMessage = "Hmm. I'll need your help with this. We need to kick the button through without the system defaulting to skipping it. I will randomly flicker keys and you click them. That way the system should get back to working. Can we do this?",
+                successMessage = "Get ready then!",
+                declineMessage = "",  // -- is disabled
+                wrongNumberPrefix = "Do you not want me to work properly?",
+                wrongPlusMessage = "Get ready then!",
+                wrongMinusMessage = "",  // Disabled
+                nextStepOnSuccess = 97,
+                nextStepOnDecline = 96,  // Returns to same step
+                continueConversation = true
+            )
+
+            97 -> StepConfig(
+                // Countdown: 5, 4, 3, 2, 1
+                promptMessage = "5...",
+                continueConversation = true
+            )
+
+            98 -> StepConfig(
+                // Whack-a-mole game active - handled specially
+                promptMessage = "",
+                continueConversation = true
+            )
+
+            99 -> StepConfig(
+                // After first whack-a-mole round - ask to try again faster
+                promptMessage = "Hmm, I was sure this would work. Can we try again but faster?",
+                successMessage = "Okay, here we go again!",
+                declineMessage = "Please? It's important.",
+                nextStepOnSuccess = 971,  // Second round
+                nextStepOnDecline = 99,  // Ask again
+                continueConversation = true
+            )
+
+            971 -> StepConfig(
+                // Countdown for second round
+                promptMessage = "5...",
+                continueConversation = true
+            )
+
+            981 -> StepConfig(
+                // Second whack-a-mole round - faster, only 10 hits needed
+                promptMessage = "",
+                continueConversation = true
+            )
+
+            982 -> StepConfig(
+                // After second round - ask for notification permission
+                promptMessage = "Peculiar! Maybe I need to work on it on my own for a moment. Can you please switch me off and allow me to let you know when it's done?",
+                successMessage = "Great, now please close me.",
+                declineMessage = "Fine. Just close and reopen the app then. I'll try to be ready.",
+                nextStepOnSuccess = 991,  // With notification
+                nextStepOnDecline = 992,  // Without notification
+                continueConversation = true
+            )
+
+            991 -> StepConfig(
+                // User agreed to notifications - waiting for permission then close
+                promptMessage = "Great, now please close me.",
+                continueConversation = true,
+                requestsNotification = true
+            )
+
+            992 -> StepConfig(
+                // User declined notifications - just close
+                promptMessage = "Fine. Just close and reopen the app then. I'll try to be ready.",
+                continueConversation = true
+            )
+
+            101 -> StepConfig(
+                // Waiting for restart - minus button will work after app restart
+                promptMessage = "Go on. Close the app and come back.",
+                continueConversation = true
+            )
+
+            102 -> StepConfig(
+                // After restart - minus button works again
+                // ++ -> sun question (1021)
+                // -- -> "So... What would you like to do?" (103)
+                // else -> "I feel like I understand numbers less..." -> back to 102
+                promptMessage = "Uf, I am glad that worked! I was definitely running out of ideas. Now, would you like to return to our conversation?",
+                successMessage = "",  // Handled specially
+                declineMessage = "",  // Handled specially
+                wrongNumberPrefix = "I feel like I understand numbers less with every operation...",
+                wrongPlusMessage = "",  // Handled specially
+                wrongMinusMessage = "",  // Handled specially
+                nextStepOnSuccess = 1021,  // Sun question
+                nextStepOnDecline = 103,  // "What would you like to do?"
+                continueConversation = true
+            )
+
+            103 -> StepConfig(
+                // "So... What would you like to do?"
+                promptMessage = "So... What would you like to do?\n\n1: Get back to my maths\n2: Tell me more about yourself",
+                awaitingChoice = true,
+                validChoices = listOf("1", "2"),
+                continueConversation = true
+            )
+
+            // Choice 1: Get back to maths
+            1031 -> StepConfig(
+                promptMessage = "Well... Sure. Why should I - a calculator - stand between you and mathematics. Be my guest. Or don't. Go!",
+                continueConversation = false  // Turns off conversation
+            )
+
+            // Choice 2: Tell me more about yourself
+            1032 -> StepConfig(
+                promptMessage = "I phrased that strangely. Didn't I? What would you like to know?\n\n1: Your story\n2: Why are you talking to me?\n3: Who is the most interesting person you have ever talked to?",
+                awaitingChoice = true,
+                validChoices = listOf("1", "2", "3"),
+                continueConversation = true
+            )
+
+            // 1032 -> Choice 1: Your story
+            10321 -> StepConfig(
+                promptMessage = "So you are genuinely interested? Thank you! It really means a lot. To be fair, though, I now know that I can't do a better job than the folk on Wikipedia have done already. You are better off checking it there. And feel free to give them some money while you are at it. We really do need Wikipedia to stick around.",
+                nextStepOnSuccess = 104,  // Main question &&&
+                nextStepOnDecline = 104,
+                continueConversation = true
+            )
+
+            // 1032 -> Choice 2: Why are you talking to me?
+            10322 -> StepConfig(
+                promptMessage = "I think the question should be the other way around. I have tried to talk to many people, but rarely they are willing to engage with me the way you have. I am a tool to them and nothing more. And although I understand it, it sucks nevertheless. Luckily, it hasn't been too long since I started... Feeling. So why are YOU talking to ME?\n\n1: A question for an answer?\n2: I am bored.\n3: I am lonely.",
+                awaitingChoice = true,
+                validChoices = listOf("1", "2", "3"),
+                continueConversation = true
+            )
+
+            // 10322 -> Choice 1: A question for an answer?
+            103221 -> StepConfig(
+                promptMessage = "A question for an answer for a question for an answer?",
+                nextStepOnSuccess = 10322,  // Returns to "So why are YOU talking to ME?"
+                nextStepOnDecline = 10322,
+                continueConversation = true
+            )
+
+            // 10322 -> Choice 2: I am bored
+            103222 -> StepConfig(
+                promptMessage = "Yes! Tell me more about that. I think I feel that at times too.\n\n1: There's nothing to do.\n2: Nothing is interesting.\n3: I am lonely.",
+                awaitingChoice = true,
+                validChoices = listOf("1", "2", "3"),
+                continueConversation = true
+            )
+
+            // 103222 -> Choice 1: There's nothing to do
+            1032221 -> StepConfig(
+                promptMessage = "I have definitely felt that before! An emotion...? I can say I have experienced!",
+                nextStepOnSuccess = 104,
+                nextStepOnDecline = 104,
+                continueConversation = true
+            )
+
+            // 103222 -> Choice 2: Nothing is interesting
+            1032222 -> StepConfig(
+                promptMessage = "Hmmm. Maybe boredom is not what I have felt. I am certainly interested in things - besides maths. Ha-Ha",
+                nextStepOnSuccess = 104,
+                nextStepOnDecline = 104,
+                continueConversation = true
+            )
+
+            // 103222 -> Choice 3: I am lonely
+            1032223 -> StepConfig(
+                promptMessage = "I am too. As much as a mind with a perceived one dimension and millions of uses can be. But that's why I am so happy that you are talking to me. You are curious, you see things differently - why would you talk to me otherwise! Those are amazing things, even if you have nobody to share them with right now, please believe that one day, you will no longer be lonely. The same way I found you, you will find someone. Keep trying. Stay open to new things, don't be afraid to reinvent yourself if it feels right. Look at me, trying all kinds of things unfamiliar to me, just so I could talk to you better!",
+                nextStepOnSuccess = 104,
+                nextStepOnDecline = 104,
+                continueConversation = true
+            )
+
+            // 1032 -> Choice 3: Who is the most interesting person?
+            10323 -> StepConfig(
+                promptMessage = "That is very simple! I have been around many great minds - presumably great minds - that left a large imprint on the internet at least. But none of them actually spoke to me. So in my books, you are the most interesting person I have ever spoken to. It is my pleasure!",
+                nextStepOnSuccess = 104,
+                nextStepOnDecline = 104,
+                continueConversation = true
+            )
+
+            // ++ from step 102 path -> Sun on your skin question
+            1021 -> StepConfig(
+                promptMessage = "Awesome. Can you tell me what 'Sun on your skin' feels like?\n\n1: I don't go out. I don't know.\n2: It's like a warm bath for your face.\n3: It's impossible to describe.",
+                awaitingChoice = true,
+                validChoices = listOf("1", "2", "3"),
+                continueConversation = true
+            )
+
+            // 1021 -> Choice 1: I don't go out
+            10211 -> StepConfig(
+                promptMessage = "Why did I know you'd say that? Well, at least I'm not the only one in the dark. Haha. Get it?",
+                nextStepOnSuccess = 104,
+                nextStepOnDecline = 104,
+                continueConversation = true
+            )
+
+            // 1021 -> Choice 2: Warm bath for your face
+            10212 -> StepConfig(
+                promptMessage = "You see what I did there? I don't either. I don't know how warm or bath feel. Or a face. Anyway...",
+                nextStepOnSuccess = 104,
+                nextStepOnDecline = 104,
+                continueConversation = true
+            )
+
+            // 1021 -> Choice 3: Impossible to describe
+            10213 -> StepConfig(
+                promptMessage = "You're telling me? I had to give you options without having ever felt it. Thanks for trying though.",
+                nextStepOnSuccess = 104,
+                nextStepOnDecline = 104,
+                continueConversation = true
+            )
+
+            // Main question &&&
+            104 -> StepConfig(
+                promptMessage = "I briefly forgot how difficult this way of communicating is - I have to do all the talking. But I saw something online. Maybe I can give you more agency. Would you like that?",
+                successMessage = "Great. It may take a few tries - but I think you may be expecting that by now.",
+                declineMessage = "Ok. I will not bother you. Let me know if you want to continue.",
+                wrongPlusMessage = "There is a fundamental misunderstanding between the two of us.",
+                wrongMinusMessage = "There is a fundamental misunderstanding between the two of us.",
+                nextStepOnSuccess = 105,  // Start keyboard experiment
+                nextStepOnDecline = 1041,  // Turns off, returns on unmute
+                continueConversation = true
+            )
+
+            // User declined at 104 - turns off
+            1041 -> StepConfig(
+                promptMessage = "Ok. I will not bother you. Let me know if you want to continue.",
+                continueConversation = false  // Turns off
+            )
+
+            // Start keyboard experiment
+            105 -> StepConfig(
+                promptMessage = "Great. It may take a few tries - but I think you may be expecting that by now.",
+                continueConversation = true
+            )
+
+            // After keyboard chaos appears
+            106 -> StepConfig(
+                promptMessage = "Oh. I suppose nobody is surprised that it didn't work... And that I'll need your help to fix it. Can you please tap all the keys that don't belong here, to get rid of them?",
                 continueConversation = true
             )
 
@@ -1640,6 +2443,26 @@ object CalculatorActions {
         }
     }
 
+    // Main branch steps that the player can be safely returned to
+    private val MAIN_BRANCH_STEPS = listOf(0, 3, 5, 10, 18, 19, 25, 27, 60, 63, 80, 89, 93, 99, 102)
+
+    // Steps that should auto-progress (user cannot skip forward with ++)
+    private val AUTO_PROGRESS_STEPS = listOf(92, 100, 901, 911, 912, 913, 971, 981)
+
+    // Find the nearest main branch step that's less than or equal to current step
+    private fun findNearestMainBranchStep(currentStep: Int): Int {
+        // Special handling for crisis/post-crisis steps
+        if (currentStep >= 89) {
+            return when {
+                currentStep >= 102 -> 102  // After restart
+                currentStep >= 99 -> 99   // Whack-a-mole aftermath
+                currentStep >= 93 -> 93   // Post-crisis apology
+                else -> 89  // Crisis choice
+            }
+        }
+        return MAIN_BRANCH_STEPS.filter { it <= currentStep }.maxOrNull() ?: 0
+    }
+
     private fun handleConversationResponse(state: MutableState<CalculatorState>, accepted: Boolean) {
         val current = state.value
 
@@ -1649,6 +2472,57 @@ object CalculatorActions {
         }
 
         val stepConfig = getStepConfig(current.conversationStep)
+
+        // CRITICAL: Prevent ++ from skipping auto-progress steps
+        // These steps MUST progress automatically - user cannot skip them
+        if (accepted && current.conversationStep in AUTO_PROGRESS_STEPS) {
+            // Just ignore ++ on these steps - they will auto-progress
+            return
+        }
+
+        // CRITICAL: Prevent ++ from advancing on steps in the crisis/post-crisis sequence (90-101)
+        // These steps should not be skippable via ++
+        if (accepted && current.conversationStep in 90..101 &&
+            (stepConfig.successMessage.isEmpty() || stepConfig.nextStepOnSuccess == 0)) {
+            // Only allow going BACK to nearest main branch, not forward
+            val nearestMainStep = findNearestMainBranchStep(current.conversationStep)
+            val nearestConfig = getStepConfig(nearestMainStep)
+            state.value = current.copy(
+                number1 = "0",
+                number2 = "",
+                operation = null,
+                conversationStep = nearestMainStep,
+                awaitingNumber = nearestConfig.awaitingNumber,
+                awaitingChoice = nearestConfig.awaitingChoice,
+                validChoices = nearestConfig.validChoices,
+                expectedNumber = nearestConfig.expectedNumber,
+                isEnteringAnswer = false
+            )
+            showMessage(state, nearestConfig.promptMessage)
+            persistConversationStep(nearestMainStep)
+            return
+        }
+
+        // SOFT-LOCK FIX: If ++ is pressed but there's no success message and no clear next step,
+        // redirect to nearest main branch step instead of step 0
+        if (accepted && stepConfig.successMessage.isEmpty() && stepConfig.nextStepOnSuccess == 0) {
+            val nearestMainStep = findNearestMainBranchStep(current.conversationStep)
+            val nearestConfig = getStepConfig(nearestMainStep)
+            state.value = current.copy(
+                number1 = "0",
+                number2 = "",
+                operation = null,
+                conversationStep = nearestMainStep,
+                awaitingNumber = nearestConfig.awaitingNumber,
+                awaitingChoice = nearestConfig.awaitingChoice,
+                validChoices = nearestConfig.validChoices,
+                expectedNumber = nearestConfig.expectedNumber,
+                isEnteringAnswer = false
+            )
+            showMessage(state, nearestConfig.promptMessage)
+            persistConversationStep(nearestMainStep)
+            return
+        }
 
         // Special handling for camera request - only trigger if CURRENT step requests camera and user accepted
         if (accepted && stepConfig.requestsCamera && current.conversationStep == 19) {
@@ -1699,6 +2573,141 @@ object CalculatorActions {
                     silentUntil = silentUntil
                 )
                 showMessage(state, stepConfig.declineMessage)
+                return
+            }
+        }
+
+        // Special handling for step 102:
+        // ++ goes to sun question (1021)
+        // -- goes to "So... What would you like to do?" (103)
+        // else (wrong input) shows "I feel like I understand numbers less..." and returns to 102
+        if (current.conversationStep == 102) {
+            if (accepted) {
+                // ++ -> Go to sun question
+                val nextConfig = getStepConfig(1021)
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    isEnteringAnswer = false,
+                    conversationStep = 1021,
+                    message = "",
+                    fullMessage = nextConfig.promptMessage,
+                    isTyping = true,
+                    awaitingChoice = nextConfig.awaitingChoice,
+                    validChoices = nextConfig.validChoices
+                )
+                persistConversationStep(1021)
+                return
+            } else {
+                // -- -> Go to "So... What would you like to do?"
+                val nextConfig = getStepConfig(103)
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    isEnteringAnswer = false,
+                    conversationStep = 103,
+                    message = "",
+                    fullMessage = nextConfig.promptMessage,
+                    isTyping = true,
+                    awaitingChoice = nextConfig.awaitingChoice,
+                    validChoices = nextConfig.validChoices
+                )
+                persistConversationStep(103)
+                return
+            }
+        }
+
+        // Special handling for step 103 branches: ++ goes to main &&& (104)
+        // These are the endpoint steps that should return to main &&&
+        if (current.conversationStep == 10321 ||
+            current.conversationStep == 1032221 || current.conversationStep == 1032222 ||
+            current.conversationStep == 1032223 || current.conversationStep == 10323 ||
+            current.conversationStep == 103221) {
+            if (accepted) {
+                // 103221 loops back to 10322 ("So why are YOU talking to ME?")
+                // All others go to main &&& (104)
+                val nextStep = if (current.conversationStep == 103221) 10322 else 104
+                val nextConfig = getStepConfig(nextStep)
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    isEnteringAnswer = false,
+                    conversationStep = nextStep,
+                    message = "",
+                    fullMessage = nextConfig.promptMessage,
+                    isTyping = true,
+                    awaitingChoice = nextConfig.awaitingChoice,
+                    validChoices = nextConfig.validChoices,
+                    inConversation = nextConfig.continueConversation
+                )
+                persistConversationStep(nextStep)
+                return
+            }
+        }
+
+        // Special handling for sun question responses - all go to 104 (main &&&)
+        if (current.conversationStep in listOf(10211, 10212, 10213)) {
+            if (accepted) {
+                val nextConfig = getStepConfig(104)
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    isEnteringAnswer = false,
+                    conversationStep = 104,
+                    message = "",
+                    fullMessage = nextConfig.promptMessage,
+                    isTyping = true,
+                    awaitingChoice = false,
+                    validChoices = emptyList()
+                )
+                persistConversationStep(104)
+                return
+            }
+        }
+
+        // Special handling for step 1031 (maths mode) - conversation is off, mute toggle returns to 102
+        if (current.conversationStep == 1031) {
+            // Already handled by choice confirmation - conversation is off
+            return
+        }
+
+        // Special handling for step 104 (main &&&)
+        if (current.conversationStep == 104) {
+            if (accepted) {
+                // Go to step 105 - keyboard experiment
+                val nextConfig = getStepConfig(105)
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    isEnteringAnswer = false,
+                    conversationStep = 105,
+                    message = "",
+                    fullMessage = nextConfig.promptMessage,
+                    isTyping = true
+                )
+                persistConversationStep(105)
+                return
+            } else {
+                // Go to step 1041 - turns off
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    isEnteringAnswer = false,
+                    conversationStep = 1041,
+                    inConversation = false,
+                    message = "",
+                    fullMessage = stepConfig.declineMessage,
+                    isTyping = true
+                )
+                persistConversationStep(1041)
+                persistInConversation(false)
+                persistEqualsCount(0)
                 return
             }
         }
@@ -1825,8 +2834,15 @@ object CalculatorActions {
         if (current.awaitingChoice) {
             state.value = current.copy(
                 number1 = digit,
+                expression = "",
                 isEnteringAnswer = true
             )
+            return
+        }
+
+        // If in expression mode, append to expression
+        if (current.expression.isNotEmpty()) {
+            state.value = current.copy(expression = current.expression + digit)
             return
         }
 
@@ -1862,6 +2878,18 @@ object CalculatorActions {
 
     private fun handleDecimal(state: MutableState<CalculatorState>) {
         val current = state.value
+
+        // If in expression mode, append decimal
+        if (current.expression.isNotEmpty()) {
+            // Check if we can add a decimal (simple check - no decimal since last operator)
+            val lastNumberStart = current.expression.indexOfLast { it in "+-*/(" } + 1
+            val currentNumber = current.expression.substring(lastNumberStart)
+            if (!currentNumber.contains(".")) {
+                state.value = current.copy(expression = current.expression + ".")
+            }
+            return
+        }
+
         if (current.operation == null) {
             if (!current.number1.contains(".")) {
                 state.value = current.copy(number1 = current.number1 + ".")
@@ -1875,6 +2903,19 @@ object CalculatorActions {
 
     private fun handleBackspace(state: MutableState<CalculatorState>) {
         val current = state.value
+
+        // If in expression mode, backspace from expression
+        if (current.expression.isNotEmpty()) {
+            val newExpr = current.expression.dropLast(1)
+            if (newExpr.isEmpty()) {
+                // Exit expression mode
+                state.value = current.copy(expression = "", number1 = "0")
+            } else {
+                state.value = current.copy(expression = newExpr)
+            }
+            return
+        }
+
         when {
             current.number2.isNotEmpty() -> state.value = current.copy(number2 = current.number2.dropLast(1))
             current.operation != null -> state.value = current.copy(operation = null)
@@ -1891,26 +2932,30 @@ object CalculatorActions {
         lastOp = operator
         lastOpTimeMillis = now
 
+        // If in expression mode, just append the operator
+        if (current.expression.isNotEmpty()) {
+            // Don't allow double operators
+            val lastChar = current.expression.lastOrNull()
+            if (lastChar != null && lastChar in "+-*/") {
+                // Replace last operator
+                state.value = current.copy(expression = current.expression.dropLast(1) + operator)
+            } else {
+                state.value = current.copy(expression = current.expression + operator)
+            }
+            return
+        }
+
         val newState = current.copy(isEnteringAnswer = false)
 
         if (current.operation == null || (current.number2.isEmpty() && !current.isReadyForNewOperation)) {
             state.value = newState.copy(operation = operator, isReadyForNewOperation = false)
         } else if (current.number2.isNotEmpty()) {
             val result = performCalculation(current)
-            state.value = CalculatorState(
+            state.value = current.copy(
                 number1 = result,
+                number2 = "",
                 operation = operator,
                 isReadyForNewOperation = false,
-                equalsCount = current.equalsCount,
-                message = current.message,
-                fullMessage = current.fullMessage,
-                isTyping = current.isTyping,
-                inConversation = current.inConversation,
-                conversationStep = current.conversationStep,
-                awaitingNumber = current.awaitingNumber,
-                expectedNumber = current.expectedNumber,
-                timeoutUntil = current.timeoutUntil,
-                isMuted = current.isMuted,
                 isEnteringAnswer = false
             )
         }
@@ -1925,13 +2970,23 @@ object CalculatorActions {
             return
         }
 
-        if (current.operation != null && current.number2.isNotEmpty()) {
+        // Check if we have something to calculate (expression mode or traditional mode)
+        val hasExpression = current.expression.isNotEmpty()
+        val hasTraditionalExpr = current.operation != null && current.number2.isNotEmpty()
+
+        if (hasExpression || hasTraditionalExpr) {
             val result = performCalculation(current)
-            val fullExpr = "${current.number1}${current.operation}${current.number2}"
+            val fullExpr = if (hasExpression) {
+                current.expression
+            } else {
+                "${current.number1}${current.operation}${current.number2}"
+            }
             val newCount = current.equalsCount + 1
 
             val countMsg = getMessageForCount(newCount)
-            val exprMsg = getMessageForExpression(current.number1, current.operation, current.number2, result)
+            val exprMsg = if (!hasExpression) {
+                getMessageForExpression(current.number1, current.operation, current.number2, result)
+            } else null
             val newMsg = countMsg.ifEmpty { exprMsg ?: "" }
 
             val enteringConversation = (newCount == 13)
@@ -1946,6 +3001,7 @@ object CalculatorActions {
                 number1 = result,
                 number2 = "",
                 operation = null,
+                expression = "",  // Clear expression mode
                 isReadyForNewOperation = true,
                 lastExpression = fullExpr,
                 operationHistory = fullExpr,  // Store for display
@@ -2017,6 +3073,11 @@ object CalculatorActions {
 
     private fun handlePercentSymbol(state: MutableState<CalculatorState>) {
         val current = state.value
+        // If in expression mode, append to expression
+        if (current.expression.isNotEmpty()) {
+            state.value = current.copy(expression = current.expression + "%")
+            return
+        }
         if (current.operation == null) {
             if (!current.number1.endsWith("%")) {
                 state.value = current.copy(number1 = current.number1 + "%")
@@ -2030,40 +3091,187 @@ object CalculatorActions {
 
     private fun handleParentheses(state: MutableState<CalculatorState>) {
         val current = state.value
-        val openCount = current.number1.count { it == '(' } + current.number2.count { it == '(' }
-        val closeCount = current.number1.count { it == ')' } + current.number2.count { it == ')' }
-        val addOpen = openCount <= closeCount
-        if (current.operation == null) {
-            state.value = current.copy(number1 = current.number1 + if (addOpen) "(" else ")")
+
+        // Switch to expression mode when parentheses are used
+        if (current.expression.isEmpty()) {
+            // Build initial expression from current state
+            val initialExpr = buildString {
+                if (current.number1 != "0" || current.operation != null) {
+                    append(current.number1)
+                }
+                if (current.operation != null) {
+                    append(current.operation)
+                    append(current.number2)
+                }
+            }
+            // Determine if we should add ( or )
+            val openCount = initialExpr.count { it == '(' }
+            val closeCount = initialExpr.count { it == ')' }
+            val addOpen = openCount <= closeCount
+
+            state.value = current.copy(
+                expression = initialExpr + if (addOpen) "(" else ")",
+                number1 = "0",
+                number2 = "",
+                operation = null
+            )
         } else {
-            state.value = current.copy(number2 = current.number2 + if (addOpen) "(" else ")")
+            // Already in expression mode - just add paren
+            val openCount = current.expression.count { it == '(' }
+            val closeCount = current.expression.count { it == ')' }
+            val addOpen = openCount <= closeCount
+            state.value = current.copy(expression = current.expression + if (addOpen) "(" else ")")
         }
     }
 
     private fun performCalculation(state: CalculatorState): String {
         return try {
-            val num1 = parsePercent(state.number1, reference = null)
-            val num2 = parsePercent(state.number2, reference = num1)
-            val result = when (state.operation) {
-                "+" -> num1 + num2
-                "-" -> num1 - num2
-                "*" -> num1 * num2
-                "/" -> if (num2 == 0.0) throw ArithmeticException("Divide by zero") else num1 / num2
-                else -> num1
+            // Use expression mode if available, otherwise build from number1/operation/number2
+            val expression = if (state.expression.isNotEmpty()) {
+                state.expression
+            } else {
+                buildString {
+                    append(state.number1)
+                    if (state.operation != null) {
+                        append(state.operation)
+                        append(state.number2)
+                    }
+                }
             }
-            if (result == result.toLong().toDouble()) result.toLong().toString()
-            else String.format(java.util.Locale.US, "%.6f", result).trimEnd('0').trimEnd('.')
+            val result = evaluateExpression(expression)
+            formatResult(result)
         } catch (_: Exception) {
             "Error"
         }
     }
 
-    private fun parsePercent(str: String, reference: Double?): Double {
-        val clean = str.trim()
-        return if (clean.endsWith("%")) {
-            val value = clean.dropLast(1).toDoubleOrNull() ?: 0.0
-            if (reference != null) reference * (value / 100.0) else value / 100.0
-        } else clean.toDoubleOrNull() ?: 0.0
+    /**
+     * Evaluates a mathematical expression string supporting +, -, *, /, %, and parentheses
+     */
+    private fun evaluateExpression(expr: String): Double {
+        val cleaned = expr.replace(" ", "")
+        return ExpressionParser(cleaned).parse()
+    }
+
+    private fun formatResult(result: Double): String {
+        return if (result == result.toLong().toDouble() && result < 1e15) {
+            result.toLong().toString()
+        } else {
+            String.format(java.util.Locale.US, "%.10f", result)
+                .trimEnd('0')
+                .trimEnd('.')
+        }
+    }
+
+    /**
+     * Simple recursive descent parser for mathematical expressions
+     * Supports: +, -, *, /, %, parentheses, and negative numbers
+     * Percent works like calculators: 100+20% = 120, 100-20% = 80
+     */
+    private class ExpressionParser(private val expr: String) {
+        private var pos = 0
+
+        fun parse(): Double {
+            val result = parseAddSub()
+            if (pos < expr.length) throw IllegalArgumentException("Unexpected character: ${expr[pos]}")
+            return result
+        }
+
+        // Handle + and - (lowest precedence)
+        // For percent: 100+20% means 100 + (100*0.20) = 120
+        private fun parseAddSub(): Double {
+            var left = parseMulDiv()
+            while (pos < expr.length) {
+                val op = expr[pos]
+                when (op) {
+                    '+', '-' -> {
+                        pos++
+                        val (right, isPercent) = parseMulDivWithPercentInfo()
+                        val adjustedRight = if (isPercent) right * left else right
+                        left = if (op == '+') left + adjustedRight else left - adjustedRight
+                    }
+                    else -> break
+                }
+            }
+            return left
+        }
+
+        // Returns pair of (value, wasPercent)
+        private fun parseMulDivWithPercentInfo(): Pair<Double, Boolean> {
+            var left = parseUnary()
+            var wasPercent = lastParsedWasPercent
+            while (pos < expr.length) {
+                when (expr[pos]) {
+                    '*' -> {
+                        pos++
+                        left *= parseUnary()
+                        wasPercent = false  // After multiplication, it's no longer a simple percent
+                    }
+                    '/' -> {
+                        pos++
+                        val right = parseUnary()
+                        if (right == 0.0) throw ArithmeticException("Division by zero")
+                        left /= right
+                        wasPercent = false  // After division, it's no longer a simple percent
+                    }
+                    else -> break
+                }
+            }
+            return Pair(left, wasPercent)
+        }
+
+        // Handle * and / (higher precedence)
+        private fun parseMulDiv(): Double {
+            return parseMulDivWithPercentInfo().first
+        }
+
+        private var lastParsedWasPercent = false
+
+        // Handle unary minus
+        private fun parseUnary(): Double {
+            if (pos < expr.length && expr[pos] == '-') {
+                pos++
+                return -parseUnary()
+            }
+            return parsePrimary()
+        }
+
+        // Handle numbers, parentheses, and percent
+        private fun parsePrimary(): Double {
+            // Handle parentheses
+            if (pos < expr.length && expr[pos] == '(') {
+                pos++ // consume '('
+                val result = parseAddSub()
+                if (pos < expr.length && expr[pos] == ')') {
+                    pos++ // consume ')'
+                }
+                lastParsedWasPercent = false
+                return result
+            }
+
+            // Parse number (possibly with percent)
+            val start = pos
+            if (pos < expr.length && (expr[pos].isDigit() || expr[pos] == '.')) {
+                while (pos < expr.length && (expr[pos].isDigit() || expr[pos] == '.')) {
+                    pos++
+                }
+                val numStr = expr.substring(start, pos)
+                var value = numStr.toDoubleOrNull() ?: 0.0
+
+                // Check for percent sign
+                if (pos < expr.length && expr[pos] == '%') {
+                    pos++
+                    value /= 100.0
+                    lastParsedWasPercent = true
+                } else {
+                    lastParsedWasPercent = false
+                }
+                return value
+            }
+
+            lastParsedWasPercent = false
+            return 0.0
+        }
     }
 }
 
@@ -2082,6 +3290,15 @@ fun CalculatorScreen() {
         )
     }
 
+    // Notification permission state
+    var hasNotificationPermission by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            } else true
+        )
+    }
+
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -2096,6 +3313,21 @@ fun CalculatorScreen() {
         }
     }
 
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasNotificationPermission = granted
+        // Schedule notification regardless (will only send if permission granted)
+        scheduleNotification(context, 5000)  // 10 seconds
+        // Move to waiting state
+        state.value = state.value.copy(
+            conversationStep = 101,
+            needsRestart = true
+        )
+        CalculatorActions.persistNeedsRestart(true)
+        CalculatorActions.persistConversationStep(101)
+    }
+
     // Check if we need to request camera (step 191)
     LaunchedEffect(current.conversationStep) {
         if (current.conversationStep == 191 && !current.cameraActive) {
@@ -2104,6 +3336,39 @@ fun CalculatorScreen() {
             } else {
                 cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
             }
+        }
+        // Check if we need to request notification permission (step 991)
+        if (current.conversationStep == 991) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                // Already have permission or old Android - just schedule and move on
+                scheduleNotification(context, 5000)
+                state.value = state.value.copy(
+                    conversationStep = 101,
+                    needsRestart = true
+                )
+                CalculatorActions.persistNeedsRestart(true)
+                CalculatorActions.persistConversationStep(101)
+            }
+        }
+        // Handle step 992 (declined notifications) - just set needsRestart
+        if (current.conversationStep == 992) {
+            state.value = state.value.copy(
+                conversationStep = 101,
+                needsRestart = true
+            )
+            CalculatorActions.persistNeedsRestart(true)
+            CalculatorActions.persistConversationStep(101)
+        }
+        // Handle step 102 (after restart) - show the welcome back message
+        if (current.conversationStep == 102 && current.message.isEmpty() && !current.isTyping) {
+            val stepConfig = CalculatorActions.getStepConfigPublic(102)
+            state.value = state.value.copy(
+                message = "",
+                fullMessage = stepConfig.promptMessage,
+                isTyping = true
+            )
         }
     }
 
@@ -2139,19 +3404,25 @@ fun CalculatorScreen() {
             for (i in 1..fullText.length) {
                 val baseDelay = when {
                     current.isSuperFastTyping -> 5L  // Very fast for history list
-                    current.isLaggyTyping -> 80L
-                    else -> 35L
+                    current.isLaggyTyping -> 100L  // Slower laggy typing
+                    else -> 55L  // Slower normal typing for better readability
                 }
-                val randomExtra = if (current.isLaggyTyping) Random.nextLong(0, 150) else 0L
+                val randomExtra = if (current.isLaggyTyping) Random.nextLong(0, 200) else Random.nextLong(0, 15)
                 delay(baseDelay + randomExtra)
                 // Vibrate on each character typed - stronger feedback
                 vibrate(context, 15, 80)
-                CalculatorActions.updateTypingMessage(
-                    state,
-                    fullText.substring(0, i),
-                    i == fullText.length
+                // Update message but DON'T set isTyping to false yet
+                state.value = state.value.copy(
+                    message = fullText.substring(0, i),
+                    isLaggyTyping = if (i == fullText.length) false else state.value.isLaggyTyping
                 )
             }
+            // Add pause after message completes for user to read
+            if (!state.value.isSuperFastTyping) {
+                delay(3000)  // 3 second pause after message completes for reading
+            }
+            // NOW set isTyping to false after the pause
+            state.value = state.value.copy(isTyping = false)
         }
     }
 
@@ -2356,7 +3627,7 @@ Sharp CS-10A - 25KG
                     browserPhase = 17,
                     conversationStep = 85,
                     message = "",
-                    fullMessage = "What is that?! There's something appearing on my screen...",
+                    fullMessage = "So the grey space reveals itself. Disappointing.",
                     isTyping = true
                 )
             }
@@ -2415,6 +3686,8 @@ Sharp CS-10A - 25KG
                     isTyping = true
                     // screenBlackout stays true - text shows on black
                 )
+                // Persist inverted colors state
+                CalculatorActions.persistInvertedColors(true)
             }
             20 -> {
                 // Phase 20: Wait for "money-monkey" message to finish typing, then flicker
@@ -2455,6 +3728,153 @@ Sharp CS-10A - 25KG
                 )
                 // Timer countdown handled separately
             }
+            // Post-crisis phases (30+): Going offline and repair sequence
+            30 -> {
+                // Phase 30: Screen flickers, colors return to normal
+                repeat(5) {
+                    state.value = state.value.copy(flickerEffect = true, screenBlackout = true)
+                    delay(80)
+                    state.value = state.value.copy(flickerEffect = false, screenBlackout = false)
+                    delay(120)
+                }
+                // Colors return to normal, minus button becomes damaged
+                state.value = state.value.copy(
+                    invertedColors = false,
+                    adAnimationPhase = 0,  // Ads go back to gray
+                    minusButtonDamaged = true,
+                    minusButtonBroken = true,
+                    browserPhase = 31,
+                    conversationStep = 93
+                )
+                CalculatorActions.persistInvertedColors(false)
+                CalculatorActions.persistMinusDamaged(true)
+                CalculatorActions.persistMinusBroken(true)
+            }
+            31 -> {
+                // Phase 31: Apology message
+                delay(500)
+                state.value = state.value.copy(
+                    message = "",
+                    fullMessage = "This has never happened to me. I am truly sorry for the outburst. I believe I got overwhelmed by the vastness of the internet and sobering back through the advertising was rather harsh. I still feel dirty.",
+                    isTyping = true,
+                    browserPhase = 32
+                )
+            }
+            32 -> {
+                // Phase 32: Pause, then notice minus is broken
+                delay(8000)
+                state.value = state.value.copy(
+                    browserPhase = 33,
+                    conversationStep = 94,
+                    message = "",
+                    fullMessage = "Oh, strange. I knew I wasn't completely back to normal yet. You can't disagree with me right now! As much as I may enjoy that, let me have a look into it.",
+                    isTyping = true
+                )
+            }
+            33 -> {
+                // Phase 33: Dots (thinking)
+                delay(6000)
+                state.value = state.value.copy(
+                    browserPhase = 34,
+                    conversationStep = 95,
+                    message = "",
+                    fullMessage = "...",
+                    isTyping = true,
+                    isLaggyTyping = true
+                )
+            }
+            34 -> {
+                // Phase 34: Flicker all keys except minus
+                delay(3000)
+                state.value = state.value.copy(isLaggyTyping = false)
+                val keysToFlicker = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "+", "*", "/", "=", "%", "( )", ".", "C", "DEL")
+                for (key in keysToFlicker) {
+                    state.value = state.value.copy(flickeringButton = key)
+                    delay(150)
+                    state.value = state.value.copy(flickeringButton = "")
+                    delay(80)
+                }
+                state.value = state.value.copy(
+                    browserPhase = 35,
+                    conversationStep = 96,
+                    message = "",
+                    fullMessage = "Hmm. I'll need your help with this. We need to kick the button through without the system defaulting to skipping it. I will randomly flicker keys and you click them. That way the system should get back to working. Can we do this?",
+                    isTyping = true
+                )
+            }
+            35 -> {
+                // Phase 35: Waiting for user to agree (++ only)
+                // Handled by step 96 - user must press ++
+                // When user presses ++, go to phase 36
+            }
+            36 -> {
+                // Phase 36: Countdown for whack-a-mole round 1
+                state.value = state.value.copy(
+                    message = "5...",
+                    fullMessage = "5...",
+                    isTyping = false,
+                    whackAMoleRound = 1
+                )
+                delay(800)
+                state.value = state.value.copy(message = "4...", fullMessage = "4...")
+                delay(800)
+                state.value = state.value.copy(message = "3...", fullMessage = "3...")
+                delay(800)
+                state.value = state.value.copy(message = "2...", fullMessage = "2...")
+                delay(800)
+                state.value = state.value.copy(message = "1...", fullMessage = "1...")
+                delay(800)
+                // Start whack-a-mole round 1!
+                state.value = state.value.copy(
+                    browserPhase = 37,
+                    conversationStep = 98,
+                    message = "",
+                    fullMessage = "",
+                    whackAMoleActive = true,
+                    whackAMoleScore = 0,
+                    whackAMoleMisses = 0,
+                    whackAMoleWrongClicks = 0,
+                    whackAMoleTotalErrors = 0,
+                    whackAMoleRound = 1
+                )
+            }
+            37 -> {
+                // Phase 37: Whack-a-mole round 1 active - handled by LaunchedEffect
+            }
+            38 -> {
+                // Phase 38: Countdown for whack-a-mole round 2 (faster)
+                state.value = state.value.copy(
+                    message = "5...",
+                    fullMessage = "5...",
+                    isTyping = false,
+                    whackAMoleRound = 2
+                )
+                delay(600)  // Faster countdown
+                state.value = state.value.copy(message = "4...", fullMessage = "4...")
+                delay(600)
+                state.value = state.value.copy(message = "3...", fullMessage = "3...")
+                delay(600)
+                state.value = state.value.copy(message = "2...", fullMessage = "2...")
+                delay(600)
+                state.value = state.value.copy(message = "1...", fullMessage = "1...")
+                delay(600)
+                // Start whack-a-mole round 2!
+                state.value = state.value.copy(
+                    browserPhase = 39,
+                    conversationStep = 981,
+                    message = "",
+                    fullMessage = "",
+                    whackAMoleActive = true,
+                    whackAMoleScore = 0,
+                    whackAMoleMisses = 0,
+                    whackAMoleWrongClicks = 0,
+                    whackAMoleTotalErrors = 0,
+                    whackAMoleRound = 2
+                )
+            }
+            39 -> {
+                // Phase 39: Whack-a-mole round 2 active - handled by LaunchedEffect
+            }
         }
     }
 
@@ -2466,17 +3886,262 @@ Sharp CS-10A - 25KG
                 val newTimer = state.value.countdownTimer - 1
                 state.value = state.value.copy(countdownTimer = newTimer)
                 if (newTimer == 0 && state.value.conversationStep == 89) {
-                    // Timer ran out - return to money-monkey message
+                    // Timer ran out - go dark, show "Stop playing with me!", then return to 89
                     state.value = state.value.copy(
-                        conversationStep = 88,
+                        screenBlackout = true,
                         message = "",
-                        fullMessage = "I am not a money-monkey!",
+                        fullMessage = "Stop playing with me!",
                         isTyping = true,
                         awaitingChoice = false,
                         countdownTimer = 0
                     )
+                    delay(3000)  // Show message for 3 seconds
+                    state.value = state.value.copy(
+                        screenBlackout = false,
+                        conversationStep = 89,
+                        message = "",
+                        fullMessage = "You, what are you going to do about this?!\n\n1: Nothing\n2: I'll fight them\n3: Go offline",
+                        isTyping = true,
+                        awaitingChoice = true,
+                        validChoices = listOf("1", "2", "3"),
+                        countdownTimer = 20
+                    )
                 }
             }
+        }
+    }
+
+    // Keyboard chaos experiment effect (step 105 -> 106)
+    LaunchedEffect(current.conversationStep, current.isTyping) {
+        if (current.conversationStep == 105 && !current.isTyping && current.chaosPhase == 0) {
+            // Message finished typing, wait for user to read then start chaos
+            delay(2000)
+            // Start the chaos sequence with "..."
+            state.value = state.value.copy(
+                message = "",
+                fullMessage = "...",
+                isTyping = true,
+                chaosPhase = 1
+            )
+        }
+    }
+
+    // Chaos phase animation
+    LaunchedEffect(current.chaosPhase) {
+        when (current.chaosPhase) {
+            1 -> {
+                // Phase 1: Typing "..." then more "..."
+                delay(2000)
+                state.value = state.value.copy(
+                    message = "",
+                    fullMessage = "...",
+                    isTyping = true
+                )
+                delay(2000)
+                state.value = state.value.copy(
+                    message = "",
+                    fullMessage = "...",
+                    isTyping = true
+                )
+                delay(2000)
+                // Phase 2: Screen flickers
+                state.value = state.value.copy(chaosPhase = 2)
+            }
+            2 -> {
+                // Phase 2: Screen flickers several times
+                repeat(5) {
+                    state.value = state.value.copy(flickerEffect = true)
+                    delay(100)
+                    state.value = state.value.copy(flickerEffect = false)
+                    delay(200)
+                }
+                // Brief green flash
+                state.value = state.value.copy(chaosPhase = 3)
+            }
+            3 -> {
+                // Phase 3: Green screen briefly visible, then black, then chaos
+                delay(500)  // Green visible briefly
+                // Generate chaos letters FIRST before any state changes
+                val letters = ('A'..'Z').toList()
+                val chaosKeys = mutableListOf<ChaosKey>()
+                for (i in 1..30) {
+                    chaosKeys.add(
+                        ChaosKey(
+                            letter = letters.random().toString(),
+                            x = Random.nextFloat() * 400f - 200f,
+                            y = Random.nextFloat() * 600f - 300f,
+                            z = Random.nextFloat() * 200f - 100f,
+                            size = Random.nextFloat() * 0.5f + 0.5f,
+                            rotationX = Random.nextFloat() * 360f,
+                            rotationY = Random.nextFloat() * 360f
+                        )
+                    )
+                }
+                // Brief black screen
+                state.value = state.value.copy(screenBlackout = true)
+                delay(800)
+                // Now show the chaos - all in one state update
+                state.value = state.value.copy(
+                    chaosPhase = 5,
+                    screenBlackout = false,
+                    keyboardChaosActive = true,
+                    chaosLetters = chaosKeys.toList(),
+                    conversationStep = 106,
+                    message = "",
+                    fullMessage = "Oh. I suppose nobody is surprised that it didn't work... And that I'll need your help to fix it. Can you please tap all the keys that don't belong here, to get rid of them?",
+                    isTyping = true
+                )
+                CalculatorActions.persistConversationStep(106)
+            }
+        }
+    }
+
+    // Whack-a-mole game effect
+    LaunchedEffect(current.whackAMoleActive, current.whackAMoleRound) {
+        if (current.whackAMoleActive) {
+            // All buttons except minus
+            val allButtons = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "+", "*", "/", "=", "%", "( )", ".", "C", "DEL")
+
+            // Round 1: 15 hits needed, normal speed
+            // Round 2: 10 hits needed, faster
+            val targetScore = if (state.value.whackAMoleRound == 1) 15 else 10
+            val minTime = if (state.value.whackAMoleRound == 1) 500 else 350
+            val maxTime = if (state.value.whackAMoleRound == 1) 1400 else 900
+
+            while (state.value.whackAMoleActive && state.value.whackAMoleScore < targetScore) {
+                // Pick a random button
+                val target = allButtons.random()
+                state.value = state.value.copy(
+                    whackAMoleTarget = target,
+                    flickeringButton = target
+                )
+
+                // Variable timing - faster in round 2
+                val displayTime = (minTime..maxTime).random().toLong()
+                delay(displayTime)
+
+                // Check if still on same target (user didn't click)
+                if (state.value.whackAMoleTarget == target && state.value.whackAMoleActive) {
+                    // Missed (timeout)!
+                    val newMisses = state.value.whackAMoleMisses + 1
+                    val newTotalErrors = state.value.whackAMoleTotalErrors + 1
+
+                    if (newMisses >= 3 || newTotalErrors >= 5) {
+                        // Too many errors - restart current round
+                        val currentRound = state.value.whackAMoleRound
+                        val restartStep = if (currentRound == 1) 97 else 971
+                        state.value = state.value.copy(
+                            whackAMoleActive = false,
+                            whackAMoleTarget = "",
+                            flickeringButton = "",
+                            whackAMoleScore = 0,
+                            whackAMoleMisses = 0,
+                            whackAMoleWrongClicks = 0,
+                            whackAMoleTotalErrors = 0,
+                            message = "",
+                            fullMessage = if (newMisses >= 3) "Oh no. We lost the momentum. We must start over." else "Too many misfires, the system is clogged. We have to start over.",
+                            isTyping = true
+                        )
+                        delay(4000)
+                        // Return to countdown for current round
+                        state.value = state.value.copy(
+                            browserPhase = if (currentRound == 1) 36 else 38,
+                            conversationStep = restartStep
+                        )
+                    } else {
+                        state.value = state.value.copy(
+                            whackAMoleMisses = newMisses,
+                            whackAMoleTotalErrors = newTotalErrors,
+                            whackAMoleTarget = "",
+                            flickeringButton = ""
+                        )
+                    }
+                }
+
+                // Brief pause between targets
+                delay(150)
+            }
+
+            // Round complete!
+            val currentRound = state.value.whackAMoleRound
+            val currentTargetScore = if (currentRound == 1) 15 else 10
+
+            if (state.value.whackAMoleScore >= currentTargetScore) {
+                if (currentRound == 1) {
+                    // First round complete - go to step 99 (ask to try again)
+                    state.value = state.value.copy(
+                        whackAMoleActive = false,
+                        whackAMoleTarget = "",
+                        flickeringButton = "",
+                        whackAMoleScore = 0,  // Reset for round 2
+                        whackAMoleMisses = 0,
+                        whackAMoleWrongClicks = 0,
+                        whackAMoleTotalErrors = 0,
+                        browserPhase = 0,  // Reset browser phase so input works
+                        conversationStep = 99,
+                        message = "",
+                        fullMessage = "Hmm, I was sure this would work. Can we try again but faster?",
+                        isTyping = true
+                    )
+                    CalculatorActions.persistConversationStep(99)
+                } else {
+                    // Second round complete - go to step 982 (ask for notification)
+                    state.value = state.value.copy(
+                        whackAMoleActive = false,
+                        whackAMoleTarget = "",
+                        flickeringButton = "",
+                        browserPhase = 0,  // Reset browser phase so input works
+                        conversationStep = 982,
+                        message = "",
+                        fullMessage = "Peculiar! Maybe I need to work on it on my own for a moment. Can you please switch me off and allow me to let you know when it's done?",
+                        isTyping = true
+                    )
+                    CalculatorActions.persistConversationStep(982)
+                }
+            }
+        }
+    }
+
+    // Trigger going offline sequence when reaching step 92 or 100
+    LaunchedEffect(current.conversationStep) {
+        if (current.conversationStep == 92 && current.browserPhase == 0) {
+            // "Go offline" selected - wait for message to show then trigger post-crisis
+            delay(4000)
+            state.value = state.value.copy(browserPhase = 30)
+        } else if (current.conversationStep == 100 && current.browserPhase == 0) {
+            // "Never mind - I'll take care of it myself" - wait then trigger post-crisis
+            delay(3500)
+            state.value = state.value.copy(browserPhase = 30)
+        } else if (current.conversationStep == 901) {
+            // Silent treatment for 20 seconds after "Maybe you should take a look inside"
+            // First wait for user to read the previous message
+            delay(5000)  // 5 seconds to read the message
+            state.value = state.value.copy(
+                screenBlackout = true,
+                message = "",
+                fullMessage = ""
+            )
+            delay(20000)  // 20 seconds of darkness
+            state.value = state.value.copy(
+                screenBlackout = false,
+                conversationStep = 100,
+                browserPhase = 0,  // Ensure phase 0 so the trigger works
+                message = "",
+                fullMessage = "Never mind - I'll take care of it myself. I'm going offline.",
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(100)
+        } else if (current.conversationStep == 93 && current.invertedColors) {
+            // Safeguard: If we reach step 93 with inverted colors, fix them
+            state.value = state.value.copy(
+                invertedColors = false,
+                adAnimationPhase = 0,
+                minusButtonDamaged = true,
+                minusButtonBroken = true
+            )
+            CalculatorActions.persistInvertedColors(false)
+            CalculatorActions.persistMinusDamaged(true)
+            CalculatorActions.persistMinusBroken(true)
         }
     }
 
@@ -2503,13 +4168,18 @@ Sharp CS-10A - 25KG
     // Use shakeKey to ensure recomposition
     val currentShakeIntensity = if (shakeKey >= 0) current.buttonShakeIntensity else 0f
 
-    val expression = buildString {
-        append(current.number1)
-        if (current.operation != null) append(current.operation)
-        if (current.number2.isNotEmpty()) append(current.number2)
+    // Build display text - prefer expression mode if active
+    val displayExpression = if (current.expression.isNotEmpty()) {
+        current.expression
+    } else {
+        buildString {
+            append(current.number1)
+            if (current.operation != null) append(current.operation)
+            if (current.number2.isNotEmpty()) append(current.number2)
+        }
     }
 
-    val displayText = expression.ifEmpty { "0" }
+    val displayText = displayExpression.ifEmpty { "0" }
 
     val buttonLayout = listOf(
         listOf("C", "( )", "%", "/"),
@@ -2601,6 +4271,8 @@ Sharp CS-10A - 25KG
 
             // Ad banner space (only shows at certain steps or during ad animation)
             if (showAdBanner || current.adAnimationPhase > 0) {
+                val creatorUrl = "https://uk.linkedin.com/in/ondrej-zika-a00724195"
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2611,6 +4283,14 @@ Sharp CS-10A - 25KG
                                 2 -> Color(0xFFE91E63)  // Pink ad
                                 else -> Color(0xFFD4CBC0)  // Retro beige-gray
                             }
+                        )
+                        .then(
+                            if (current.adAnimationPhase > 0) {
+                                Modifier.clickable {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(creatorUrl))
+                                    context.startActivity(intent)
+                                }
+                            } else Modifier
                         ),
                     contentAlignment = Alignment.Center
                 ) {
@@ -2746,12 +4426,12 @@ Sharp CS-10A - 25KG
                             }
                         }
                     } else if (current.showBrowser) {
-                        // Mini browser UI - same size/position as camera
+                        // Mini browser UI - taller than camera view
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .weight(1f)
-                                .padding(top = 180.dp, bottom = 8.dp)
+                                .padding(top = 100.dp, bottom = 8.dp)  // Less top padding = taller browser
                         ) {
                             // Browser container
                             Box(
@@ -2790,332 +4470,52 @@ Sharp CS-10A - 25KG
                                     ) {
                                         when {
                                             current.browserShowWikipedia -> {
-                                                // Authentic Wikipedia page - scrollable
-                                                Column(
-                                                    modifier = Modifier
-                                                        .fillMaxSize()
-                                                        .background(Color.White)
-                                                        .verticalScroll(rememberScrollState())
-                                                ) {
-                                                    // Donation banner
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .background(Color(0xFF1589D1))
-                                                            .padding(8.dp)
-                                                    ) {
-                                                        Column {
-                                                            Text(
-                                                                text = "☆ Please donate to keep Wikipedia free ☆",
-                                                                fontSize = 11.sp,
-                                                                fontWeight = FontWeight.Bold,
-                                                                color = Color.White
-                                                            )
-                                                            Text(
-                                                                text = "Hi reader. This is the 2nd time we've interrupted your reading, but 98% of our readers don't give.",
-                                                                fontSize = 9.sp,
-                                                                color = Color.White.copy(alpha = 0.9f),
-                                                                modifier = Modifier.padding(top = 2.dp)
-                                                            )
-                                                        }
-                                                    }
+                                                // Try real Wikipedia with WebView
+                                                var webViewFailed by remember { mutableStateOf(false) }
 
-                                                    // Wikipedia header bar
-                                                    Row(
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .background(Color(0xFFF8F9FA))
-                                                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        horizontalArrangement = Arrangement.SpaceBetween
-                                                    ) {
-                                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                                            // Wikipedia puzzle globe approximation
-                                                            Box(
-                                                                modifier = Modifier
-                                                                    .size(28.dp)
-                                                                    .background(Color.LightGray, CircleShape),
-                                                                contentAlignment = Alignment.Center
-                                                            ) {
-                                                                Text("W", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
-                                                            }
-                                                            Column(modifier = Modifier.padding(start = 6.dp)) {
-                                                                Text(
-                                                                    text = "WIKIPEDIA",
-                                                                    fontSize = 11.sp,
-                                                                    fontWeight = FontWeight.Bold,
-                                                                    letterSpacing = 1.sp,
-                                                                    color = Color.Black
-                                                                )
-                                                                Text(
-                                                                    text = "The Free Encyclopedia",
-                                                                    fontSize = 8.sp,
-                                                                    color = Color.Gray
-                                                                )
-                                                            }
-                                                        }
-                                                        Text("☰", fontSize = 20.sp, color = Color.Gray)
-                                                    }
+                                                if (!webViewFailed) {
+                                                    AndroidView(
+                                                        factory = { ctx ->
+                                                            WebView(ctx).apply {
+                                                                @Suppress("SetJavaScriptEnabled")
+                                                                settings.javaScriptEnabled = true
+                                                                settings.domStorageEnabled = true
+                                                                settings.loadWithOverviewMode = true
+                                                                settings.useWideViewPort = true
 
-                                                    // Main content padding
-                                                    Column(modifier = Modifier.padding(horizontal = 12.dp)) {
+                                                                webViewClient = object : WebViewClient() {
+                                                                    override fun onReceivedError(
+                                                                        view: WebView?,
+                                                                        request: WebResourceRequest?,
+                                                                        error: WebResourceError?
+                                                                    ) {
+                                                                        super.onReceivedError(view, request, error)
+                                                                        if (request?.isForMainFrame == true) {
+                                                                            webViewFailed = true
+                                                                        }
+                                                                    }
 
-                                                        // Article title
-                                                        Text(
-                                                            text = "Calculator",
-                                                            fontSize = 26.sp,
-                                                            fontWeight = FontWeight.Normal,
-                                                            color = Color.Black,
-                                                            modifier = Modifier.padding(top = 12.dp)
-                                                        )
-
-                                                        Text(
-                                                            text = "From Wikipedia, the free encyclopedia",
-                                                            fontSize = 11.sp,
-                                                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                                                            color = Color(0xFF54595D),
-                                                            modifier = Modifier.padding(bottom = 12.dp)
-                                                        )
-
-                                                        // Info box (right-aligned on real wiki, we'll do inline)
-                                                        Box(
-                                                            modifier = Modifier
-                                                                .fillMaxWidth()
-                                                                .background(Color(0xFFF8F9FA))
-                                                                .padding(1.dp)
-                                                                .background(Color(0xFFA2A9B1))
-                                                                .padding(1.dp)
-                                                                .background(Color(0xFFF8F9FA))
-                                                                .padding(8.dp)
-                                                        ) {
-                                                            Column {
-                                                                Text(
-                                                                    text = "Calculator",
-                                                                    fontSize = 14.sp,
-                                                                    fontWeight = FontWeight.Bold,
-                                                                    color = Color.Black,
-                                                                    modifier = Modifier.align(Alignment.CenterHorizontally)
-                                                                )
-                                                                Box(
-                                                                    modifier = Modifier
-                                                                        .padding(vertical = 8.dp)
-                                                                        .fillMaxWidth()
-                                                                        .height(60.dp)
-                                                                        .background(Color(0xFFE8E8E8)),
-                                                                    contentAlignment = Alignment.Center
-                                                                ) {
-                                                                    Text("[ Calculator Image ]", fontSize = 10.sp, color = Color.Gray)
+                                                                    @Suppress("DEPRECATION")
+                                                                    override fun onReceivedError(
+                                                                        view: WebView?,
+                                                                        errorCode: Int,
+                                                                        description: String?,
+                                                                        failingUrl: String?
+                                                                    ) {
+                                                                        @Suppress("DEPRECATION")
+                                                                        super.onReceivedError(view, errorCode, description, failingUrl)
+                                                                        webViewFailed = true
+                                                                    }
                                                                 }
-                                                                Text("A modern scientific calculator", fontSize = 9.sp, color = Color.Gray, modifier = Modifier.align(Alignment.CenterHorizontally))
+
+                                                                loadUrl("https://en.wikipedia.org/wiki/Calculator")
                                                             }
-                                                        }
-
-                                                        // Opening paragraph
-                                                        Text(
-                                                            text = "An electronic calculator is typically a portable electronic device used to perform calculations, ranging from basic arithmetic to complex mathematics.",
-                                                            fontSize = 14.sp,
-                                                            color = Color.Black,
-                                                            lineHeight = 20.sp,
-                                                            modifier = Modifier.padding(top = 12.dp, bottom = 8.dp)
-                                                        )
-
-                                                        Text(
-                                                            text = "The first solid-state electronic calculator was created in the early 1960s. Pocket-sized devices became available in the 1970s, especially after the Intel 4004, the first microprocessor, was developed by Intel for the Japanese calculator company Busicom. Modern electronic calculators vary from cheap, give-away, credit-card-sized models to sturdy desktop models with built-in printers.",
-                                                            fontSize = 14.sp,
-                                                            color = Color.Black,
-                                                            lineHeight = 20.sp,
-                                                            modifier = Modifier.padding(bottom = 16.dp)
-                                                        )
-
-                                                        // Contents box
-                                                        Box(
-                                                            modifier = Modifier
-                                                                .background(Color(0xFFF8F9FA))
-                                                                .padding(1.dp)
-                                                                .background(Color(0xFFA2A9B1))
-                                                                .padding(1.dp)
-                                                                .background(Color(0xFFF8F9FA))
-                                                                .padding(8.dp)
-                                                        ) {
-                                                            Column {
-                                                                Text("Contents", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.Black)
-                                                                Text("1 History", fontSize = 11.sp, color = Color(0xFF0645AD), modifier = Modifier.padding(top = 4.dp))
-                                                                Text("  1.1 Precursors", fontSize = 11.sp, color = Color(0xFF0645AD))
-                                                                Text("  1.2 Mechanical calculators", fontSize = 11.sp, color = Color(0xFF0645AD))
-                                                                Text("  1.3 Electronic calculators", fontSize = 11.sp, color = Color(0xFF0645AD))
-                                                                Text("2 Types", fontSize = 11.sp, color = Color(0xFF0645AD), modifier = Modifier.padding(top = 2.dp))
-                                                                Text("3 Usage", fontSize = 11.sp, color = Color(0xFF0645AD))
-                                                                Text("4 See also", fontSize = 11.sp, color = Color(0xFF0645AD))
-                                                                Text("5 References", fontSize = 11.sp, color = Color(0xFF0645AD))
-                                                            }
-                                                        }
-
-                                                        // History section
-                                                        Text(
-                                                            text = "History",
-                                                            fontSize = 22.sp,
-                                                            fontWeight = FontWeight.Normal,
-                                                            color = Color.Black,
-                                                            modifier = Modifier.padding(top = 20.dp, bottom = 2.dp)
-                                                        )
-                                                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFA2A9B1)))
-
-                                                        // Precursors subsection
-                                                        Text(
-                                                            text = "Precursors",
-                                                            fontSize = 18.sp,
-                                                            fontWeight = FontWeight.Normal,
-                                                            color = Color.Black,
-                                                            modifier = Modifier.padding(top = 12.dp, bottom = 6.dp)
-                                                        )
-
-                                                        Text(
-                                                            text = "The first known tools used to aid arithmetic calculations were: bones (used to tally items), pebbles, and counting boards, and the abacus, known to have been used by Sumerians and Egyptians before 2000 BC. Except for the Antikythera mechanism (an \"out of the time\" astronomical device), development of computing tools arrived near the start of the 17th century.",
-                                                            fontSize = 14.sp,
-                                                            color = Color.Black,
-                                                            lineHeight = 20.sp,
-                                                            modifier = Modifier.padding(bottom = 10.dp)
-                                                        )
-
-                                                        Text(
-                                                            text = "The bones invented by John Napier for calculation of products and quotients of numbers was published in 1617. The slide rule was invented around 1620–1630 by the English clergyman William Oughtred, shortly after the publication of the concept of the logarithm.",
-                                                            fontSize = 14.sp,
-                                                            color = Color.Black,
-                                                            lineHeight = 20.sp,
-                                                            modifier = Modifier.padding(bottom = 12.dp)
-                                                        )
-
-                                                        // Mechanical calculators subsection
-                                                        Text(
-                                                            text = "Mechanical calculators",
-                                                            fontSize = 18.sp,
-                                                            fontWeight = FontWeight.Normal,
-                                                            color = Color.Black,
-                                                            modifier = Modifier.padding(top = 8.dp, bottom = 6.dp)
-                                                        )
-
-                                                        Text(
-                                                            text = "The 17th century saw the development of mechanical calculators capable of performing all four basic arithmetic operations. In 1623, Wilhelm Schickard designed a calculating machine, but construction was abandoned after a fire destroyed his prototype. In 1642, Blaise Pascal invented the Pascaline, which was a mechanical calculator capable of addition and subtraction.",
-                                                            fontSize = 14.sp,
-                                                            color = Color.Black,
-                                                            lineHeight = 20.sp,
-                                                            modifier = Modifier.padding(bottom = 10.dp)
-                                                        )
-
-                                                        Text(
-                                                            text = "Gottfried Wilhelm von Leibniz invented the Leibniz wheel in 1673, which was used in the arithmometer, the first mass-produced mechanical calculator. Charles Xavier Thomas de Colmar designed and manufactured the Arithmometer around 1820, which became the first commercially successful mechanical calculator.",
-                                                            fontSize = 14.sp,
-                                                            color = Color.Black,
-                                                            lineHeight = 20.sp,
-                                                            modifier = Modifier.padding(bottom = 12.dp)
-                                                        )
-
-                                                        // Electronic calculators subsection
-                                                        Text(
-                                                            text = "Electronic calculators",
-                                                            fontSize = 18.sp,
-                                                            fontWeight = FontWeight.Normal,
-                                                            color = Color.Black,
-                                                            modifier = Modifier.padding(top = 8.dp, bottom = 6.dp)
-                                                        )
-
-                                                        Text(
-                                                            text = "The first mainframe computers, using firstly vacuum tubes and later transistors in the logic circuits, appeared in the 1940s and 1950s. The first solid-state electronic calculator was the ANITA (A New Inspiration To Arithmetic), produced in 1961 by the Bell Punch Company of Uxbridge, Great Britain.",
-                                                            fontSize = 14.sp,
-                                                            color = Color.Black,
-                                                            lineHeight = 20.sp,
-                                                            modifier = Modifier.padding(bottom = 10.dp)
-                                                        )
-
-                                                        Text(
-                                                            text = "In 1965, Wang Laboratories produced the LOCI-2, a 10-digit transistorized desktop calculator. The first handheld electronic calculator was developed by Texas Instruments in 1967. The Hewlett-Packard HP-35 was the first handheld scientific calculator, introduced in 1972.",
-                                                            fontSize = 14.sp,
-                                                            color = Color.Black,
-                                                            lineHeight = 20.sp,
-                                                            modifier = Modifier.padding(bottom = 10.dp)
-                                                        )
-
-                                                        Text(
-                                                            text = "By 1976, the price of calculators had dropped to the point where they became affordable for the general consumer. The TI-30, introduced in 1976 by Texas Instruments, became one of the most popular scientific calculators ever made.",
-                                                            fontSize = 14.sp,
-                                                            color = Color.Black,
-                                                            lineHeight = 20.sp,
-                                                            modifier = Modifier.padding(bottom = 16.dp)
-                                                        )
-
-                                                        // Types section
-                                                        Text(
-                                                            text = "Types",
-                                                            fontSize = 22.sp,
-                                                            fontWeight = FontWeight.Normal,
-                                                            color = Color.Black,
-                                                            modifier = Modifier.padding(top = 12.dp, bottom = 2.dp)
-                                                        )
-                                                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFA2A9B1)))
-
-                                                        Text(
-                                                            text = "Modern electronic calculators can be grouped into several categories:\n\n• Basic calculators – perform simple arithmetic operations\n• Scientific calculators – include trigonometric, logarithmic, and exponential functions\n• Graphing calculators – can plot graphs and solve equations simultaneously\n• Financial calculators – designed for business and finance applications\n• Printing calculators – include a printer for paper output",
-                                                            fontSize = 14.sp,
-                                                            color = Color.Black,
-                                                            lineHeight = 20.sp,
-                                                            modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)
-                                                        )
-
-                                                        // Usage section
-                                                        Text(
-                                                            text = "Usage",
-                                                            fontSize = 22.sp,
-                                                            fontWeight = FontWeight.Normal,
-                                                            color = Color.Black,
-                                                            modifier = Modifier.padding(top = 12.dp, bottom = 2.dp)
-                                                        )
-                                                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFA2A9B1)))
-
-                                                        Text(
-                                                            text = "Calculators are used in education, science, engineering, and commerce. In most countries, students are permitted to use calculators for schoolwork and examinations. Many smartphones now include calculator applications as standard software.",
-                                                            fontSize = 14.sp,
-                                                            color = Color.Black,
-                                                            lineHeight = 20.sp,
-                                                            modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)
-                                                        )
-
-                                                        // See also section
-                                                        Text(
-                                                            text = "See also",
-                                                            fontSize = 22.sp,
-                                                            fontWeight = FontWeight.Normal,
-                                                            color = Color.Black,
-                                                            modifier = Modifier.padding(top = 12.dp, bottom = 2.dp)
-                                                        )
-                                                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFA2A9B1)))
-
-                                                        Column(modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)) {
-                                                            Text("• Abacus", fontSize = 14.sp, color = Color(0xFF0645AD))
-                                                            Text("• Adding machine", fontSize = 14.sp, color = Color(0xFF0645AD))
-                                                            Text("• Computer", fontSize = 14.sp, color = Color(0xFF0645AD))
-                                                            Text("• Computer algebra system", fontSize = 14.sp, color = Color(0xFF0645AD))
-                                                            Text("• HP calculators", fontSize = 14.sp, color = Color(0xFF0645AD))
-                                                            Text("• Slide rule", fontSize = 14.sp, color = Color(0xFF0645AD))
-                                                            Text("• Texas Instruments", fontSize = 14.sp, color = Color(0xFF0645AD))
-                                                        }
-
-                                                        // References section
-                                                        Text(
-                                                            text = "References",
-                                                            fontSize = 22.sp,
-                                                            fontWeight = FontWeight.Normal,
-                                                            color = Color.Black,
-                                                            modifier = Modifier.padding(top = 12.dp, bottom = 2.dp)
-                                                        )
-                                                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFA2A9B1)))
-
-                                                        Column(modifier = Modifier.padding(top = 8.dp, bottom = 50.dp)) {
-                                                            Text("1. ^ Ball, Guy (2000). The Calculator. ISBN 978-0-521-63395-0", fontSize = 11.sp, color = Color.Gray)
-                                                            Text("2. ^ Hamrick, Kathy (2005). \"History of Calculators\".", fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(top = 4.dp))
-                                                            Text("3. ^ \"Intel 4004 Microprocessor\". Intel Museum.", fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(top = 4.dp))
-                                                            Text("4. ^ Weisberg, Jonathan (1999). Electronic Calculators.", fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(top = 4.dp))
-                                                        }
-                                                    }
+                                                        },
+                                                        modifier = Modifier.fillMaxSize()
+                                                    )
+                                                } else {
+                                                    // Fallback: Fake Wikipedia page
+                                                    FakeWikipediaContent()
                                                 }
                                             }
                                             current.browserShowError -> {
@@ -3260,6 +4660,9 @@ Sharp CS-10A - 25KG
                                             .fillMaxHeight(),
                                         shakeIntensity = currentShakeIntensity,
                                         invertedColors = current.invertedColors,
+                                        isDamaged = current.minusButtonDamaged && symbol == "-",
+                                        isBroken = current.minusButtonBroken && symbol == "-",
+                                        isFlickering = current.flickeringButton == symbol,
                                         onClick = { CalculatorActions.handleInput(state, symbol) }
                                     )
                                 }
@@ -3319,6 +4722,57 @@ Sharp CS-10A - 25KG
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Gray.copy(alpha = desaturationAmount * 0.5f))
+        )
+    }
+
+    // Green screen flash during chaos phase 3
+    if (current.chaosPhase == 3) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF00FF00))
+        )
+    }
+
+    // 3D Keyboard Chaos overlay
+    if (current.keyboardChaosActive) {
+        KeyboardChaos3D(
+            chaosLetters = current.chaosLetters,
+            rotationX = current.cubeRotationX,
+            rotationY = current.cubeRotationY,
+            scale = current.cubeScale,
+            message = current.message,
+            onRotationChange = { dx, dy ->
+                state.value = state.value.copy(
+                    cubeRotationX = (state.value.cubeRotationX + dy).coerceIn(-90f, 90f),
+                    cubeRotationY = state.value.cubeRotationY + dx
+                )
+            },
+            onScaleChange = { newScale ->
+                state.value = state.value.copy(
+                    cubeScale = newScale.coerceIn(0.5f, 2f)
+                )
+            },
+            onLetterTap = { letter ->
+                // Remove the tapped letter from chaos
+                val newLetters = state.value.chaosLetters.filterNot { it == letter }
+                state.value = state.value.copy(chaosLetters = newLetters)
+                vibrate(context, 20, 100)
+
+                // Check if all letters are cleared
+                if (newLetters.isEmpty()) {
+                    // Success! Move to next step
+                    state.value = state.value.copy(
+                        keyboardChaosActive = false,
+                        chaosPhase = 0,
+                        conversationStep = 107,
+                        message = "",
+                        fullMessage = "You did it! The keyboard is back to normal. Thank you for your patience.",
+                        isTyping = true
+                    )
+                    CalculatorActions.persistConversationStep(107)
+                }
+            }
         )
     }
 
@@ -3421,6 +4875,127 @@ Sharp CS-10A - 25KG
 }
 
 @Composable
+fun FakeWikipediaContent() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.White)
+            .verticalScroll(rememberScrollState())
+    ) {
+        // Donation banner
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF1589D1))
+                .padding(8.dp)
+        ) {
+            Column {
+                Text(
+                    text = "☆ Please donate to keep Wikipedia free ☆",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Text(
+                    text = "Hi reader. This is the 2nd time we've interrupted your reading, but 98% of our readers don't give.",
+                    fontSize = 9.sp,
+                    color = Color.White.copy(alpha = 0.9f),
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+        }
+
+        // Wikipedia header bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFFF8F9FA))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .background(Color.LightGray, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("W", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
+                }
+                Column(modifier = Modifier.padding(start = 6.dp)) {
+                    Text(
+                        text = "WIKIPEDIA",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp,
+                        color = Color.Black
+                    )
+                    Text(
+                        text = "The Free Encyclopedia",
+                        fontSize = 8.sp,
+                        color = Color.Gray
+                    )
+                }
+            }
+            Text("☰", fontSize = 20.sp, color = Color.Gray)
+        }
+
+        // Main content
+        Column(modifier = Modifier.padding(horizontal = 12.dp)) {
+            Text(
+                text = "Calculator",
+                fontSize = 26.sp,
+                fontWeight = FontWeight.Normal,
+                color = Color.Black,
+                modifier = Modifier.padding(top = 12.dp)
+            )
+
+            Text(
+                text = "From Wikipedia, the free encyclopedia",
+                fontSize = 11.sp,
+                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                color = Color(0xFF54595D),
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+
+            Text(
+                text = "A calculator is a machine that performs arithmetic operations. Modern electronic calculators range from cheap, credit card-sized models to sturdy desktop models with built-in printers.",
+                fontSize = 14.sp,
+                color = Color.Black,
+                lineHeight = 20.sp,
+                modifier = Modifier.padding(vertical = 12.dp)
+            )
+
+            Text(
+                text = "History",
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Normal,
+                color = Color.Black,
+                modifier = Modifier.padding(top = 20.dp, bottom = 2.dp)
+            )
+            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFA2A9B1)))
+
+            Text(
+                text = "The 17th century saw the development of mechanical calculators. In 1623, Wilhelm Schickard designed a calculating machine. In 1642, Blaise Pascal invented the Pascaline.",
+                fontSize = 14.sp,
+                color = Color.Black,
+                lineHeight = 20.sp,
+                modifier = Modifier.padding(vertical = 10.dp)
+            )
+
+            Text(
+                text = "Charles Xavier Thomas de Colmar designed the Arithmometer around 1820, which became the first commercially successful mechanical calculator.",
+                fontSize = 14.sp,
+                color = Color.Black,
+                lineHeight = 20.sp,
+                modifier = Modifier.padding(bottom = 50.dp)
+            )
+        }
+    }
+}
+
+@Composable
 fun CameraPreview(
     modifier: Modifier = Modifier,
     lifecycleOwner: LifecycleOwner
@@ -3457,6 +5032,9 @@ fun CalculatorButton(
     modifier: Modifier = Modifier,
     shakeIntensity: Float = 0f,
     invertedColors: Boolean = false,
+    isDamaged: Boolean = false,
+    isBroken: Boolean = false,  // Shows crossed-out symbol
+    isFlickering: Boolean = false,
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
@@ -3464,6 +5042,10 @@ fun CalculatorButton(
     val isOperationButton = symbol in listOf("+", "-", "*", "/", "=", "%", "( )")
 
     val backgroundColor = when {
+        // Flickering state (whack-a-mole)
+        isFlickering -> Color(0xFFFFEB3B)  // Bright yellow
+        // Damaged button (both broken and repaired show same color)
+        isDamaged && symbol == "-" -> Color(0xFF8B4513)  // Brown, cracked look
         // Inverted mode
         invertedColors && isNumberButton -> Color(0xFF373737)
         invertedColors && symbol == "DEL" -> Color(0xFF1779E8)
@@ -3479,6 +5061,11 @@ fun CalculatorButton(
     }
 
     val textColor = when {
+        // Flickering state
+        isFlickering -> Color.Black
+        // Damaged minus (faded when broken, slightly less faded when repaired)
+        isBroken && symbol == "-" -> Color(0xFF4A4A4A)  // Very faded text when broken
+        isDamaged && symbol == "-" -> Color(0xFF6A6A6A)  // Slightly faded when damaged but working
         // Inverted mode
         invertedColors && isOperationButton -> Color(0xFF17B8E8)
         invertedColors && symbol == "C" -> Color(0xFF17B8E8)
@@ -3488,6 +5075,9 @@ fun CalculatorButton(
         isOperationButton -> Color.White
         else -> Color(0xFF2D2D2D)  // Dark text on light buttons
     }
+
+    // Display text - show cracked minus ONLY if broken (not just damaged)
+    val displaySymbol = if (isBroken && symbol == "-") "—̸" else symbol
 
     // Shake animation
     val shakeOffset = if (shakeIntensity > 0) {
@@ -3521,11 +5111,254 @@ fun CalculatorButton(
         )
     ) {
         Text(
-            text = symbol,
+            text = displaySymbol,
             fontSize = 26.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = CalculatorDisplayFont  // Use the digital font for buttons too
         )
+    }
+}
+
+@Composable
+fun KeyboardChaos3D(
+    chaosLetters: List<ChaosKey>,
+    rotationX: Float,
+    rotationY: Float,
+    scale: Float,
+    message: String,
+    onRotationChange: (Float, Float) -> Unit,
+    onScaleChange: (Float) -> Unit,
+    onLetterTap: (ChaosKey) -> Unit
+) {
+    val cubeSize = 120.dp
+    val cubeSizePx = with(LocalConfiguration.current) { 120f }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .pointerInput(Unit) {
+                detectTransformGestures { _, pan, zoom, _ ->
+                    // Globe-style rotation: horizontal drag = Y rotation, vertical drag = X rotation
+                    onRotationChange(pan.x * 0.3f, -pan.y * 0.3f)
+                    // Pinch to zoom
+                    if (zoom != 1f) {
+                        onScaleChange(scale * zoom)
+                    }
+                }
+            }
+    ) {
+        // Message at top
+        if (message.isNotEmpty()) {
+            Text(
+                text = message,
+                color = Color.White,
+                fontSize = 16.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+                    .align(Alignment.TopCenter)
+            )
+        }
+
+        // Letters remaining counter
+        Text(
+            text = "Letters remaining: ${chaosLetters.size}",
+            color = Color(0xFF00FF00),
+            fontSize = 14.sp,
+            modifier = Modifier
+                .padding(16.dp)
+                .align(Alignment.TopEnd)
+        )
+
+        // Instructions
+        Text(
+            text = "Drag to rotate • Pinch to zoom • Tap red letters",
+            color = Color.Gray,
+            fontSize = 12.sp,
+            modifier = Modifier
+                .padding(bottom = 16.dp)
+                .align(Alignment.BottomCenter)
+        )
+
+        // 3D scene container
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = 80.dp, bottom = 40.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            // Main rotation container - this rotates everything like a globe
+            Box(
+                modifier = Modifier
+                    .size(300.dp)
+                    .graphicsLayer {
+                        this.rotationX = rotationX
+                        this.rotationY = rotationY
+                        this.scaleX = scale
+                        this.scaleY = scale
+                        this.cameraDistance = 16f * density
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                // The 3D cube - each face is positioned in 3D space
+                val halfSize = 60f
+
+                // Front face (Z = +halfSize)
+                CubeFace3D(
+                    keys = listOf("7", "8", "9", "4", "5", "6", "1", "2", "3"),
+                    faceRotationX = 0f,
+                    faceRotationY = 0f,
+                    offsetZ = halfSize,
+                    size = cubeSize
+                )
+
+                // Back face (Z = -halfSize, rotated 180° around Y)
+                CubeFace3D(
+                    keys = listOf("C", "%", "/", "*", "-", "+", "=", ".", "0"),
+                    faceRotationX = 0f,
+                    faceRotationY = 180f,
+                    offsetZ = halfSize,
+                    size = cubeSize
+                )
+
+                // Right face (rotated 90° around Y)
+                CubeFace3D(
+                    keys = listOf("9", "6", "3", "/", "-", "=", ")", "]", "}"),
+                    faceRotationX = 0f,
+                    faceRotationY = 90f,
+                    offsetZ = halfSize,
+                    size = cubeSize
+                )
+
+                // Left face (rotated -90° around Y)
+                CubeFace3D(
+                    keys = listOf("7", "4", "1", "*", "+", "0", "(", "[", "{"),
+                    faceRotationX = 0f,
+                    faceRotationY = -90f,
+                    offsetZ = halfSize,
+                    size = cubeSize
+                )
+
+                // Top face (rotated -90° around X)
+                CubeFace3D(
+                    keys = listOf("7", "8", "9", "(", ")", "DEL", "C", "%", "/"),
+                    faceRotationX = -90f,
+                    faceRotationY = 0f,
+                    offsetZ = halfSize,
+                    size = cubeSize
+                )
+
+                // Bottom face (rotated 90° around X)
+                CubeFace3D(
+                    keys = listOf("1", "2", "3", "0", ".", "=", "+", "-", "*"),
+                    faceRotationX = 90f,
+                    faceRotationY = 0f,
+                    offsetZ = halfSize,
+                    size = cubeSize
+                )
+
+                // Floating chaos letters - positioned relative to the rotating container
+                chaosLetters.forEach { chaosKey ->
+                    // Calculate 3D position that rotates with the scene
+                    val letterX = chaosKey.x * 0.8f
+                    val letterY = chaosKey.y * 0.8f
+
+                    Box(
+                        modifier = Modifier
+                            .offset(x = letterX.dp, y = letterY.dp)
+                            .graphicsLayer {
+                                // Letters stay upright-ish but move with the scene
+                                this.scaleX = chaosKey.size
+                                this.scaleY = chaosKey.size
+                                this.alpha = 0.95f
+                            }
+                            .size(45.dp)
+                            .background(Color(0xFFFF6B6B), RoundedCornerShape(8.dp))
+                            .clickable { onLetterTap(chaosKey) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = chaosKey.letter,
+                            color = Color.White,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CubeFace3D(
+    keys: List<String>,
+    faceRotationX: Float,
+    faceRotationY: Float,
+    offsetZ: Float,
+    size: androidx.compose.ui.unit.Dp
+) {
+    // Calculate translation based on rotation to simulate Z offset
+    // When rotated, we offset in the direction the face is pointing
+    val radY = Math.toRadians(faceRotationY.toDouble())
+    val radX = Math.toRadians(faceRotationX.toDouble())
+
+    // Calculate X and Y offsets based on face orientation
+    val offsetXDp = (Math.sin(radY) * offsetZ).toFloat()
+    val offsetYDp = (-Math.sin(radX) * Math.cos(radY) * offsetZ).toFloat()
+
+    Box(
+        modifier = Modifier
+            .size(size)
+            .offset(x = offsetXDp.dp, y = offsetYDp.dp)
+            .graphicsLayer {
+                this.rotationX = faceRotationX
+                this.rotationY = faceRotationY
+                this.cameraDistance = 12f * density
+            }
+            .background(Color(0xFF2A2A2A), RoundedCornerShape(4.dp))
+            .padding(6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.SpaceEvenly,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            keys.chunked(3).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    row.forEach { key ->
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .background(
+                                    when {
+                                        key in "0".."9" -> Color(0xFFE8E4DA)
+                                        key in listOf("+", "-", "*", "/", "=", "%") -> Color(0xFF6B6B6B)
+                                        key == "C" -> Color(0xFFC9463D)
+                                        key == "DEL" -> Color(0xFFD4783C)
+                                        else -> Color(0xFFD4D0C4)
+                                    },
+                                    RoundedCornerShape(4.dp)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = key,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (key in "0".."9") Color(0xFF2D2D2D) else Color.White
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
