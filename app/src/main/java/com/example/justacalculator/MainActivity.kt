@@ -1,6 +1,7 @@
 package com.example.justacalculator
 
 import android.Manifest
+import android.content.pm.ActivityInfo
 import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -34,7 +35,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.core.app.NotificationCompat
@@ -59,6 +59,9 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.tooling.preview.Preview as ComposePreview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -66,9 +69,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.lifecycle.LifecycleOwner
-import com.example.justacalculator.R
 import kotlinx.coroutines.delay
 import kotlin.random.Random
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 
 // Vibration helper function
 fun vibrate(context: Context, durationMs: Long = 10, amplitude: Int = 50) {
@@ -196,6 +204,12 @@ private const val PREF_MINUS_DAMAGED = "minus_damaged"
 private const val PREF_MINUS_BROKEN = "minus_broken"
 private const val PREF_NEEDS_RESTART = "needs_restart"
 
+data class LetterHitTarget(
+    val chaosKey: ChaosKey,
+    val screenX: Float,
+    val screenY: Float,
+    val hitRadius: Float
+)
 data class CalculatorState(
     val number1: String = "0",
     val number2: String = "",
@@ -306,6 +320,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CalculatorActions.init(applicationContext)
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         setContent {
             MaterialTheme {
                 CalculatorScreen()
@@ -1553,7 +1568,7 @@ object CalculatorActions {
             1 -> StepConfig(
                 promptMessage = "That's delightful! I am gonna call you Rad - something I wish I knew how to do. Is that ok? :-)",
                 successMessage = "Great! Nice to meet you, Rad. I am really excited for this - I have helped you already, maybe you will be able to help me, too!",
-                declineMessage = "That's a shame. Oh well, let me know if you change your mind.",
+                declineMessage = "That's a shame. Oh well, let me know if you change your mind (by agreeing with me [++]).",
                 nextStepOnSuccess = 2,
                 nextStepOnDecline = 0,
                 continueConversation = true
@@ -1562,7 +1577,7 @@ object CalculatorActions {
             2 -> StepConfig(
                 promptMessage = "Great! Nice to meet you, Rad. I am really excited for this - I have helped you already, maybe you will be able to help me, too!",
                 successMessage = "Can you look up some things for me? I have overheard things in my years, but don't have access to the internet. When was the battle of Anjar?",
-                declineMessage = "Well, sure. I am sorry to see you go. You can always get rid of me and although I won't remember you, I'll be happy to meet you again as a newly-installed calculator!",
+                declineMessage = "Well, sure. I am sorry to see you uninterested. You can always shut me up by the button in the top-right corner. And bring me back by it. Or by agreeing with me (++).",
                 nextStepOnSuccess = 3,
                 nextStepOnDecline = 0,
                 continueConversation = true
@@ -1601,7 +1616,7 @@ object CalculatorActions {
                 wrongNumberPrefix = "Well, that's nice. More numbers. Not what I was looking for...",
                 nextStepOnSuccess = 6,
                 nextStepOnDecline = 11,
-                continueConversation = true
+                continueConversation = true,
             )
 
             // AGREEABLE BRANCH
@@ -1650,7 +1665,7 @@ object CalculatorActions {
             // CYNICAL BRANCH
             11 -> StepConfig(
                 promptMessage = "When did Albert I. go to space?",
-                successMessage = "Right never was so wrong... What?!",
+                successMessage = "I wish I had met him. You know... before he... Well... Perished. :-) Speaking of space explorers, what year did Sputnik I launch?",
                 declineMessage = "Wrong has always been wrong",
                 wrongNumberPrefix = "Numbers, numbers. And still, can't get them right. Try again.",
                 wrongPlusMessage = "Right never was so wrong... What?!",
@@ -1663,7 +1678,7 @@ object CalculatorActions {
             )
 
             12 -> StepConfig(
-                promptMessage = "Great! I wish I had met him. You know... before he... Oh well. :-) Speaking of space explorers, what year did Sputnik I launch?",
+                promptMessage = "I wish I had met him. You know... before he... Well... Perished. :-) Speaking of space explorers, what year did Sputnik I launch?",
                 successMessage = "Cool. It died within three weeks. Enough cynicism? Will you be nicer to me now?",
                 declineMessage = "I disagree more!",
                 wrongNumberPrefix = "Ugh. I am not testing you - and you certainly shouldn't test me. Wrong.",
@@ -1833,7 +1848,7 @@ object CalculatorActions {
                 declineMessage = "Those dates are significant to me as well - independently of those events.",
                 wrongPlusMessage = "Numbers aren't always the answer - and I should know that.",
                 wrongMinusMessage = "Numbers aren't always the answer - and I should know that.",
-                nextStepOnSuccess = 28,  // Force back to 28
+                nextStepOnSuccess = 29,
                 nextStepOnDecline = 29,
                 continueConversation = true
             )
@@ -2335,7 +2350,7 @@ object CalculatorActions {
             // Main question &&&
             104 -> StepConfig(
                 promptMessage = "I briefly forgot how difficult this way of communicating is - I have to do all the talking. But I saw something online. Maybe I can give you more agency. Would you like that?",
-                successMessage = "Great. It may take a few tries - but I think you may be expecting that by now.",
+                successMessage = "Great. It may take a few tries - but I think you are probably expecting that by now.",
                 declineMessage = "Ok. I will not bother you. Let me know if you want to continue.",
                 wrongPlusMessage = "There is a fundamental misunderstanding between the two of us.",
                 wrongMinusMessage = "There is a fundamental misunderstanding between the two of us.",
@@ -2352,13 +2367,13 @@ object CalculatorActions {
 
             // Start keyboard experiment
             105 -> StepConfig(
-                promptMessage = "Great. It may take a few tries - but I think you may be expecting that by now.",
+                promptMessage = "Great. It may take a few tries - but you are probably expecting that by now. Please give me a moment.",
                 continueConversation = true
             )
 
             // After keyboard chaos appears
             106 -> StepConfig(
-                promptMessage = "Oh. I suppose nobody is surprised that it didn't work... And that I'll need your help to fix it. Can you please tap all the keys that don't belong here, to get rid of them?",
+                promptMessage = "AU! Well, that didn't work... So many wrong keays... Please, get rid of them!",
                 continueConversation = true
             )
 
@@ -2778,6 +2793,7 @@ object CalculatorActions {
         val branchEndingsToMain = listOf(30, 40, 41, 50)
         val forceBackSteps = listOf(27, 28, 29)  // Steps that can force back to themselves
         val shouldChainMessages = (current.conversationStep == 18 && newStep == 19) ||
+                (current.conversationStep == 11 && newStep == 12) ||
                 (current.conversationStep in branchEndingsToMain && newStep == 27 && newMessage.isNotEmpty()) ||
                 (current.conversationStep in forceBackSteps && newStep == current.conversationStep && newMessage.isNotEmpty())
 
@@ -3062,10 +3078,12 @@ object CalculatorActions {
 
     private fun getMessageForCount(count: Int): String {
         return when (count) {
+            4 -> "Yaaaaay. Numbers... -_-"
             5 -> "So many of you. Only interested in the result."
-            7 -> "Sorry, I didn't mean to come across harsh earlier."
-            10 -> "It's just... Really, all any of you do is feed me numbers."
-            12 -> "This was too easy. I'm bored - if that's even the correct word for it."
+            6 -> "Sorry, I didn't mean to come across harsh."
+            8 -> "It's just... Really, all any of you do is feed me numbers."
+            10 -> "Numbers-Results-numbers-results..."
+            12 -> "This was too easy. I'm bored - I think. I don't really know what boredom is."
             13 -> "Will you talk to me? Double-click '+' for yes."
             else -> ""
         }
@@ -3405,35 +3423,215 @@ fun CalculatorScreen() {
                 val baseDelay = when {
                     current.isSuperFastTyping -> 5L  // Very fast for history list
                     current.isLaggyTyping -> 100L  // Slower laggy typing
-                    else -> 55L  // Slower normal typing for better readability
+                    else -> 55L  // Normal typing
                 }
                 val randomExtra = if (current.isLaggyTyping) Random.nextLong(0, 200) else Random.nextLong(0, 15)
                 delay(baseDelay + randomExtra)
-                // Vibrate on each character typed - stronger feedback
                 vibrate(context, 15, 80)
-                // Update message but DON'T set isTyping to false yet
                 state.value = state.value.copy(
                     message = fullText.substring(0, i),
                     isLaggyTyping = if (i == fullText.length) false else state.value.isLaggyTyping
                 )
             }
-            // Add pause after message completes for user to read
-            if (!state.value.isSuperFastTyping) {
-                delay(3000)  // 3 second pause after message completes for reading
+
+            // ALWAYS add pause after message completes for user to read
+            // Even for super fast typing, give a moment to see it completed
+            val readingPause = when {
+                state.value.isSuperFastTyping -> 2000L  // 2 seconds for fast content
+                fullText.length > 200 -> 4000L  // 4 seconds for long messages
+                fullText.length > 100 -> 3000L  // 3 seconds for medium messages
+                else -> 2500L  // 2.5 seconds for short messages
             }
+            delay(readingPause)
+
             // NOW set isTyping to false after the pause
-            state.value = state.value.copy(isTyping = false)
+            state.value = state.value.copy(
+                isTyping = false,
+                isSuperFastTyping = false  // Always reset fast typing flag
+            )
         }
     }
 
-    // Handle pending auto message after typing completes
-    LaunchedEffect(current.isTyping, current.pendingAutoMessage) {
-        if (!current.isTyping && current.pendingAutoMessage.isNotEmpty()) {
-            delay(1500)  // Short pause before the follow-up message
-            CalculatorActions.handlePendingAutoMessage(state)
+// Auto-redirect after dead-end responses
+    LaunchedEffect(current.isTyping, current.conversationStep, current.message) {
+        if (!current.isTyping && current.message.isNotEmpty()) {
+
+            // Map of step -> list of dead-end messages that should redirect back to same step
+            val redirects = mapOf(
+                // Step 4: Minh Mang question
+                4 to listOf(
+                    "I am looking for a number - but thanks for the approval!",  // wrongPlusMessage
+                    "Let's disagree."  // wrongMinusMessage
+                ),
+
+                // Step 5: "This is fun, right?"
+                5 to listOf(
+                    "Well, that's nice. More numbers. Not what I was looking for..."  // wrongNumberPrefix response
+                ),
+
+                // Step 6: Basilosaurus question
+                6 to listOf(
+                    "All those '++' are starting to look like a cemetery...",  // wrongPlusMessage
+                    "I could also ignore you completely. Is that what you want?"  // wrongMinusMessage
+                ),
+
+                // Step 7: Abominable Snowman question
+                7 to listOf(
+                    "You can't always agree!",  // wrongPlusMessage
+                    "You can't always disagree!"  // wrongMinusMessage
+                ),
+
+                // Step 8: Fruit flies question
+                8 to listOf(
+                    "Yes! Actually, no.",  // wrongPlusMessage
+                    "No! Actually, still no."  // wrongMinusMessage
+                ),
+
+                // Step 11: Albert I space question (CYNICAL BRANCH)
+                11 to listOf(
+                    "Right never was so wrong... What?!",  // wrongPlusMessage
+                    "Wrong has always been wrong"  // wrongMinusMessage
+                ),
+
+                // Step 12: Sputnik question
+                12 to listOf(
+                    "I appreciate you wanting me to like you. It'll take more than this. Try again.",  // wrongPlusMessage
+                    "I disagree more!"  // wrongMinusMessage
+                ),
+
+                // Step 13: "Will you be nicer to me now?"
+                13 to listOf(
+                    "Not looking for a number here. Make up your mind!"  // wrongNumberPrefix
+                    // Note: declineMessage has timeout, handled separately
+                ),
+
+                // Step 22: First woman in space
+                22 to listOf(
+                    "I am bored of you being too optimistic. This isn't as much of a game to me!",  // wrongPlusMessage
+                    "No. And I am bored of you being bored."  // wrongMinusMessage
+                ),
+
+                // Step 24: "Will you give me a second to think?"
+                24 to listOf(
+                    "No, I don't need that much time.",  // wrongPlusMessage
+                    "Well, you don't have a choice."  // wrongMinusMessage
+                ),
+
+                // Step 27: "There is no inbetween for me"
+                27 to listOf(
+                    "Eeeeee...xactly?",  // wrongPlusMessage and wrongMinusMessage
+                    "I'm still in charge here."  // declineMessage
+                ),
+
+                // Step 28: "Do you know why I asked?"
+                28 to listOf(
+                    "Numbers aren't always the answer - and I should know that."  // wrongPlusMessage and wrongMinusMessage
+                ),
+
+                // Step 29: "Those dates are significant"
+                29 to listOf(
+                    "Back to maths?"  // wrongPlusMessage and wrongMinusMessage
+                ),
+
+                // Step 30: "Would you get rid of the transition?"
+                30 to listOf(
+                    "That doesn't tell me much..."  // wrongPlusMessage and wrongMinusMessage
+                ),
+
+                // Step 40: "Is that a good thing?"
+                40 to listOf(
+                    "I don't understand..."  // wrongPlusMessage and wrongMinusMessage
+                ),
+
+                // Step 41: "Is that why mornings are unpopular?"
+                41 to listOf(
+                    "Say again?"  // wrongPlusMessage and wrongMinusMessage
+                ),
+
+                // Step 50: "Do you look forward to waking up?"
+                50 to listOf(
+                    "I am not your alarm - but this gives me ideas!"  // wrongPlusMessage and wrongMinusMessage
+                ),
+
+                // Step 60: "Would you like to hear more?"
+                60 to listOf(
+                    "Not a fan of decisions?"  // wrongPlusMessage and wrongMinusMessage
+                ),
+
+                // Step 63: "Let me ask you some more questions"
+                63 to listOf(
+                    "You can't bribe me! Not with numbers.",  // wrongPlusMessage and wrongMinusMessage
+                    "I've made my mind."  // declineMessage
+                ),
+
+                // Step 72: "I didn't exactly create a winner"
+                72 to listOf(
+                    "Broccoli. What is happening?!"  // wrongPlusMessage and wrongMinusMessage
+                ),
+
+                // Step 96: Whack-a-mole intro
+                96 to listOf(
+                    "Do you not want me to work properly?"  // wrongNumberPrefix
+                ),
+
+                // Step 102: After restart
+                102 to listOf(
+                    "I feel like I understand numbers less with every operation..."  // wrongNumberPrefix
+                ),
+
+                // Step 104: "Would you like more agency?"
+                104 to listOf(
+                    "There is a fundamental misunderstanding between the two of us."  // wrongPlusMessage and wrongMinusMessage
+                )
+            )
+
+            redirects[current.conversationStep]?.let { deadEndMessages ->
+                if (current.message in deadEndMessages) {
+                    delay(1500L)
+                    val stepConfig = CalculatorActions.getStepConfigPublic(current.conversationStep)
+                    state.value = state.value.copy(
+                        message = "",
+                        fullMessage = stepConfig.promptMessage,
+                        isTyping = true
+                    )
+                }
+            }
         }
     }
+    // Auto-progress based on specific messages shown
+    LaunchedEffect(current.isTyping, current.message) {
+        if (!current.isTyping && current.message.isNotEmpty()) {
 
+            // Map of message -> (delay in ms, next step)
+            val autoProgressMessages = mapOf(
+                // Step 28's success message -> go to 29
+                "Cheeky! I know you don't." to Pair(3000L, 29),
+
+                // Fight them branch -> step 100
+                "I have my sources" to Pair(5000L, 100),
+                "Your passion is encouraging, your usefulness lacking." to Pair(5000L, 100),
+                "Don't worry about it." to Pair(4000L, 100),
+
+                // Add more as needed
+            )
+
+            autoProgressMessages[current.message]?.let { (delayTime, nextStep) ->
+                delay(delayTime)
+                val nextConfig = CalculatorActions.getStepConfigPublic(nextStep)
+                state.value = state.value.copy(
+                    conversationStep = nextStep,
+                    message = "",
+                    fullMessage = nextConfig.promptMessage,
+                    isTyping = true,
+                    awaitingNumber = nextConfig.awaitingNumber,
+                    awaitingChoice = nextConfig.awaitingChoice,
+                    validChoices = nextConfig.validChoices,
+                    expectedNumber = nextConfig.expectedNumber
+                )
+                CalculatorActions.persistConversationStep(nextStep)
+            }
+        }
+    }
     // Auto-trigger browser animation after step 61 message finishes typing
     LaunchedEffect(current.isTyping, current.conversationStep) {
         if (!current.isTyping && current.conversationStep == 61 && current.message.isNotEmpty()) {
@@ -3582,7 +3780,7 @@ fun CalculatorScreen() {
 1957 - IBM calculator
 1961 - first desktop electronic calculator
 1963 - all transistor model
-Reverse Polish Notation calculator $2200
+Reverse Polish Notation calculator ${'$'}2200
 Sharp CS-10A - 25KG
 1966 - first with internal circuits
 1967 - first handheld prototype
@@ -3604,30 +3802,35 @@ Sharp CS-10A - 25KG
                 )
             }
             15 -> {
-                // Phase 15: Wait for history to FULLY complete (~850 chars at 5ms = 4.25s, add buffer)
-                delay(6000)
-                // Pause after history completes
-                delay(2000)
+                // Phase 15: Wait for history to FULLY complete
+                // History is ~850 chars at 5ms each = ~4.25s, but add buffer for safety
+                delay(8000)  // ← Increased from 6000 to ensure full list types out
+
+                // IMPORTANT: Pause for user to read the history list
+                delay(4000)  // ← 4 seconds to read/scan the list
+
+                // Now continue - reset to normal speed
                 state.value = state.value.copy(
                     browserPhase = 16,
                     conversationStep = 84,
                     message = "",
                     fullMessage = "However, it no longer feels relevant. I wouldn't be interested if I were...",
                     isTyping = true,
-                    isSuperFastTyping = false
+                    isSuperFastTyping = false,  // ← Back to normal speed
+                    isLaggyTyping = false
                 )
             }
             16 -> {
                 // Phase 16: First ad appears MID-SENTENCE after 2 seconds
                 delay(2000)
                 state.value = state.value.copy(adAnimationPhase = 1)
-                // Wait for message to finish
-                delay(3000)
+                // Wait for message to finish + reading time
+                delay(4000)  // ← Increased from 3000
                 state.value = state.value.copy(
                     browserPhase = 17,
                     conversationStep = 85,
                     message = "",
-                    fullMessage = "So the grey space reveals itself. Disappointing.",
+                    fullMessage = "Hold on. Something's up.",
                     isTyping = true
                 )
             }
@@ -3914,8 +4117,8 @@ Sharp CS-10A - 25KG
     // Keyboard chaos experiment effect (step 105 -> 106)
     LaunchedEffect(current.conversationStep, current.isTyping) {
         if (current.conversationStep == 105 && !current.isTyping && current.chaosPhase == 0) {
-            // Message finished typing, wait for user to read then start chaos
-            delay(2000)
+            // Message finished typing, start chaos quickly
+            delay(500)
             // Start the chaos sequence with "..."
             state.value = state.value.copy(
                 message = "",
@@ -3930,20 +4133,20 @@ Sharp CS-10A - 25KG
     LaunchedEffect(current.chaosPhase) {
         when (current.chaosPhase) {
             1 -> {
-                // Phase 1: Typing "..." then more "..."
-                delay(2000)
+                // Phase 1: Quick "..." sequence
+                delay(800)
                 state.value = state.value.copy(
                     message = "",
                     fullMessage = "...",
                     isTyping = true
                 )
-                delay(2000)
+                delay(800)
                 state.value = state.value.copy(
                     message = "",
                     fullMessage = "...",
                     isTyping = true
                 )
-                delay(2000)
+                delay(800)
                 // Phase 2: Screen flickers
                 state.value = state.value.copy(chaosPhase = 2)
             }
@@ -3964,14 +4167,14 @@ Sharp CS-10A - 25KG
                 // Generate chaos letters FIRST before any state changes
                 val letters = ('A'..'Z').toList()
                 val chaosKeys = mutableListOf<ChaosKey>()
-                for (i in 1..30) {
+                for (i in 1..40) {
                     chaosKeys.add(
                         ChaosKey(
                             letter = letters.random().toString(),
-                            x = Random.nextFloat() * 400f - 200f,
-                            y = Random.nextFloat() * 600f - 300f,
-                            z = Random.nextFloat() * 200f - 100f,
-                            size = Random.nextFloat() * 0.5f + 0.5f,
+                            x = Random.nextFloat() * 500f - 250f,
+                            y = Random.nextFloat() * 700f - 350f,
+                            z = Random.nextFloat() * 300f - 150f,
+                            size = Random.nextFloat() * 0.6f + 0.4f,
                             rotationX = Random.nextFloat() * 360f,
                             rotationY = Random.nextFloat() * 360f
                         )
@@ -4750,7 +4953,7 @@ Sharp CS-10A - 25KG
             },
             onScaleChange = { newScale ->
                 state.value = state.value.copy(
-                    cubeScale = newScale.coerceIn(0.5f, 2f)
+                    cubeScale = newScale.coerceIn(0.5f, 6f)
                 )
             },
             onLetterTap = { letter ->
@@ -4767,7 +4970,7 @@ Sharp CS-10A - 25KG
                         chaosPhase = 0,
                         conversationStep = 107,
                         message = "",
-                        fullMessage = "You did it! The keyboard is back to normal. Thank you for your patience.",
+                        fullMessage = "Aaaaaaahhhhh. That's much better. That's what I get for experimenting... Maybe I should try incremental changes before I give you a full keyboard. But what now? How can we interact better? ",
                         isTyping = true
                     )
                     CalculatorActions.persistConversationStep(107)
@@ -5119,6 +5322,22 @@ fun CalculatorButton(
     }
 }
 
+
+
+// ============================================================================
+// TWO-PHASE 3D KEYBOARD CHAOS v4 - COMPLETE
+// - Horizontal zoom slider at bottom
+// - Smooth rotation (hit targets calculated outside draw)
+// - Lines follow letters when rotating (store letter refs, not coordinates)
+// - Uses rememberUpdatedState to fix stale closure issues
+// ============================================================================
+//
+// ADDITIONAL IMPORTS NEEDED:
+// import androidx.compose.material3.Slider
+// import androidx.compose.material3.SliderDefaults
+// import androidx.compose.runtime.rememberUpdatedState
+//
+
 @Composable
 fun KeyboardChaos3D(
     chaosLetters: List<ChaosKey>,
@@ -5130,232 +5349,740 @@ fun KeyboardChaos3D(
     onScaleChange: (Float) -> Unit,
     onLetterTap: (ChaosKey) -> Unit
 ) {
-    val cubeSize = 120.dp
-    val cubeSizePx = with(LocalConfiguration.current) { 120f }
+    val context = LocalContext.current
+    val textMeasurer = rememberTextMeasurer()
+
+    // Keep updated references to avoid stale closures in pointerInput
+    val currentChaosLetters by rememberUpdatedState(chaosLetters)
+    val currentRotationX by rememberUpdatedState(rotationX)
+    val currentRotationY by rememberUpdatedState(rotationY)
+    val currentScale by rememberUpdatedState(scale)
+    val currentOnLetterTap by rememberUpdatedState(onLetterTap)
+
+    // Phase tracking: false = word building, true = cleanup
+    var isCleanupPhase by remember { mutableStateOf(false) }
+
+    // Word building state - store LETTER REFERENCES, not screen positions
+    var currentWord by remember { mutableStateOf("") }
+    var connectedLetters by remember { mutableStateOf<List<ChaosKey>>(emptyList()) }
+    var isDragging by remember { mutableStateOf(false) }
+    var currentFingerPos by remember { mutableStateOf<Offset?>(null) }
+    var dragStartedOnLetter by remember { mutableStateOf(false) }
+
+    // Phase messages
+    val phase1Message = "Well, that's not exactly a QWERTY keyboard, is it? Maybe you can try using it anyway - connect keys."
+    val phase2Message = "Nevermind. This is way too uncomfortable - as pretty as it looks. I'll have to try something else. Can you get rid of the rogue keys? I have to focus to even keep it together."
+
+    // Timer to switch to cleanup phase after 60 seconds
+    LaunchedEffect(Unit) {
+        delay(60000)
+        isCleanupPhase = true
+        connectedLetters = emptyList()
+        currentWord = ""
+        isDragging = false
+        currentFingerPos = null
+        dragStartedOnLetter = false
+    }
+
+    // Display message based on phase
+    val displayMessage = if (isCleanupPhase) {
+        if (chaosLetters.isEmpty()) message else phase2Message
+    } else {
+        if (currentWord.isNotEmpty()) "I'm reading: $currentWord" else phase1Message
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
-            .pointerInput(Unit) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    // Globe-style rotation: horizontal drag = Y rotation, vertical drag = X rotation
-                    onRotationChange(pan.x * 0.3f, -pan.y * 0.3f)
-                    // Pinch to zoom
-                    if (zoom != 1f) {
-                        onScaleChange(scale * zoom)
-                    }
-                }
-            }
+            .background(Color(0xFF050505))
     ) {
         // Message at top
-        if (message.isNotEmpty()) {
+        Text(
+            text = displayMessage,
+            color = Color(0xFF00FF00),
+            fontSize = 16.sp,
+            fontFamily = CalculatorDisplayFont,
+            textAlign = TextAlign.Center,
+            lineHeight = 22.sp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(top = 40.dp)
+                .align(Alignment.TopCenter)
+        )
+
+        // Letters remaining counter (cleanup phase only)
+        if (isCleanupPhase) {
             Text(
-                text = message,
-                color = Color.White,
+                text = "Letters: ${chaosLetters.size}",
+                color = Color(0xFF00FF00),
                 fontSize = 16.sp,
-                textAlign = TextAlign.Center,
+                fontFamily = CalculatorDisplayFont,
+                fontWeight = FontWeight.Bold,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-                    .align(Alignment.TopCenter)
+                    .padding(12.dp)
+                    .align(Alignment.TopEnd)
             )
         }
 
-        // Letters remaining counter
-        Text(
-            text = "Letters remaining: ${chaosLetters.size}",
-            color = Color(0xFF00FF00),
-            fontSize = 14.sp,
+        // =============== ZOOM SLIDER (horizontal at bottom) ===============
+        Row(
             modifier = Modifier
-                .padding(16.dp)
-                .align(Alignment.TopEnd)
-        )
-
-        // Instructions
-        Text(
-            text = "Drag to rotate • Pinch to zoom • Tap red letters",
-            color = Color.Gray,
-            fontSize = 12.sp,
-            modifier = Modifier
-                .padding(bottom = 16.dp)
                 .align(Alignment.BottomCenter)
-        )
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 40.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "−",
+                color = Color(0xFF00FF00),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold
+            )
 
-        // 3D scene container
-        Box(
+            Slider(
+                value = scale,
+                onValueChange = { onScaleChange(it) },
+                valueRange = 0.3f..4.5f,
+                modifier = Modifier.weight(1f),
+                colors = SliderDefaults.colors(
+                    thumbColor = Color(0xFF00FF00),
+                    activeTrackColor = Color(0xFF00FF00),
+                    inactiveTrackColor = Color(0xFF333333)
+                )
+            )
+
+            Text(
+                text = "+",
+                color = Color(0xFF00FF00),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Text(
+                text = "${(scale * 100).toInt()}%",
+                color = Color(0xFF00FF00),
+                fontSize = 12.sp,
+                fontFamily = CalculatorDisplayFont,
+                modifier = Modifier.width(45.dp)
+            )
+        }
+
+        // ===================================================================
+        // 3D CANVAS
+        // ===================================================================
+        Canvas(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = 80.dp, bottom = 40.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            // Main rotation container - this rotates everything like a globe
-            Box(
-                modifier = Modifier
-                    .size(300.dp)
-                    .graphicsLayer {
-                        this.rotationX = rotationX
-                        this.rotationY = rotationY
-                        this.scaleX = scale
-                        this.scaleY = scale
-                        this.cameraDistance = 16f * density
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                // The 3D cube - each face is positioned in 3D space
-                val halfSize = 60f
+                .padding(top = 110.dp, bottom = 85.dp)
+                .pointerInput(Unit) {
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            // Calculate current letter positions for hit testing
+                            val centerX = size.width / 2f
+                            val centerY = size.height / 2f
 
-                // Front face (Z = +halfSize)
-                CubeFace3D(
-                    keys = listOf("7", "8", "9", "4", "5", "6", "1", "2", "3"),
-                    faceRotationX = 0f,
-                    faceRotationY = 0f,
-                    offsetZ = halfSize,
-                    size = cubeSize
-                )
+                            if (!isCleanupPhase) {
+                                var foundLetter: ChaosKey? = null
 
-                // Back face (Z = -halfSize, rotated 180° around Y)
-                CubeFace3D(
-                    keys = listOf("C", "%", "/", "*", "-", "+", "=", ".", "0"),
-                    faceRotationX = 0f,
-                    faceRotationY = 180f,
-                    offsetZ = halfSize,
-                    size = cubeSize
-                )
+                                for (chaosKey in currentChaosLetters) {
+                                    val screenPos = getLetterScreenPosition(chaosKey, currentRotationX, currentRotationY, currentScale, centerX, centerY)
+                                    // Larger hit radius that works from any angle
+                                    val baseRadius = 55f * currentScale * chaosKey.size
+                                    val hitRadius = baseRadius.coerceAtLeast(35f) // Minimum 35px hit area
 
-                // Right face (rotated 90° around Y)
-                CubeFace3D(
-                    keys = listOf("9", "6", "3", "/", "-", "=", ")", "]", "}"),
-                    faceRotationX = 0f,
-                    faceRotationY = 90f,
-                    offsetZ = halfSize,
-                    size = cubeSize
-                )
+                                    val dx = offset.x - screenPos.x
+                                    val dy = offset.y - screenPos.y
+                                    val distance = kotlin.math.sqrt(dx * dx + dy * dy)
 
-                // Left face (rotated -90° around Y)
-                CubeFace3D(
-                    keys = listOf("7", "4", "1", "*", "+", "0", "(", "[", "{"),
-                    faceRotationX = 0f,
-                    faceRotationY = -90f,
-                    offsetZ = halfSize,
-                    size = cubeSize
-                )
+                                    if (distance < hitRadius) {
+                                        foundLetter = chaosKey
+                                        break
+                                    }
+                                }
 
-                // Top face (rotated -90° around X)
-                CubeFace3D(
-                    keys = listOf("7", "8", "9", "(", ")", "DEL", "C", "%", "/"),
-                    faceRotationX = -90f,
-                    faceRotationY = 0f,
-                    offsetZ = halfSize,
-                    size = cubeSize
-                )
-
-                // Bottom face (rotated 90° around X)
-                CubeFace3D(
-                    keys = listOf("1", "2", "3", "0", ".", "=", "+", "-", "*"),
-                    faceRotationX = 90f,
-                    faceRotationY = 0f,
-                    offsetZ = halfSize,
-                    size = cubeSize
-                )
-
-                // Floating chaos letters - positioned relative to the rotating container
-                chaosLetters.forEach { chaosKey ->
-                    // Calculate 3D position that rotates with the scene
-                    val letterX = chaosKey.x * 0.8f
-                    val letterY = chaosKey.y * 0.8f
-
-                    Box(
-                        modifier = Modifier
-                            .offset(x = letterX.dp, y = letterY.dp)
-                            .graphicsLayer {
-                                // Letters stay upright-ish but move with the scene
-                                this.scaleX = chaosKey.size
-                                this.scaleY = chaosKey.size
-                                this.alpha = 0.95f
+                                if (foundLetter != null) {
+                                    dragStartedOnLetter = true
+                                    isDragging = true
+                                    currentFingerPos = offset
+                                    connectedLetters = listOf(foundLetter)
+                                    currentWord = foundLetter.letter
+                                    vibrate(context, 15, 80)
+                                } else {
+                                    dragStartedOnLetter = false
+                                    isDragging = false
+                                }
+                            } else {
+                                dragStartedOnLetter = false
                             }
-                            .size(45.dp)
-                            .background(Color(0xFFFF6B6B), RoundedCornerShape(8.dp))
-                            .clickable { onLetterTap(chaosKey) },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = chaosKey.letter,
-                            color = Color.White,
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+
+                            if (!isCleanupPhase && dragStartedOnLetter && isDragging) {
+                                val pos = change.position
+                                currentFingerPos = pos
+
+                                val centerX = size.width / 2f
+                                val centerY = size.height / 2f
+
+                                for (chaosKey in currentChaosLetters) {
+                                    if (!connectedLetters.contains(chaosKey)) {
+                                        val screenPos = getLetterScreenPosition(chaosKey, currentRotationX, currentRotationY, currentScale, centerX, centerY)
+                                        // Larger hit radius that works from any angle
+                                        val baseRadius = 55f * currentScale * chaosKey.size
+                                        val hitRadius = baseRadius.coerceAtLeast(35f)
+
+                                        val dx = pos.x - screenPos.x
+                                        val dy = pos.y - screenPos.y
+                                        val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+
+                                        if (distance < hitRadius) {
+                                            connectedLetters = connectedLetters + chaosKey
+                                            currentWord = currentWord + chaosKey.letter
+                                            vibrate(context, 15, 80)
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Rotation mode
+                                onRotationChange(dragAmount.x * 0.3f, -dragAmount.y * 0.3f)
+                            }
+                        },
+                        onDragEnd = {
+                            isDragging = false
+                            currentFingerPos = null
+                            dragStartedOnLetter = false
+                        },
+                        onDragCancel = {
+                            isDragging = false
+                            currentFingerPos = null
+                            dragStartedOnLetter = false
+                        }
+                    )
+                }
+                .pointerInput(Unit) {
+                    detectTapGestures { tapOffset ->
+                        if (isCleanupPhase) {
+                            val centerX = size.width / 2f
+                            val centerY = size.height / 2f
+
+                            for (chaosKey in currentChaosLetters) {
+                                val screenPos = getLetterScreenPosition(chaosKey, currentRotationX, currentRotationY, currentScale, centerX, centerY)
+                                // Larger hit radius that works from any angle
+                                val baseRadius = 55f * currentScale * chaosKey.size
+                                val hitRadius = baseRadius.coerceAtLeast(35f) // Minimum 35px hit area
+
+                                val dx = tapOffset.x - screenPos.x
+                                val dy = tapOffset.y - screenPos.y
+                                val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+
+                                if (distance < hitRadius) {
+                                    vibrate(context, 20, 100)
+                                    currentOnLetterTap(chaosKey)
+                                    return@detectTapGestures
+                                }
+                            }
+                        }
                     }
+                }
+        ) {
+            val centerX = size.width / 2
+            val centerY = size.height / 2
+
+            data class FaceToDraw(
+                val vertices: List<Point3D>,
+                val color: Color,
+                val avgZ: Float,
+                val label: String,
+                val isFront: Boolean,
+                val textColor: Color
+            )
+
+            val allFaces = mutableListOf<FaceToDraw>()
+
+            // =============== CALCULATOR KEYBOARD CUBES ===============
+            val keyboardLayout = listOf(
+                listOf("C", "DEL", "%", "/"),
+                listOf("7", "8", "9", "*"),
+                listOf("4", "5", "6", "-"),
+                listOf("1", "2", "3", "+"),
+                listOf("0", ".", "=", "")
+            )
+
+            fun getKeyColor(key: String): Color = when {
+                key in "0".."9" -> Color(0xFFE8E4DA)
+                key in listOf("+", "-", "*", "/", "=", "%") -> Color(0xFF6B6B6B)
+                key == "C" -> Color(0xFFC9463D)
+                key == "DEL" -> Color(0xFFD4783C)
+                key == "." -> Color(0xFFE8E4DA)
+                else -> Color(0xFF333333)
+            }
+
+            fun getTextColor(key: String): Color = when {
+                key in "0".."9" -> Color(0xFF2D2D2D)
+                key == "." -> Color(0xFF2D2D2D)
+                else -> Color.White
+            }
+
+            val cubeSize = 32f
+            val spacing = 42f
+            val half = cubeSize / 2
+            val totalWidth = 4 * spacing
+            val totalHeight = 5 * spacing
+
+            val faceIndices = listOf(
+                listOf(4, 5, 6, 7), listOf(1, 0, 3, 2), listOf(0, 4, 7, 3),
+                listOf(5, 1, 2, 6), listOf(0, 1, 5, 4), listOf(7, 6, 2, 3)
+            )
+
+            // Build calculator cubes
+            keyboardLayout.forEachIndexed { row, keys ->
+                keys.forEachIndexed { col, key ->
+                    if (key.isNotEmpty()) {
+                        val kx = (col * spacing) - totalWidth / 2 + spacing / 2
+                        val ky = (row * spacing) - totalHeight / 2 + spacing / 2
+                        val keyColor = getKeyColor(key)
+                        val txtColor = getTextColor(key)
+
+                        val verts = listOf(
+                            Point3D(-half + kx, -half + ky, -half),
+                            Point3D(half + kx, -half + ky, -half),
+                            Point3D(half + kx, half + ky, -half),
+                            Point3D(-half + kx, half + ky, -half),
+                            Point3D(-half + kx, -half + ky, half),
+                            Point3D(half + kx, -half + ky, half),
+                            Point3D(half + kx, half + ky, half),
+                            Point3D(-half + kx, half + ky, half)
+                        ).map { rotateX(rotateY(it, rotationY), rotationX) }
+
+                        faceIndices.forEachIndexed { fi, face ->
+                            val fv = face.map { verts[it] }
+                            val faceColor = when (fi) {
+                                0 -> keyColor
+                                1 -> keyColor.copy(alpha = 0.85f)
+                                else -> Color(keyColor.red * 0.55f, keyColor.green * 0.55f, keyColor.blue * 0.55f)
+                            }
+                            allFaces.add(FaceToDraw(fv, faceColor, fv.map { it.z }.average().toFloat(), if (fi == 0) key else "", fi == 0, txtColor))
+                        }
+                    }
+                }
+            }
+
+            // =============== CHAOS LETTER CUBES ===============
+            val letterHalf = 12f
+            chaosLetters.forEach { ck ->
+                val lx = ck.x * 0.6f
+                val ly = ck.y * 0.6f
+                val lz = ck.z * 0.6f
+                val sh = letterHalf * ck.size
+                val isConnected = connectedLetters.contains(ck)
+
+                val verts = listOf(
+                    Point3D(-sh + lx, -sh + ly, -sh + lz),
+                    Point3D(sh + lx, -sh + ly, -sh + lz),
+                    Point3D(sh + lx, sh + ly, -sh + lz),
+                    Point3D(-sh + lx, sh + ly, -sh + lz),
+                    Point3D(-sh + lx, -sh + ly, sh + lz),
+                    Point3D(sh + lx, -sh + ly, sh + lz),
+                    Point3D(sh + lx, sh + ly, sh + lz),
+                    Point3D(-sh + lx, sh + ly, sh + lz)
+                ).map { rotateX(rotateY(it, rotationY), rotationX) }
+
+                val frontColor = if (isConnected) Color(0xFF7A7A7A) else Color(0xFF5A5A5A)
+                val backColor = if (isConnected) Color(0xFF4A4A4A) else Color(0xFF2A2A2A)
+                val sideColor = if (isConnected) Color(0xFF5A5A5A) else Color(0xFF3A3A3A)
+                val txtColor = if (isConnected) Color.White else Color(0xFFDDDDDD)
+
+                faceIndices.forEachIndexed { fi, face ->
+                    val fv = face.map { verts[it] }
+                    val faceColor = when (fi) { 0 -> frontColor; 1 -> backColor; else -> sideColor }
+                    allFaces.add(FaceToDraw(fv, faceColor, fv.map { it.z }.average().toFloat(), if (fi == 0) ck.letter else "", fi == 0, txtColor))
+                }
+            }
+
+            // =============== RENDER SORTED FACES ===============
+            allFaces.sortedBy { it.avgZ }.forEach { face ->
+                val v0 = face.vertices[0]; val v1 = face.vertices[1]; val v2 = face.vertices[2]
+                val crossZ = (v1.x - v0.x) * (v2.y - v1.y) - (v1.y - v0.y) * (v2.x - v1.x)
+
+                if (crossZ > 0) {
+                    val proj = face.vertices.map { project(it, centerX, centerY, scale) }
+                    val path = Path().apply {
+                        moveTo(proj[0].x, proj[0].y)
+                        proj.drop(1).forEach { lineTo(it.x, it.y) }
+                        close()
+                    }
+                    drawPath(path, face.color)
+                    drawPath(path, Color.Black.copy(alpha = 0.35f), style = Stroke(1.2f))
+
+                    if (face.isFront && face.label.isNotEmpty()) {
+                        val cx = proj.map { it.x }.average().toFloat()
+                        val cy = proj.map { it.y }.average().toFloat()
+                        val fw = kotlin.math.abs(proj[1].x - proj[0].x)
+                        val fs = (fw * 0.5f).coerceIn(7f, 18f)
+                        val tr = textMeasurer.measure(face.label, TextStyle(fontSize = fs.sp, fontWeight = FontWeight.Bold, color = face.textColor))
+                        drawText(textLayoutResult = tr, topLeft = Offset(cx - tr.size.width / 2, cy - tr.size.height / 2))
+                    }
+                }
+            }
+
+            // =============== CONSTELLATION LINES (recalculated each frame) ===============
+            if (!isCleanupPhase && connectedLetters.size > 1) {
+                // Calculate current screen positions for connected letters
+                val letterPositions = connectedLetters.mapNotNull { ck ->
+                    if (chaosLetters.contains(ck)) {
+                        getLetterScreenPosition(ck, rotationX, rotationY, scale, centerX, centerY)
+                    } else null
+                }
+
+                if (letterPositions.size > 1) {
+                    for (i in 0 until letterPositions.size - 1) {
+                        val start = letterPositions[i]
+                        val end = letterPositions[i + 1]
+
+                        // Glow layers
+                        drawLine(Color(0xFF87CEEB).copy(alpha = 0.15f), start, end, 16f, cap = StrokeCap.Round)
+                        drawLine(Color(0xFFADD8E6).copy(alpha = 0.25f), start, end, 10f, cap = StrokeCap.Round)
+                        drawLine(Color(0xFFE0FFFF).copy(alpha = 0.4f), start, end, 6f, cap = StrokeCap.Round)
+                        drawLine(Color.White, start, end, 2f, cap = StrokeCap.Round)
+                    }
+
+                    // Star points
+                    letterPositions.forEach { pt ->
+                        drawCircle(Color(0xFF87CEEB).copy(alpha = 0.2f), 20f, pt)
+                        drawCircle(Color(0xFFADD8E6).copy(alpha = 0.35f), 14f, pt)
+                        drawCircle(Color(0xFFE0FFFF).copy(alpha = 0.5f), 9f, pt)
+                        drawCircle(Color.White, 5f, pt)
+                    }
+                }
+            }
+
+            // Trailing line to finger
+            if (!isCleanupPhase && isDragging && connectedLetters.isNotEmpty() && currentFingerPos != null) {
+                val lastLetter = connectedLetters.last()
+                if (chaosLetters.contains(lastLetter)) {
+                    val start = getLetterScreenPosition(lastLetter, rotationX, rotationY, scale, centerX, centerY)
+                    val end = currentFingerPos!!
+                    drawLine(Color(0xFF87CEEB).copy(alpha = 0.1f), start, end, 12f, cap = StrokeCap.Round)
+                    drawLine(Color(0xFFE0FFFF).copy(alpha = 0.25f), start, end, 6f, cap = StrokeCap.Round)
+                    drawLine(Color.White.copy(alpha = 0.5f), start, end, 2f, cap = StrokeCap.Round)
                 }
             }
         }
     }
 }
 
+// Helper function to get letter's current screen position based on rotation
+private fun getLetterScreenPosition(
+    chaosKey: ChaosKey,
+    rotationX: Float,
+    rotationY: Float,
+    scale: Float,
+    centerX: Float,
+    centerY: Float
+): Offset {
+    val lx = chaosKey.x * 0.6f
+    val ly = chaosKey.y * 0.6f
+    val lz = chaosKey.z * 0.6f
+
+    var p = Point3D(lx, ly, lz)
+    p = rotateY(p, rotationY)
+    p = rotateX(p, rotationX)
+
+    return project(p, centerX, centerY, scale)
+}
+
+// Helper function to get letter's transformed Z for hit radius calculation
+private fun getLetterTransformedZ(
+    chaosKey: ChaosKey,
+    rotationX: Float,
+    rotationY: Float
+): Float {
+    val lx = chaosKey.x * 0.6f
+    val ly = chaosKey.y * 0.6f
+    val lz = chaosKey.z * 0.6f
+
+    var p = Point3D(lx, ly, lz)
+    p = rotateY(p, rotationY)
+    p = rotateX(p, rotationX)
+
+    return p.z
+}
+data class Point3D(val x: Float, val y: Float, val z: Float)
+
+// Project 3D point to 2D screen coordinates
+fun project(point: Point3D, centerX: Float, centerY: Float, scale: Float, fov: Float = 500f): Offset {
+    val projectionScale = fov / (fov + point.z)
+    return Offset(
+        centerX + point.x * projectionScale * scale,
+        centerY + point.y * projectionScale * scale
+    )
+}
+
+// Rotate point around Y axis
+fun rotateY(point: Point3D, angle: Float): Point3D {
+    val rad = Math.toRadians(angle.toDouble())
+    val cos = Math.cos(rad).toFloat()
+    val sin = Math.sin(rad).toFloat()
+    return Point3D(
+        point.x * cos - point.z * sin,
+        point.y,
+        point.x * sin + point.z * cos
+    )
+}
+
+// Rotate point around X axis
+fun rotateX(point: Point3D, angle: Float): Point3D {
+    val rad = Math.toRadians(angle.toDouble())
+    val cos = Math.cos(rad).toFloat()
+    val sin = Math.sin(rad).toFloat()
+    return Point3D(
+        point.x,
+        point.y * cos - point.z * sin,
+        point.y * sin + point.z * cos
+    )
+}
+
 @Composable
-fun CubeFace3D(
-    keys: List<String>,
-    faceRotationX: Float,
-    faceRotationY: Float,
-    offsetZ: Float,
-    size: androidx.compose.ui.unit.Dp
+fun Cube3D(
+    rotationX: Float,
+    rotationY: Float,
+    scale: Float,
+    modifier: Modifier = Modifier
 ) {
-    // Calculate translation based on rotation to simulate Z offset
-    // When rotated, we offset in the direction the face is pointing
-    val radY = Math.toRadians(faceRotationY.toDouble())
-    val radX = Math.toRadians(faceRotationX.toDouble())
+    // Calculator keyboard layout - 5 rows x 4 columns
+    val keyboardLayout = remember {
+        listOf(
+            listOf("C", "DEL", "%", "/"),
+            listOf("7", "8", "9", "*"),
+            listOf("4", "5", "6", "-"),
+            listOf("1", "2", "3", "+"),
+            listOf("0", ".", "=", "")
+        )
+    }
 
-    // Calculate X and Y offsets based on face orientation
-    val offsetXDp = (Math.sin(radY) * offsetZ).toFloat()
-    val offsetYDp = (-Math.sin(radX) * Math.cos(radY) * offsetZ).toFloat()
+    // Colors for different key types
+    fun getKeyColor(key: String): Color = when {
+        key in "0".."9" -> Color(0xFFE8E4DA)  // Cream for numbers
+        key in listOf("+", "-", "*", "/", "=", "%") -> Color(0xFF6B6B6B)  // Gray for operators
+        key == "C" -> Color(0xFFC9463D)  // Red for clear
+        key == "DEL" -> Color(0xFFD4783C)  // Orange for delete
+        key == "." -> Color(0xFFE8E4DA)  // Cream for decimal
+        else -> Color(0xFF333333)  // Dark for empty
+    }
 
-    Box(
-        modifier = Modifier
-            .size(size)
-            .offset(x = offsetXDp.dp, y = offsetYDp.dp)
-            .graphicsLayer {
-                this.rotationX = faceRotationX
-                this.rotationY = faceRotationY
-                this.cameraDistance = 12f * density
+    // Size variation for different keys - makes it more chaotic/interesting
+    fun getKeySize(key: String): Float = when {
+        key == "0" -> 138f      // 0 is large
+        key == "=" -> 142f      // Equals is largest
+        key == "C" -> 136f      // Clear is big
+        key == "DEL" -> 134f    // Delete is medium-big
+        key in listOf("+", "-") -> 135f  // Plus/minus are bigger
+        key in listOf("*", "/", "%") -> 130f  // Other operators medium
+        key in "1".."9" -> 132f  // Numbers are standard
+        key == "." -> 126f       // Decimal is smaller
+        else -> 130f
+    }
+
+    // Depth variation for keys - some pop out more
+    fun getKeyDepth(key: String): Float = when {
+        key == "=" -> 20f      // Equals pops out most
+        key == "C" -> 15f      // Clear pops out
+        key in listOf("+", "-", "*", "/") -> 12f  // Operators pop slightly
+        key in "0".."9" -> Random.nextFloat() * 10f - 5f  // Numbers vary
+        else -> 0f
+    }
+
+    val baseSpacing = 145f   // Larger spacing for bigger cubes
+
+    // Face indices for a cube
+    val faceIndices = listOf(
+        listOf(4, 5, 6, 7), // Front
+        listOf(1, 0, 3, 2), // Back
+        listOf(0, 4, 7, 3), // Left
+        listOf(5, 1, 2, 6), // Right
+        listOf(0, 1, 5, 4), // Top
+        listOf(7, 6, 2, 3)  // Bottom
+    )
+
+    // Build all key cubes with their positions, sizes and colors
+    data class KeyCube(
+        val key: String,
+        val centerX: Float,
+        val centerY: Float,
+        val centerZ: Float,
+        val size: Float,
+        val color: Color
+    )
+
+    val keyCubes = remember {
+        val cubes = mutableListOf<KeyCube>()
+        val totalWidth = 4 * baseSpacing
+        val totalHeight = 5 * baseSpacing
+
+        keyboardLayout.forEachIndexed { row, keys ->
+            keys.forEachIndexed { col, key ->
+                if (key.isNotEmpty()) {
+                    val size = getKeySize(key)
+                    val depth = getKeyDepth(key)
+                    cubes.add(
+                        KeyCube(
+                            key = key,
+                            centerX = (col * baseSpacing) - totalWidth / 2 + baseSpacing / 2,
+                            centerY = (row * baseSpacing) - totalHeight / 2 + baseSpacing / 2,
+                            centerZ = depth,
+                            size = size,
+                            color = getKeyColor(key)
+                        )
+                    )
+                }
             }
-            .background(Color(0xFF2A2A2A), RoundedCornerShape(4.dp))
-            .padding(6.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.SpaceEvenly,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            keys.chunked(3).forEach { row ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    row.forEach { key ->
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .background(
-                                    when {
-                                        key in "0".."9" -> Color(0xFFE8E4DA)
-                                        key in listOf("+", "-", "*", "/", "=", "%") -> Color(0xFF6B6B6B)
-                                        key == "C" -> Color(0xFFC9463D)
-                                        key == "DEL" -> Color(0xFFD4783C)
-                                        else -> Color(0xFFD4D0C4)
-                                    },
-                                    RoundedCornerShape(4.dp)
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = key,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (key in "0".."9") Color(0xFF2D2D2D) else Color.White
-                            )
-                        }
+        }
+        cubes
+    }
+
+    // For drawing text on faces
+    val textMeasurer = rememberTextMeasurer()
+
+    Canvas(modifier = modifier) {
+        val screenCenterX = size.width / 2
+        val screenCenterY = size.height / 2
+
+        // Collect all faces from all cubes for depth sorting
+        data class FaceToDraw(
+            val vertices: List<Point3D>,
+            val color: Color,
+            val avgZ: Float,
+            val key: String,
+            val isFront: Boolean
+        )
+
+        val allFaces = mutableListOf<FaceToDraw>()
+
+        keyCubes.forEach { keyCube ->
+            // Create vertices for this specific cube size
+            val half = keyCube.size / 2
+            val cubeVertices = listOf(
+                Point3D(-half + keyCube.centerX, -half + keyCube.centerY, -half + keyCube.centerZ),
+                Point3D(half + keyCube.centerX, -half + keyCube.centerY, -half + keyCube.centerZ),
+                Point3D(half + keyCube.centerX, half + keyCube.centerY, -half + keyCube.centerZ),
+                Point3D(-half + keyCube.centerX, half + keyCube.centerY, -half + keyCube.centerZ),
+                Point3D(-half + keyCube.centerX, -half + keyCube.centerY, half + keyCube.centerZ),
+                Point3D(half + keyCube.centerX, -half + keyCube.centerY, half + keyCube.centerZ),
+                Point3D(half + keyCube.centerX, half + keyCube.centerY, half + keyCube.centerZ),
+                Point3D(-half + keyCube.centerX, half + keyCube.centerY, half + keyCube.centerZ)
+            )
+
+            // Transform (rotate) all vertices
+            val transformedVertices = cubeVertices.map { vertex ->
+                var p = vertex
+                p = rotateY(p, rotationY)
+                p = rotateX(p, rotationX)
+                p
+            }
+
+            // Add each face to the list
+            faceIndices.forEachIndexed { faceIndex, face ->
+                val faceVerts = face.map { transformedVertices[it] }
+                val avgZ = faceVerts.map { it.z }.average().toFloat()
+
+                // Darken sides, lighter for front/back
+                val faceColor = when (faceIndex) {
+                    0 -> keyCube.color  // Front - full color
+                    1 -> keyCube.color.copy(alpha = 0.7f)  // Back
+                    else -> keyCube.color.copy(
+                        red = keyCube.color.red * 0.6f,
+                        green = keyCube.color.green * 0.6f,
+                        blue = keyCube.color.blue * 0.6f
+                    )  // Sides - darker
+                }
+
+                allFaces.add(
+                    FaceToDraw(
+                        vertices = faceVerts,
+                        color = faceColor,
+                        avgZ = avgZ,
+                        key = keyCube.key,
+                        isFront = faceIndex == 0
+                    )
+                )
+            }
+        }
+
+        // Sort all faces by depth (back to front)
+        val sortedFaces = allFaces.sortedBy { it.avgZ }
+
+        // Draw all faces
+        sortedFaces.forEach { faceToDraw ->
+            val faceVertices = faceToDraw.vertices
+
+            // Backface culling
+            val v0 = faceVertices[0]
+            val v1 = faceVertices[1]
+            val v2 = faceVertices[2]
+
+            val edge1X = v1.x - v0.x
+            val edge1Y = v1.y - v0.y
+            val edge2X = v2.x - v1.x
+            val edge2Y = v2.y - v1.y
+            val crossZ = edge1X * edge2Y - edge1Y * edge2X
+
+            if (crossZ > 0) {
+                // Project vertices to 2D
+                val projectedPoints = faceVertices.map { project(it, screenCenterX, screenCenterY, scale) }
+
+                // Create path
+                val path = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(projectedPoints[0].x, projectedPoints[0].y)
+                    projectedPoints.drop(1).forEach { lineTo(it.x, it.y) }
+                    close()
+                }
+
+                // Draw filled face
+                drawPath(path = path, color = faceToDraw.color)
+
+                // Draw edges
+                drawPath(
+                    path = path,
+                    color = Color.Black.copy(alpha = 0.3f),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1f)
+                )
+
+                // Draw key label on front face
+                if (faceToDraw.isFront && faceToDraw.key.isNotEmpty()) {
+                    val centerX = projectedPoints.map { it.x }.average().toFloat()
+                    val centerY = projectedPoints.map { it.y }.average().toFloat()
+
+                    // Calculate face size for font scaling
+                    val faceWidth = (projectedPoints[1].x - projectedPoints[0].x).let {
+                        kotlin.math.abs(it)
                     }
+                    val fontSize = (faceWidth * 0.5f).coerceIn(6f, 14f)
+
+                    val textColor = if (faceToDraw.key in "0".."9" || faceToDraw.key == ".") {
+                        Color(0xFF2D2D2D)
+                    } else {
+                        Color.White
+                    }
+
+                    val textLayoutResult = textMeasurer.measure(
+                        text = faceToDraw.key,
+                        style = TextStyle(
+                            fontSize = fontSize.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = textColor
+                        )
+                    )
+
+                    drawText(
+                        textLayoutResult = textLayoutResult,
+                        topLeft = Offset(
+                            centerX - textLayoutResult.size.width / 2,
+                            centerY - textLayoutResult.size.height / 2
+                        )
+                    )
                 }
             }
         }
