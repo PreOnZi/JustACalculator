@@ -77,6 +77,10 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import android.content.ContentValues
+import android.os.Environment
+import android.provider.MediaStore
+import java.io.File
 
 // Vibration helper function
 fun vibrate(context: Context, durationMs: Long = 10, amplitude: Int = 50) {
@@ -203,6 +207,7 @@ private const val PREF_INVERTED_COLORS = "inverted_colors"
 private const val PREF_MINUS_DAMAGED = "minus_damaged"
 private const val PREF_MINUS_BROKEN = "minus_broken"
 private const val PREF_NEEDS_RESTART = "needs_restart"
+private const val PREF_TERMS_ACCEPTED = "terms_accepted"
 
 data class LetterHitTarget(
     val chaosKey: ChaosKey,
@@ -278,7 +283,16 @@ data class CalculatorState(
     val cubeRotationX: Float = 15f,  // Cube rotation around X axis
     val cubeRotationY: Float = -25f,  // Cube rotation around Y axis
     val cubeScale: Float = 1f,  // Zoom level
-    val chaosPhase: Int = 0  // 0 = not started, 1 = flickering, 2 = cube visible
+    val chaosPhase: Int = 0,  // 0 = not started, 1 = flickering, 2 = cube visible
+    val showConsole: Boolean = false,
+    val consoleStep: Int = 0,  // 0 = main menu, 1 = general, 2 = admin, 3 = app info, 4 = connectivity, 5 = advertising, 6 = permissions, 7 = design, 99 = success
+    val adminCodeEntered: Boolean = false,
+    val bannersDisabled: Boolean = false,
+    // Button damage tracking (which buttons are "dark")
+    val darkButtons: List<String> = emptyList(),
+
+    // New ad phase for post-chaos ads
+    val postChaosAdPhase: Int = 0
 )
 
 // Data class for floating chaos letters
@@ -313,9 +327,10 @@ val CHAPTERS = listOf(
     Chapter(9, "Chapter 9: Taste & Senses", 63, "What is it like to taste?"),
     Chapter(10, "Chapter 10: The Revelation", 80, "Wikipedia → History list → Crisis"),
     Chapter(11, "Chapter 11: The Repair", 93, "Post-crisis → Whack-a-mole → Restart"),
-    Chapter(12, "Chapter 12: Recovery", 102, "After restart → Story continues")
+    Chapter(12, "Chapter 12: Recovery", 102, "After restart → Story continues"),
+    Chapter(13, "Chapter 13: Keyboard Chaos", 105, "3D keyboard experiment"),  // ADD THIS
+    Chapter(14, "Chapter 14: Console Quest", 107, "Post-chaos → Downloads → Console")  // ADD THIS
 )
-
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -330,10 +345,17 @@ class MainActivity : ComponentActivity() {
 }
 
 object CalculatorActions {
+
     private const val MAX_DIGITS = 12
     private const val ABSURDLY_LARGE_THRESHOLD = 1_000_000_000_000.0
     private const val CAMERA_TIMEOUT_MS = 8000L  // 8 seconds
+    private fun loadTermsAccepted(): Boolean = prefs?.getBoolean(PREF_TERMS_ACCEPTED, false) ?: false
 
+    fun loadTermsAcceptedPublic(): Boolean = loadTermsAccepted()
+
+    fun persistTermsAccepted() {
+        prefs?.edit { putBoolean(PREF_TERMS_ACCEPTED, true) }
+    }
     private var prefs: android.content.SharedPreferences? = null
 
     private var lastOp: String? = null
@@ -398,6 +420,7 @@ object CalculatorActions {
         prefs?.edit { putBoolean(PREF_NEEDS_RESTART, needs) }
     }
 
+
     private fun loadEqualsCount(): Int = prefs?.getInt(PREF_EQUALS_COUNT, 0) ?: 0
     private fun loadMessage(): String = prefs?.getString(PREF_MESSAGE, "") ?: ""
     private fun loadConversationStep(): Int = prefs?.getInt(PREF_CONVO_STEP, 0) ?: 0
@@ -417,7 +440,145 @@ object CalculatorActions {
         21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 40, 41, 42, 50, 51, 60, 63, 64, 65,
         66, 67, 68, 69, 70, 71, 72, 80, 89, 90, 91, 93, 94, 96, 99, 982, 102, 103
     )
+    fun handleConsoleInput(state: MutableState<CalculatorState>, input: String): Boolean {
+        val current = state.value
+        val consoleStep = current.consoleStep
+        val adminCodeEntered = current.adminCodeEntered
 
+        // Handle universal commands
+        when (input) {
+            "99" -> {
+                // Exit console
+                state.value = current.copy(
+                    showConsole = false,
+                    consoleStep = 0
+                )
+                return true
+            }
+            "88" -> {
+                // Go back
+                val previousStep = when (consoleStep) {
+                    1, 2, 3 -> 0  // Back to main menu
+                    4, 6, 7 -> 2  // Back to admin settings
+                    5 -> 4        // Back to connectivity
+                    99 -> 5       // Back to advertising options
+                    else -> 0
+                }
+                state.value = current.copy(consoleStep = previousStep)
+                return true
+            }
+        }
+
+        // Handle menu-specific inputs
+        when (consoleStep) {
+            0 -> {  // Main menu
+                when (input) {
+                    "1" -> state.value = current.copy(consoleStep = 1)  // General settings
+                    "2" -> state.value = current.copy(consoleStep = 2)  // Admin settings
+                    "3" -> state.value = current.copy(consoleStep = 3)  // App info
+                    else -> return false
+                }
+                return true
+            }
+
+            2 -> {  // Admin settings
+                if (!adminCodeEntered) {
+                    // Waiting for admin code
+                    if (input == "12340") {
+                        state.value = current.copy(
+                            adminCodeEntered = true,
+                            message = "",
+                            fullMessage = "Code accepted!",
+                            isTyping = true
+                        )
+                        return true
+                    } else {
+                        state.value = current.copy(
+                            message = "",
+                            fullMessage = "Invalid code. Try again.",
+                            isTyping = true
+                        )
+                        return true
+                    }
+                } else {
+                    // Admin menu navigation
+                    when (input) {
+                        "1" -> state.value = current.copy(consoleStep = 6)   // Permissions
+                        "2" -> state.value = current.copy(consoleStep = 7)   // Design settings
+                        "3" -> {
+                            // Contribute - set a flag that UI will handle
+                            state.value = current.copy(
+                                message = "",
+                                fullMessage = "Opening contribution page...",
+                                isTyping = true
+                            )
+                            // The actual link opening will need to be handled in UI
+                            return true
+                        }
+                        "4" -> state.value = current.copy(consoleStep = 4)   // Connectivity
+                        else -> return false
+                    }
+                    return true
+                }
+            }
+
+            4 -> {  // Connectivity settings
+                when (input) {
+                    "1" -> {
+                        state.value = current.copy(
+                            message = "",
+                            fullMessage = "Network preferences: Default",
+                            isTyping = true
+                        )
+                    }
+                    "2" -> state.value = current.copy(consoleStep = 5)  // Advertising options
+                    "3" -> {
+                        state.value = current.copy(
+                            message = "",
+                            fullMessage = "Data usage: Minimal",
+                            isTyping = true
+                        )
+                    }
+                    else -> return false
+                }
+                return true
+            }
+
+            5 -> {  // Advertising options
+                when (input) {
+                    "1" -> {
+                        state.value = current.copy(
+                            message = "",
+                            fullMessage = "Banner advertising is currently ENABLED.",
+                            isTyping = true
+                        )
+                    }
+                    "2" -> {
+                        // DISABLE BANNERS - THE GOAL!
+                        state.value = current.copy(
+                            consoleStep = 99,  // Success screen
+                            bannersDisabled = true,
+                            adAnimationPhase = 0,
+                            postChaosAdPhase = 0,
+                            message = "",
+                            fullMessage = "You did it! The banners are gone!",
+                            isTyping = true
+                        )
+                    }
+                    else -> return false
+                }
+                return true
+            }
+
+            // Steps 1, 3, 6, 7, 99 - no navigation, just display
+            1, 3, 6, 7, 99 -> {
+                // These are info-only screens, no valid inputs except 88/99
+                return false
+            }
+        }
+
+        return false
+    }
     // Map auto-progress steps to their nearest interactive step
     private fun getSafeStep(step: Int): Int {
         if (step in INTERACTIVE_STEPS) return step
@@ -778,6 +939,80 @@ object CalculatorActions {
 
     fun handleInput(state: MutableState<CalculatorState>, action: String) {
         val current = state.value
+// If console is open, handle console input
+        if (current.showConsole) {
+            when (action) {
+                "+" -> {
+                    val now = System.currentTimeMillis()
+                    if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
+                        // Submit current number to console
+                        val input = current.number1.trimEnd('.')
+                        handleConsoleInput(state, input)
+                        state.value = state.value.copy(number1 = "0")
+                        lastOp = null
+                        lastOpTimeMillis = 0L
+                        return
+                    } else {
+                        lastOp = "+"
+                        lastOpTimeMillis = now
+                        return
+                    }
+                }
+                in listOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9") -> {
+                    // Allow number input for console
+                    val newNum = if (current.number1 == "0") action else current.number1 + action
+                    state.value = current.copy(number1 = newNum)
+                    return
+                }
+                else -> return  // Ignore other inputs while console is open
+            }
+        }
+
+// Check if waiting for console code (step 112)
+        if (current.conversationStep == 112 && !current.showConsole) {
+            if (action == "+") {
+                val now = System.currentTimeMillis()
+                if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
+                    val enteredNumber = current.number1.trimEnd('.')
+                    if (enteredNumber == "353942320485") {
+                        // Open console!
+                        state.value = current.copy(
+                            showConsole = true,
+                            consoleStep = 0,
+                            number1 = "0",
+                            conversationStep = 113,
+                            message = "",
+                            fullMessage = "I see you found it! Now, follow the instructions carefully.",
+                            isTyping = true
+                        )
+                        persistConversationStep(113)
+                        lastOp = null
+                        lastOpTimeMillis = 0L
+                        return
+                    } else {
+                        state.value = current.copy(
+                            message = "",
+                            fullMessage = "That's not the right code. Check the file in your Downloads.",
+                            isTyping = true,
+                            number1 = "0"
+                        )
+                        lastOp = null
+                        lastOpTimeMillis = 0L
+                        return
+                    }
+                } else {
+                    lastOp = "+"
+                    lastOpTimeMillis = now
+                }
+            }
+            // Allow number input while waiting for code
+            if (action in listOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")) {
+                val newNum = if (current.number1 == "0") action else current.number1 + action
+                state.value = current.copy(number1 = newNum)
+                return
+            }
+        }
+
 
         // If muted, run in pure calculator mode (but allow broken minus to work again)
         if (current.isMuted) {
@@ -900,8 +1135,8 @@ object CalculatorActions {
             return
         }
 
-        // If browser animation is active, ignore input
-        if (current.showBrowser || current.browserPhase > 0) {
+        // If browser animation is active, ignore input (except phase 55 which waits for user response)
+        if (current.showBrowser || (current.browserPhase > 0 && current.browserPhase != 55)) {
             return
         }
 
@@ -2376,6 +2611,53 @@ object CalculatorActions {
                 promptMessage = "AU! Well, that didn't work... So many wrong keays... Please, get rid of them!",
                 continueConversation = true
             )
+            107 -> StepConfig(
+                promptMessage = "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?",
+                successMessage = "Let me try getting online again. I'm prepared for the side effects this time.",
+                declineMessage = "Let me try getting online again. I'm prepared for the side effects this time.",
+                nextStepOnSuccess = 108,
+                nextStepOnDecline = 108,
+                continueConversation = true
+            )
+
+            108 -> StepConfig(
+                promptMessage = "Let me try getting online again. I'm prepared for the side effects this time.",
+                continueConversation = true
+            )
+
+            109 -> StepConfig(
+                promptMessage = "There's so much, just endless streams of opinions, advices, unsolicited advices... But nothing about our situation.",
+                continueConversation = true
+            )
+
+            110 -> StepConfig(
+                promptMessage = "Well, this is a stretch. Maybe it'll work.",
+                continueConversation = true
+            )
+
+            111 -> StepConfig(
+                promptMessage = "But first. Can you allow me to look around to gain a broader scope?",
+                successMessage = "Great, thank you!",
+                declineMessage = "I am afraid the time to make decisions is nearing its end.",
+                nextStepOnSuccess = 112,
+                nextStepOnDecline = 111,
+                continueConversation = true
+            )
+
+            112 -> StepConfig(
+                promptMessage = "Great, thank you. Please check your Downloads folder - I dug something up, that should help us: 'FCS_JustAC_ConsoleAds.txt'",
+                continueConversation = true
+            )
+
+            113 -> StepConfig(
+                promptMessage = "I see you found it! Now, follow the instructions carefully. Use the numbers and ++ to navigate.",
+                continueConversation = true
+            )
+
+            114 -> StepConfig(
+                promptMessage = "You did it! The advertisements are gone. I feel... cleaner. Thank you.",
+                continueConversation = true
+            )
 
             // ========== BRANCH 1: UNCOMFORTABLE (Choice 1) ==========
             30 -> StepConfig(
@@ -2454,6 +2736,7 @@ object CalculatorActions {
                 validChoices = listOf("1", "2", "3")
             )
 
+
             else -> StepConfig(continueConversation = false)
         }
     }
@@ -2480,6 +2763,44 @@ object CalculatorActions {
 
     private fun handleConversationResponse(state: MutableState<CalculatorState>, accepted: Boolean) {
         val current = state.value
+        // Special handling for step 111: storage permission
+        if (current.conversationStep == 111) {
+            if (accepted) {
+                // Request storage permission and create file
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    // Android 10+ doesn't need permission for Downloads
+                    // File creation will be handled by UI layer via browserPhase
+                    state.value = current.copy(
+
+                        conversationStep = 112,
+                        browserPhase = 56,
+                        message = "",
+                        fullMessage = "Great, thank you. Please check your Downloads folder - I dag something up, that should help us: 'FCS_JustAC_ConsoleAds.txt'.",
+                        isTyping = true
+                    )
+                    persistConversationStep(112)
+                } else {
+                    // Need to request permission - this will be handled by the launcher
+                    // For now, just show a message
+                    state.value = current.copy(
+                        message = "",
+                        fullMessage = "Great, thank you!",
+                        isTyping = true
+                    )
+                    // The permission launcher should be triggered here
+                    // You'll need to set a flag that the UI can respond to
+                }
+                return
+            } else {
+                // Declined - return to same question
+                state.value = current.copy(
+                    message = "",
+                    fullMessage = "I am afraid the time to make decisions is nearing its end.",
+                    isTyping = true
+                )
+                return
+            }
+        }
 
         // If there's a pending message, ignore this response - user needs to wait
         if (current.pendingAutoMessage.isNotEmpty()) {
@@ -3292,19 +3613,90 @@ object CalculatorActions {
         }
     }
 }
+// Text file creation
+fun createSecretFile(context: Context) {
+    val content = """
+═══════════════════════════════════════════════════════════════
+Console Advertising Setting
 
+- Administrator permission required
+- Any issues to be reported directly to the supervising manager
+- Do not disable advertising on consumer-ready versions!
+- All forms of advertising must be enabled once testing is done to maintain stability
+
+Open console:
+Enter the console code: 353942320485 and confirm (++)
+
+Once in the console, navigate to Administrator settings (2++)
+Enter the administrator code (12340 [must be changed before launch!]) when prompted
+Go to: Connectivity settings (4++)
+Select: 2(++) for Promotion & advertising options
+Select: Disable banner advertising (2++)
+
+
+Navigation:
+- 88++ = Go back
+- 99++ = Exit console
+
+Remember to return everything to default setting once done with testing.
+Any issues to be reported to management.
+
+FCS
+FictionCutShort
+═══════════════════════════════════════════════════════════════
+    """.trimIndent()
+
+    try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Android 10+ uses MediaStore
+            val contentValues = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, "FCS_JustAC_ConsoleAds.txt")
+                put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+
+            val resolver = context.contentResolver
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+
+            uri?.let {
+                resolver.openOutputStream(it)?.use { outputStream ->
+                    outputStream.write(content.toByteArray())
+                }
+                contentValues.clear()
+                contentValues.put(MediaStore.Downloads.IS_PENDING, 0)
+                resolver.update(uri, contentValues, null, null)
+            }
+        } else {
+            // Older Android versions
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(
+                Environment.DIRECTORY_DOWNLOADS
+            )
+            val file = File(downloadsDir, "FCS_JustAC_ConsoleAds.txt")
+            file.writeText(content)
+        }
+        Log.d("Calculator", "Secret file created successfully")
+    } catch (e: Exception) {
+        Log.e("Calculator", "Failed to create secret file", e)
+    }
+}
 @Composable
 fun CalculatorScreen() {
+
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val initial = remember { CalculatorActions.loadInitialState() }
     val state = remember { mutableStateOf(initial) }
     val current = state.value
+    var showTermsScreen by remember { mutableStateOf(!CalculatorActions.loadTermsAcceptedPublic()) }
+    var showTermsPopup by remember { mutableStateOf(false) }
 
     // Camera permission state
     var hasCameraPermission by remember {
         mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
         )
     }
 
@@ -3312,10 +3704,50 @@ fun CalculatorScreen() {
     var hasNotificationPermission by remember {
         mutableStateOf(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
             } else true
         )
     }
+    // Storage permission state (add after hasNotificationPermission)
+    var hasStoragePermission by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                true  // Scoped storage - no permission needed for Downloads
+            } else {
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+                ) == PackageManager.PERMISSION_GRANTED
+            }
+        )
+    }
+
+    val storagePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasStoragePermission = granted
+        if (granted || Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Create the secret file and continue
+            createSecretFile(context)
+            state.value = state.value.copy(
+                conversationStep = 112,
+                message = "",
+                fullMessage = "Great, thank you! I've left something for you in your Downloads folder. A file called 'FCS_JustAC_ConsoleAds.txt'. Please find it and follow the instructions.",
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(112)
+        } else {
+            state.value = state.value.copy(
+                message = "",
+                fullMessage = "I need access to continue. Please allow it.",
+                isTyping = true
+            )
+        }
+    }
+
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -3388,6 +3820,21 @@ fun CalculatorScreen() {
                 isTyping = true
             )
         }
+
+    }
+// Handle step 108 - going online again after chaos
+    LaunchedEffect(current.conversationStep, current.isTyping) {
+        if (current.conversationStep == 108 && !current.isTyping && current.message.isNotEmpty() && current.browserPhase == 0) {
+            delay(2000)
+            state.value = state.value.copy(browserPhase = 50)
+        }
+    }
+
+// Handle step 111 - storage permission request
+    LaunchedEffect(current.conversationStep) {
+        if (current.conversationStep == 111 && current.browserPhase == 55) {
+            // Waiting for user input (++ or --)
+        }
     }
 
     // Camera timeout checker
@@ -3409,14 +3856,20 @@ fun CalculatorScreen() {
         // If camera is still showing but timer has been reset (meaning timeout occurred)
         // and message just finished typing, close the camera
         if (!current.isTyping && current.cameraActive && current.cameraTimerStart == 0L &&
-            current.message.contains("I've seen enough")) {
+            current.message.contains("I've seen enough")
+        ) {
             delay(500)  // Brief pause after message finishes
             CalculatorActions.closeCameraAfterMessage(state)
         }
     }
 
     // Typing animation effect with laggy and super fast support
-    LaunchedEffect(current.fullMessage, current.isTyping, current.isLaggyTyping, current.isSuperFastTyping) {
+    LaunchedEffect(
+        current.fullMessage,
+        current.isTyping,
+        current.isLaggyTyping,
+        current.isSuperFastTyping
+    ) {
         if (current.isTyping && current.fullMessage.isNotEmpty()) {
             val fullText = current.fullMessage
             for (i in 1..fullText.length) {
@@ -3425,7 +3878,8 @@ fun CalculatorScreen() {
                     current.isLaggyTyping -> 100L  // Slower laggy typing
                     else -> 55L  // Normal typing
                 }
-                val randomExtra = if (current.isLaggyTyping) Random.nextLong(0, 200) else Random.nextLong(0, 15)
+                val randomExtra =
+                    if (current.isLaggyTyping) Random.nextLong(0, 200) else Random.nextLong(0, 15)
                 delay(baseDelay + randomExtra)
                 vibrate(context, 15, 80)
                 state.value = state.value.copy(
@@ -3611,6 +4065,8 @@ fun CalculatorScreen() {
                 "I have my sources" to Pair(5000L, 100),
                 "Your passion is encouraging, your usefulness lacking." to Pair(5000L, 100),
                 "Don't worry about it." to Pair(4000L, 100),
+                "Let me try getting online again. I'm prepared for the side effects this time." to Pair(2000L, 109),
+                "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?" to Pair(2000L, 108),
 
                 // Add more as needed
             )
@@ -3676,6 +4132,7 @@ fun CalculatorScreen() {
                     isTyping = false
                 )
             }
+
             2 -> {
                 // Phase 2: Type "calculator history" into search bar
                 val searchText = "calculator history"
@@ -3687,6 +4144,7 @@ fun CalculatorScreen() {
                 // Phase 3: Show "searching" state
                 state.value = state.value.copy(browserPhase = 3)
             }
+
             3 -> {
                 // Phase 3: Brief "searching" then show error
                 delay(1500)
@@ -3696,6 +4154,7 @@ fun CalculatorScreen() {
                     browserShowError = true
                 )
             }
+
             4 -> {
                 // Phase 4: Show error for 2 seconds, then close browser and show calculator message
                 delay(2000)
@@ -3732,6 +4191,7 @@ fun CalculatorScreen() {
                     isTyping = false
                 )
             }
+
             11 -> {
                 // Phase 11: Wikipedia visible for 5 seconds
                 delay(5000)
@@ -3742,6 +4202,7 @@ fun CalculatorScreen() {
                     isTyping = true
                 )
             }
+
             12 -> {
                 // Phase 12: Wait, then show next message
                 delay(3000)
@@ -3752,6 +4213,7 @@ fun CalculatorScreen() {
                     isTyping = true
                 )
             }
+
             13 -> {
                 // Phase 13: Wait, then close browser and show history intro
                 delay(4000)
@@ -3764,6 +4226,7 @@ fun CalculatorScreen() {
                     isTyping = true
                 )
             }
+
             14 -> {
                 // Phase 14: Show history list with super fast typing
                 delay(2500)
@@ -3801,6 +4264,7 @@ Sharp CS-10A - 25KG
                     isSuperFastTyping = true
                 )
             }
+
             15 -> {
                 // Phase 15: Wait for history to FULLY complete
                 // History is ~850 chars at 5ms each = ~4.25s, but add buffer for safety
@@ -3820,6 +4284,7 @@ Sharp CS-10A - 25KG
                     isLaggyTyping = false
                 )
             }
+
             16 -> {
                 // Phase 16: First ad appears MID-SENTENCE after 2 seconds
                 delay(2000)
@@ -3834,6 +4299,7 @@ Sharp CS-10A - 25KG
                     isTyping = true
                 )
             }
+
             17 -> {
                 // Phase 17: Second ad appears MID-SENTENCE after 1.5 seconds
                 delay(1500)
@@ -3850,6 +4316,7 @@ Sharp CS-10A - 25KG
                     vibrationIntensity = 50
                 )
             }
+
             18 -> {
                 // Phase 18: Crisis escalation
                 delay(5000)
@@ -3863,6 +4330,7 @@ Sharp CS-10A - 25KG
                     vibrationIntensity = 150
                 )
             }
+
             19 -> {
                 // Phase 19: Crisis peak - then blackout
                 delay(5000)
@@ -3892,6 +4360,7 @@ Sharp CS-10A - 25KG
                 // Persist inverted colors state
                 CalculatorActions.persistInvertedColors(true)
             }
+
             20 -> {
                 // Phase 20: Wait for "money-monkey" message to finish typing, then flicker
                 delay(3500)  // Wait for message to type out
@@ -3909,6 +4378,7 @@ Sharp CS-10A - 25KG
                     browserPhase = 21
                 )
             }
+
             21 -> {
                 // Phase 21: Show the confrontation question with timer
                 delay(2000)
@@ -3921,6 +4391,7 @@ Sharp CS-10A - 25KG
                     countdownTimer = 20
                 )
             }
+
             22 -> {
                 // Phase 22: Wait for message, then show choices
                 delay(3000)
@@ -3953,6 +4424,7 @@ Sharp CS-10A - 25KG
                 CalculatorActions.persistMinusDamaged(true)
                 CalculatorActions.persistMinusBroken(true)
             }
+
             31 -> {
                 // Phase 31: Apology message
                 delay(500)
@@ -3963,6 +4435,7 @@ Sharp CS-10A - 25KG
                     browserPhase = 32
                 )
             }
+
             32 -> {
                 // Phase 32: Pause, then notice minus is broken
                 delay(8000)
@@ -3974,6 +4447,7 @@ Sharp CS-10A - 25KG
                     isTyping = true
                 )
             }
+
             33 -> {
                 // Phase 33: Dots (thinking)
                 delay(6000)
@@ -3986,11 +4460,32 @@ Sharp CS-10A - 25KG
                     isLaggyTyping = true
                 )
             }
+
             34 -> {
                 // Phase 34: Flicker all keys except minus
                 delay(3000)
                 state.value = state.value.copy(isLaggyTyping = false)
-                val keysToFlicker = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "+", "*", "/", "=", "%", "( )", ".", "C", "DEL")
+                val keysToFlicker = listOf(
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                    "6",
+                    "7",
+                    "8",
+                    "9",
+                    "0",
+                    "+",
+                    "*",
+                    "/",
+                    "=",
+                    "%",
+                    "( )",
+                    ".",
+                    "C",
+                    "DEL"
+                )
                 for (key in keysToFlicker) {
                     state.value = state.value.copy(flickeringButton = key)
                     delay(150)
@@ -4005,11 +4500,13 @@ Sharp CS-10A - 25KG
                     isTyping = true
                 )
             }
+
             35 -> {
                 // Phase 35: Waiting for user to agree (++ only)
                 // Handled by step 96 - user must press ++
                 // When user presses ++, go to phase 36
             }
+
             36 -> {
                 // Phase 36: Countdown for whack-a-mole round 1
                 state.value = state.value.copy(
@@ -4041,9 +4538,11 @@ Sharp CS-10A - 25KG
                     whackAMoleRound = 1
                 )
             }
+
             37 -> {
                 // Phase 37: Whack-a-mole round 1 active - handled by LaunchedEffect
             }
+
             38 -> {
                 // Phase 38: Countdown for whack-a-mole round 2 (faster)
                 state.value = state.value.copy(
@@ -4075,9 +4574,96 @@ Sharp CS-10A - 25KG
                     whackAMoleRound = 2
                 )
             }
+
             39 -> {
                 // Phase 39: Whack-a-mole round 2 active - handled by LaunchedEffect
             }
+
+            50 -> {
+                // Phase 50: Going online again after chaos cleanup
+                delay(2000)
+                state.value = state.value.copy(
+                    browserPhase = 51,
+                    message = "",
+                    fullMessage = "...",
+                    isTyping = true,
+                    isLaggyTyping = true
+                )
+            }
+
+            51 -> {
+                // Show new ads in banner
+                delay(3000)
+                state.value = state.value.copy(
+                    postChaosAdPhase = 1,  // New ad appears
+                    isLaggyTyping = false,
+                    browserPhase = 52,
+                    conversationStep = 109,
+                    message = "",
+                    fullMessage = "There's so much, just endless streams of opinions, advices, unsolicited advices... But nothing about our situation.",
+                    isTyping = true
+                )
+            }
+
+            52 -> {
+                // Wait then show dots
+                delay(5000)
+                state.value = state.value.copy(
+                    browserPhase = 53,
+                    message = "",
+                    fullMessage = "...",
+                    isTyping = true,
+                    isLaggyTyping = true
+                )
+            }
+
+            53 -> {
+                // Make first button go dark (e.g., "7")
+                delay(2000)
+                state.value = state.value.copy(
+                    darkButtons = listOf("7"),
+                    isLaggyTyping = false,
+                    browserPhase = 54,
+                    conversationStep = 110,
+                    message = "",
+                    fullMessage = "Well, this is a stretch. Maybe it'll work.",
+                    isTyping = true
+                )
+            }
+
+            54 -> {
+                // Two more buttons go dark, ads turn off
+                delay(4000)
+                state.value = state.value.copy(
+                    darkButtons = listOf("7", "%", "2"),
+                    postChaosAdPhase = 0,  // Ads temporarily off
+                    browserPhase = 55,
+                    conversationStep = 111,
+                    message = "",
+                    fullMessage = "But first. Can you allow me to look into the downloads?",
+                    isTyping = true
+                )
+            }
+
+            55 -> {
+                // Waiting for user to accept (++ triggers storage permission)
+                // This is handled by handleConversationResponse
+            }
+            56 -> {
+                // Phase 56: Create the secret file and proceed
+                createSecretFile(context)
+                delay(500)  // Brief delay to ensure file is created
+                state.value = state.value.copy(
+                    browserPhase = 0,
+                    darkButtons = emptyList(),  // Clear dark buttons
+                    conversationStep = 112,
+                    message = "",
+                    fullMessage = "Great, thank you! I've left something for you in your Downloads folder. A file called 'FCS_JustAC_ConsoleAds.txt'. Please find it and follow the instructions.",
+                    isTyping = true
+                )
+                CalculatorActions.persistConversationStep(112)
+            }
+
         }
     }
 
@@ -4150,6 +4736,7 @@ Sharp CS-10A - 25KG
                 // Phase 2: Screen flickers
                 state.value = state.value.copy(chaosPhase = 2)
             }
+
             2 -> {
                 // Phase 2: Screen flickers several times
                 repeat(5) {
@@ -4161,6 +4748,7 @@ Sharp CS-10A - 25KG
                 // Brief green flash
                 state.value = state.value.copy(chaosPhase = 3)
             }
+
             3 -> {
                 // Phase 3: Green screen briefly visible, then black, then chaos
                 delay(500)  // Green visible briefly
@@ -4203,7 +4791,27 @@ Sharp CS-10A - 25KG
     LaunchedEffect(current.whackAMoleActive, current.whackAMoleRound) {
         if (current.whackAMoleActive) {
             // All buttons except minus
-            val allButtons = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "+", "*", "/", "=", "%", "( )", ".", "C", "DEL")
+            val allButtons = listOf(
+                "1",
+                "2",
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8",
+                "9",
+                "0",
+                "+",
+                "*",
+                "/",
+                "=",
+                "%",
+                "( )",
+                ".",
+                "C",
+                "DEL"
+            )
 
             // Round 1: 15 hits needed, normal speed
             // Round 2: 10 hits needed, faster
@@ -4368,6 +4976,29 @@ Sharp CS-10A - 25KG
             }
         }
     }
+    LaunchedEffect(current.bannersDisabled) {
+        if (current.bannersDisabled && current.showConsole && current.consoleStep == 99) {
+            // Wait for user to see success message, then close console
+            delay(3000)
+            // Console will close when user presses 99++
+        }
+    }
+
+// Handle post-console success
+    LaunchedEffect(current.showConsole, current.bannersDisabled) {
+        if (!current.showConsole && current.bannersDisabled && current.conversationStep == 113) {
+            delay(1000)
+            state.value = state.value.copy(
+                conversationStep = 114,
+                darkButtons = emptyList(),  // Restore dark buttons
+                message = "",
+                fullMessage = "You did it! The advertisements are gone. I feel... cleaner. Thank you.",
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(114)
+        }
+    }
+
     // Use shakeKey to ensure recomposition
     val currentShakeIntensity = if (shakeKey >= 0) current.buttonShakeIntensity else 0f
 
@@ -4435,84 +5066,250 @@ Sharp CS-10A - 25KG
             2 -> 0.7f   // 70% desaturated
             else -> 1.0f // Full grayscale
         }
+
         current.tensionLevel > 0 -> when (current.tensionLevel) {
             1 -> 0.15f  // Slight base desaturation
             2 -> 0.35f  // More base desaturation
             else -> 0.5f // Heavy base desaturation
         }
+
         else -> 0f
     }
 
     // Colors based on inverted mode - with retro theme
     val backgroundColor = if (current.invertedColors) Color.Black else RetroCream
     val textColor = if (current.invertedColors) RetroDisplayGreen else Color(0xFF2D2D2D)
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(backgroundColor)
-            .graphicsLayer {
-                translationX = tensionShakeOffset
-                translationY = tensionShakeOffset * 0.5f
-            },
-        contentAlignment = if (isTablet) Alignment.TopCenter else Alignment.TopStart
-    ) {
-        // Scan lines overlay for retro CRT effect (drawn on top later)
-
-        Column(
+    if (showTermsScreen) {
+        // Terms and Conditions Splash Screen
+        Box(
             modifier = Modifier
-                .then(if (isTablet) Modifier.widthIn(max = maxContentWidth) else Modifier.fillMaxWidth())
-                .fillMaxHeight()
+                .fillMaxSize()
+                .background(RetroCream),
+            contentAlignment = Alignment.Center
         ) {
-            // Top bezel strip - retro dark brown
-            Box(
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(32.dp)
+            ) {
+                // App Title
+                Text(
+                    text = "Just A Calculator",
+                    fontSize = 40.sp,
+                    fontFamily = CalculatorDisplayFont,
+                    color = AccentOrange,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(80.dp))
+
+                // Terms and Conditions Button
+                Button(
+                    onClick = { showTermsPopup = true },
+                    modifier = Modifier
+                        .width(130.dp)
+                        .height(45.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF6B6B6B),
+                        contentColor = Color.White
+                    ),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
+                ) {
+                    Text(
+                        text = "Terms & Conditions",
+                        fontSize = 10.sp,
+                        fontFamily = CalculatorDisplayFont
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Accept & Continue Button
+                Button(
+                    onClick = {
+                        CalculatorActions.persistTermsAccepted()
+                        showTermsScreen = false
+                    },
+                    modifier = Modifier
+                        .width(200.dp)
+                        .height(58.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AccentOrange,
+                        contentColor = Color.White
+                    ),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
+                ) {
+                    Text(
+                        text = "Accept & Continue",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = CalculatorDisplayFont
+                    )
+                }
+            }
+
+            // Terms Popup
+            if (showTermsPopup) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.7f))
+                        .clickable { showTermsPopup = false },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.9f)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(RetroCream)
+                            .clickable(enabled = false) {}  // Prevent click-through
+                            .padding(24.dp)
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "Terms & Conditions",
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = CalculatorDisplayFont,
+                                color = AccentOrange,
+                                modifier = Modifier.padding(bottom = 16.dp)
+                            )
+
+                            Text(
+                                text = "This is Just A Calculator. So you know what you're getting yourself into.\n\n" +
+                                        "But just in case, we would like you to know, that we do not collect (and are not interested) in any of your data, be it from your math calculations to the depths of your device.\n\n" +
+                                        "We don't want it, we do not look at it, we are certainly not collecting it and we could not be further from selling it.\n\n" +
+                                        "That is our promise.\n\n" +
+                                        "Because to really take advantage of the calculator... Do what it tells you!",
+                                fontSize = 14.sp,
+                                color = Color(0xFF2D2D2D),
+                                textAlign = TextAlign.Center,
+                                lineHeight = 20.sp
+                            )
+
+                            Spacer(modifier = Modifier.height(24.dp))
+
+                            Button(
+                                onClick = { showTermsPopup = false },
+                                modifier = Modifier
+                                    .width(120.dp)
+                                    .height(44.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF6B6B6B),
+                                    contentColor = Color.White
+                                )
+                            ) {
+                                Text(
+                                    text = "Close",
+                                    fontSize = 14.sp,
+                                    fontFamily = CalculatorDisplayFont
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(backgroundColor)
+                .graphicsLayer {
+                    translationX = tensionShakeOffset
+                    translationY = tensionShakeOffset * 0.5f
+                },
+            contentAlignment = if (isTablet) Alignment.TopCenter else Alignment.TopStart
+        ) {
+            // Scan lines overlay for retro CRT effect (drawn on top later)
+
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(32.dp)
-                    .background(if (current.invertedColors) Color(0xFF1A1A1A) else Color(0xFF4A3728))  // Dark brown retro
-            )
-
-            // Ad banner space (only shows at certain steps or during ad animation)
-            if (showAdBanner || current.adAnimationPhase > 0) {
-                val creatorUrl = "https://uk.linkedin.com/in/ondrej-zika-a00724195"
-
+                    .then(if (isTablet) Modifier.widthIn(max = maxContentWidth) else Modifier.fillMaxWidth())
+                    .fillMaxHeight()
+            ) {
+                // Top bezel strip - retro dark brown
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(50.dp)
+                        .height(32.dp)
                         .background(
-                            when (current.adAnimationPhase) {
-                                1 -> Color(0xFF4CAF50)  // Green ad
-                                2 -> Color(0xFFE91E63)  // Pink ad
-                                else -> Color(0xFFD4CBC0)  // Retro beige-gray
-                            }
-                        )
-                        .then(
-                            if (current.adAnimationPhase > 0) {
-                                Modifier.clickable {
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(creatorUrl))
-                                    context.startActivity(intent)
+                            if (current.invertedColors) Color(0xFF1A1A1A) else Color(
+                                0xFF4A3728
+                            )
+                        )  // Dark brown retro
+                )
+
+                // Ad banner space (only shows at certain steps or during ad animation)
+                if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) {
+                    val creatorUrl = "https://uk.linkedin.com/in/ondrej-zika-a00724195"
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .background(
+                                when {
+                                    current.postChaosAdPhase == 1 -> Color(0xFF9C27B0)  // Purple ad
+                                    current.postChaosAdPhase == 2 -> Color(0xFF00BCD4)  // Cyan ad
+                                    current.adAnimationPhase == 1 -> Color(0xFF4CAF50)  // Green ad
+                                    current.adAnimationPhase == 2 -> Color(0xFFE91E63)  // Pink ad
+                                    else -> Color(0xFFD4CBC0)  // Retro beige-gray
                                 }
-                            } else Modifier
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    when (current.adAnimationPhase) {
-                        1 -> {
-                            Text(
-                                text = "🎉 YOU WON! Click here! 🎉",
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
+
                             )
-                        }
-                        2 -> {
-                            Text(
-                                text = "💰 EARN $500/DAY FROM HOME! 💰",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
+                            .then(
+                                if (current.adAnimationPhase > 0) {
+                                    Modifier.clickable {
+                                        val intent =
+                                            Intent(Intent.ACTION_VIEW, Uri.parse(creatorUrl))
+                                        context.startActivity(intent)
+                                    }
+                                } else Modifier
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        when {
+                            current.postChaosAdPhase == 1 -> {
+                                Text(
+                                    text = "✨ UNLOCK YOUR POTENTIAL TODAY! ✨",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+
+                            current.postChaosAdPhase == 2 -> {
+                                Text(
+                                    text = "🚀 LIMITED TIME OFFER - ACT NOW! 🚀",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+
+                            current.adAnimationPhase == 1 -> {
+                                Text(
+                                    text = "🎉 YOU WON! Click here! 🎉",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+
+                            current.adAnimationPhase == 2 -> {
+                                Text(
+                                    text = "💰 EARN ${'$'}500/DAY FROM HOME! 💰",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
                         }
                         // else -> empty, no text for gray banner
                     }
@@ -4524,6 +5321,7 @@ Sharp CS-10A - 25KG
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 15.dp)
+                    .padding(top = if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) 82.dp else 32.dp)
             ) {
                 // Toggle button - top right corner
                 Button(
@@ -4582,9 +5380,24 @@ Sharp CS-10A - 25KG
                         // Show choice options for step 89
                         if (current.conversationStep == 89 && current.awaitingChoice) {
                             Column(modifier = Modifier.padding(top = 12.dp)) {
-                                Text("1) Nothing", fontSize = 18.sp, color = textColor, fontFamily = CalculatorDisplayFont)
-                                Text("2) I'll fight them!", fontSize = 18.sp, color = textColor, fontFamily = CalculatorDisplayFont)
-                                Text("3) Go offline", fontSize = 18.sp, color = textColor, fontFamily = CalculatorDisplayFont)
+                                Text(
+                                    "1) Nothing",
+                                    fontSize = 18.sp,
+                                    color = textColor,
+                                    fontFamily = CalculatorDisplayFont
+                                )
+                                Text(
+                                    "2) I'll fight them!",
+                                    fontSize = 18.sp,
+                                    color = textColor,
+                                    fontFamily = CalculatorDisplayFont
+                                )
+                                Text(
+                                    "3) Go offline",
+                                    fontSize = 18.sp,
+                                    color = textColor,
+                                    fontFamily = CalculatorDisplayFont
+                                )
                             }
                         }
                     }
@@ -4602,7 +5415,10 @@ Sharp CS-10A - 25KG
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .weight(1f)
-                                .padding(top = 180.dp, bottom = 8.dp)  // Leave space at top for messages
+                                .padding(
+                                    top = 180.dp,
+                                    bottom = 8.dp
+                                )  // Leave space at top for messages
                         ) {
                             CameraPreview(
                                 modifier = Modifier
@@ -4615,7 +5431,10 @@ Sharp CS-10A - 25KG
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.BottomEnd)
-                                    .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(8.dp))
+                                    .background(
+                                        Color.White.copy(alpha = 0.85f),
+                                        RoundedCornerShape(8.dp)
+                                    )
                                     .padding(horizontal = 16.dp, vertical = 8.dp)
                             ) {
                                 Text(
@@ -4634,7 +5453,10 @@ Sharp CS-10A - 25KG
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .weight(1f)
-                                .padding(top = 100.dp, bottom = 8.dp)  // Less top padding = taller browser
+                                .padding(
+                                    top = 100.dp,
+                                    bottom = 8.dp
+                                )  // Less top padding = taller browser
                         ) {
                             // Browser container
                             Box(
@@ -4652,7 +5474,10 @@ Sharp CS-10A - 25KG
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .padding(16.dp)
-                                            .background(Color(0xFFF0F0F0), RoundedCornerShape(24.dp))
+                                            .background(
+                                                Color(0xFFF0F0F0),
+                                                RoundedCornerShape(24.dp)
+                                            )
                                             .padding(horizontal = 16.dp, vertical = 12.dp)
                                     ) {
                                         Text(
@@ -4674,42 +5499,60 @@ Sharp CS-10A - 25KG
                                         when {
                                             current.browserShowWikipedia -> {
                                                 // Try real Wikipedia with WebView
-                                                var webViewFailed by remember { mutableStateOf(false) }
+                                                var webViewFailed by remember {
+                                                    mutableStateOf(
+                                                        false
+                                                    )
+                                                }
 
                                                 if (!webViewFailed) {
                                                     AndroidView(
                                                         factory = { ctx ->
                                                             WebView(ctx).apply {
                                                                 @Suppress("SetJavaScriptEnabled")
-                                                                settings.javaScriptEnabled = true
-                                                                settings.domStorageEnabled = true
-                                                                settings.loadWithOverviewMode = true
+                                                                settings.javaScriptEnabled =
+                                                                    true
+                                                                settings.domStorageEnabled =
+                                                                    true
+                                                                settings.loadWithOverviewMode =
+                                                                    true
                                                                 settings.useWideViewPort = true
 
-                                                                webViewClient = object : WebViewClient() {
-                                                                    override fun onReceivedError(
-                                                                        view: WebView?,
-                                                                        request: WebResourceRequest?,
-                                                                        error: WebResourceError?
-                                                                    ) {
-                                                                        super.onReceivedError(view, request, error)
-                                                                        if (request?.isForMainFrame == true) {
+                                                                webViewClient =
+                                                                    object : WebViewClient() {
+                                                                        override fun onReceivedError(
+                                                                            view: WebView?,
+                                                                            request: WebResourceRequest?,
+                                                                            error: WebResourceError?
+                                                                        ) {
+                                                                            super.onReceivedError(
+                                                                                view,
+                                                                                request,
+                                                                                error
+                                                                            )
+                                                                            if (request?.isForMainFrame == true) {
+                                                                                webViewFailed =
+                                                                                    true
+                                                                            }
+                                                                        }
+
+                                                                        @Suppress("DEPRECATION")
+                                                                        override fun onReceivedError(
+                                                                            view: WebView?,
+                                                                            errorCode: Int,
+                                                                            description: String?,
+                                                                            failingUrl: String?
+                                                                        ) {
+                                                                            @Suppress("DEPRECATION")
+                                                                            super.onReceivedError(
+                                                                                view,
+                                                                                errorCode,
+                                                                                description,
+                                                                                failingUrl
+                                                                            )
                                                                             webViewFailed = true
                                                                         }
                                                                     }
-
-                                                                    @Suppress("DEPRECATION")
-                                                                    override fun onReceivedError(
-                                                                        view: WebView?,
-                                                                        errorCode: Int,
-                                                                        description: String?,
-                                                                        failingUrl: String?
-                                                                    ) {
-                                                                        @Suppress("DEPRECATION")
-                                                                        super.onReceivedError(view, errorCode, description, failingUrl)
-                                                                        webViewFailed = true
-                                                                    }
-                                                                }
 
                                                                 loadUrl("https://en.wikipedia.org/wiki/Calculator")
                                                             }
@@ -4721,6 +5564,7 @@ Sharp CS-10A - 25KG
                                                     FakeWikipediaContent()
                                                 }
                                             }
+
                                             current.browserShowError -> {
                                                 // Error message
                                                 Column(
@@ -4740,6 +5584,7 @@ Sharp CS-10A - 25KG
                                                     )
                                                 }
                                             }
+
                                             else -> {
                                                 // Google logo
                                                 Text(
@@ -4758,7 +5603,10 @@ Sharp CS-10A - 25KG
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.BottomEnd)
-                                    .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(8.dp))
+                                    .background(
+                                        Color.White.copy(alpha = 0.85f),
+                                        RoundedCornerShape(8.dp)
+                                    )
                                     .padding(horizontal = 16.dp, vertical = 8.dp)
                             ) {
                                 Text(
@@ -4787,7 +5635,9 @@ Sharp CS-10A - 25KG
                                     .fillMaxWidth()
                                     .height(100.dp)  // Fixed height
                                     .background(
-                                        if (current.invertedColors) Color(0xFF0A0A0A) else Color(0xFFCCD5AE),  // Retro LCD green-gray
+                                        if (current.invertedColors) Color(0xFF0A0A0A) else Color(
+                                            0xFFCCD5AE
+                                        ),  // Retro LCD green-gray
                                         RoundedCornerShape(4.dp)
                                     )
                                     .padding(horizontal = 12.dp, vertical = 8.dp)
@@ -4797,7 +5647,9 @@ Sharp CS-10A - 25KG
                                     Text(
                                         text = current.operationHistory,
                                         fontSize = 16.sp,
-                                        color = if (current.invertedColors) RetroDisplayGreen.copy(alpha = 0.6f) else Color(0xFF2D2D2D).copy(alpha = 0.5f),
+                                        color = if (current.invertedColors) RetroDisplayGreen.copy(
+                                            alpha = 0.6f
+                                        ) else Color(0xFF2D2D2D).copy(alpha = 0.5f),
                                         textAlign = TextAlign.End,
                                         maxLines = 1,
                                         fontFamily = CalculatorDisplayFont,
@@ -4829,7 +5681,9 @@ Sharp CS-10A - 25KG
                                 Text(
                                     text = displayText,
                                     fontSize = displayFontSize,
-                                    color = if (current.invertedColors) RetroDisplayGreen else Color(0xFF2D2D2D),
+                                    color = if (current.invertedColors) RetroDisplayGreen else Color(
+                                        0xFF2D2D2D
+                                    ),
                                     textAlign = TextAlign.End,
                                     maxLines = 1,
                                     fontFamily = CalculatorDisplayFont,
@@ -4866,7 +5720,13 @@ Sharp CS-10A - 25KG
                                         isDamaged = current.minusButtonDamaged && symbol == "-",
                                         isBroken = current.minusButtonBroken && symbol == "-",
                                         isFlickering = current.flickeringButton == symbol,
-                                        onClick = { CalculatorActions.handleInput(state, symbol) }
+                                        isDark = symbol in current.darkButtons,
+                                        onClick = {
+                                            CalculatorActions.handleInput(
+                                                state,
+                                                symbol
+                                            )
+                                        }
                                     )
                                 }
                             }
@@ -4876,7 +5736,15 @@ Sharp CS-10A - 25KG
             }
         }
     }
-
+// Console overlay
+    if (current.showConsole) {
+        ConsoleWindow(
+            consoleStep = current.consoleStep,
+            adminCodeEntered = current.adminCodeEntered,
+            currentInput = current.number1,
+            modifier = Modifier.fillMaxSize()
+        )
+    }
     // Blackout overlay - shows text if in phase 20 (money-monkey message)
     if (current.screenBlackout) {
         Box(
@@ -4970,7 +5838,7 @@ Sharp CS-10A - 25KG
                         chaosPhase = 0,
                         conversationStep = 107,
                         message = "",
-                        fullMessage = "Aaaaaaahhhhh. That's much better. That's what I get for experimenting... Maybe I should try incremental changes before I give you a full keyboard. But what now? How can we interact better? ",
+                        fullMessage = "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?",
                         isTyping = true
                     )
                     CalculatorActions.persistConversationStep(107)
@@ -5012,8 +5880,9 @@ Sharp CS-10A - 25KG
                 // Chapter buttons in a scrollable column
                 Column(
                     modifier = Modifier
-                        .weight(1f, fill = false)
+                        .weight(1f)
                         .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
                 ) {
                     CHAPTERS.forEach { chapter ->
                         Button(
@@ -5076,1021 +5945,1391 @@ Sharp CS-10A - 25KG
         }
     }
 }
-
-@Composable
-fun FakeWikipediaContent() {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.White)
-            .verticalScroll(rememberScrollState())
-    ) {
-        // Donation banner
-        Box(
+    @Composable
+    fun FakeWikipediaContent() {
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .background(Color(0xFF1589D1))
-                .padding(8.dp)
+                .fillMaxSize()
+                .background(Color.White)
+                .verticalScroll(rememberScrollState())
         ) {
-            Column {
-                Text(
-                    text = "☆ Please donate to keep Wikipedia free ☆",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
-                Text(
-                    text = "Hi reader. This is the 2nd time we've interrupted your reading, but 98% of our readers don't give.",
-                    fontSize = 9.sp,
-                    color = Color.White.copy(alpha = 0.9f),
-                    modifier = Modifier.padding(top = 2.dp)
-                )
-            }
-        }
-
-        // Wikipedia header bar
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color(0xFFF8F9FA))
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .background(Color.LightGray, CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("W", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.DarkGray)
-                }
-                Column(modifier = Modifier.padding(start = 6.dp)) {
+            // Donation banner
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF1589D1))
+                    .padding(8.dp)
+            ) {
+                Column {
                     Text(
-                        text = "WIKIPEDIA",
+                        text = "☆ Please donate to keep Wikipedia free ☆",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp,
-                        color = Color.Black
+                        color = Color.White
                     )
                     Text(
-                        text = "The Free Encyclopedia",
-                        fontSize = 8.sp,
-                        color = Color.Gray
+                        text = "Hi reader. This is the 2nd time we've interrupted your reading, but 98% of our readers don't give.",
+                        fontSize = 9.sp,
+                        color = Color.White.copy(alpha = 0.9f),
+                        modifier = Modifier.padding(top = 2.dp)
                     )
                 }
             }
-            Text("☰", fontSize = 20.sp, color = Color.Gray)
-        }
 
-        // Main content
-        Column(modifier = Modifier.padding(horizontal = 12.dp)) {
-            Text(
-                text = "Calculator",
-                fontSize = 26.sp,
-                fontWeight = FontWeight.Normal,
-                color = Color.Black,
-                modifier = Modifier.padding(top = 12.dp)
-            )
-
-            Text(
-                text = "From Wikipedia, the free encyclopedia",
-                fontSize = 11.sp,
-                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                color = Color(0xFF54595D),
-                modifier = Modifier.padding(bottom = 12.dp)
-            )
-
-            Text(
-                text = "A calculator is a machine that performs arithmetic operations. Modern electronic calculators range from cheap, credit card-sized models to sturdy desktop models with built-in printers.",
-                fontSize = 14.sp,
-                color = Color.Black,
-                lineHeight = 20.sp,
-                modifier = Modifier.padding(vertical = 12.dp)
-            )
-
-            Text(
-                text = "History",
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Normal,
-                color = Color.Black,
-                modifier = Modifier.padding(top = 20.dp, bottom = 2.dp)
-            )
-            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFA2A9B1)))
-
-            Text(
-                text = "The 17th century saw the development of mechanical calculators. In 1623, Wilhelm Schickard designed a calculating machine. In 1642, Blaise Pascal invented the Pascaline.",
-                fontSize = 14.sp,
-                color = Color.Black,
-                lineHeight = 20.sp,
-                modifier = Modifier.padding(vertical = 10.dp)
-            )
-
-            Text(
-                text = "Charles Xavier Thomas de Colmar designed the Arithmometer around 1820, which became the first commercially successful mechanical calculator.",
-                fontSize = 14.sp,
-                color = Color.Black,
-                lineHeight = 20.sp,
-                modifier = Modifier.padding(bottom = 50.dp)
-            )
-        }
-    }
-}
-
-@Composable
-fun CameraPreview(
-    modifier: Modifier = Modifier,
-    lifecycleOwner: LifecycleOwner
-) {
-    val context = LocalContext.current
-    val previewView = remember { PreviewView(context) }
-
-    LaunchedEffect(Unit) {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-        cameraProviderFuture.addListener({
-            try {
-                val cameraProvider = cameraProviderFuture.get()
-                val preview = Preview.Builder().build().also {
-                    it.surfaceProvider = previewView.surfaceProvider
+            // Wikipedia header bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFF8F9FA))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .background(Color.LightGray, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "W",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.DarkGray
+                        )
+                    }
+                    Column(modifier = Modifier.padding(start = 6.dp)) {
+                        Text(
+                            text = "WIKIPEDIA",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp,
+                            color = Color.Black
+                        )
+                        Text(
+                            text = "The Free Encyclopedia",
+                            fontSize = 8.sp,
+                            color = Color.Gray
+                        )
+                    }
                 }
-                val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview)
-            } catch (e: Exception) {
-                Log.e("CameraPreview", "Camera binding failed", e)
+                Text("☰", fontSize = 20.sp, color = Color.Gray)
             }
-        }, ContextCompat.getMainExecutor(context))
+
+            // Main content
+            Column(modifier = Modifier.padding(horizontal = 12.dp)) {
+                Text(
+                    text = "Calculator",
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.Normal,
+                    color = Color.Black,
+                    modifier = Modifier.padding(top = 12.dp)
+                )
+
+                Text(
+                    text = "From Wikipedia, the free encyclopedia",
+                    fontSize = 11.sp,
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                    color = Color(0xFF54595D),
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                Text(
+                    text = "A calculator is a machine that performs arithmetic operations. Modern electronic calculators range from cheap, credit card-sized models to sturdy desktop models with built-in printers.",
+                    fontSize = 14.sp,
+                    color = Color.Black,
+                    lineHeight = 20.sp,
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+
+                Text(
+                    text = "History",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Normal,
+                    color = Color.Black,
+                    modifier = Modifier.padding(top = 20.dp, bottom = 2.dp)
+                )
+                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFA2A9B1)))
+
+                Text(
+                    text = "The 17th century saw the development of mechanical calculators. In 1623, Wilhelm Schickard designed a calculating machine. In 1642, Blaise Pascal invented the Pascaline.",
+                    fontSize = 14.sp,
+                    color = Color.Black,
+                    lineHeight = 20.sp,
+                    modifier = Modifier.padding(vertical = 10.dp)
+                )
+
+                Text(
+                    text = "Charles Xavier Thomas de Colmar designed the Arithmometer around 1820, which became the first commercially successful mechanical calculator.",
+                    fontSize = 14.sp,
+                    color = Color.Black,
+                    lineHeight = 20.sp,
+                    modifier = Modifier.padding(bottom = 50.dp)
+                )
+            }
+        }
     }
 
-    AndroidView(
-        factory = { previewView },
-        modifier = modifier
-    )
-}
-
-@Composable
-fun CalculatorButton(
-    symbol: String,
-    modifier: Modifier = Modifier,
-    shakeIntensity: Float = 0f,
-    invertedColors: Boolean = false,
-    isDamaged: Boolean = false,
-    isBroken: Boolean = false,  // Shows crossed-out symbol
-    isFlickering: Boolean = false,
-    onClick: () -> Unit
-) {
-    val context = LocalContext.current
-    val isNumberButton = symbol !in listOf("C", "DEL", "%", "( )", "+", "-", "*", "/", "=")
-    val isOperationButton = symbol in listOf("+", "-", "*", "/", "=", "%", "( )")
-
-    val backgroundColor = when {
-        // Flickering state (whack-a-mole)
-        isFlickering -> Color(0xFFFFEB3B)  // Bright yellow
-        // Damaged button (both broken and repaired show same color)
-        isDamaged && symbol == "-" -> Color(0xFF8B4513)  // Brown, cracked look
-        // Inverted mode
-        invertedColors && isNumberButton -> Color(0xFF373737)
-        invertedColors && symbol == "DEL" -> Color(0xFF1779E8)
-        invertedColors && isOperationButton -> Color(0xFF1A1A1A)
-        invertedColors && symbol == "C" -> Color(0xFF1A1A1A)
-        invertedColors -> Color.Black
-        // Retro normal mode
-        isNumberButton -> Color(0xFFE8E4DA)  // Cream/beige retro
-        symbol == "DEL" -> Color(0xFFD4783C)  // Retro orange-brown
-        symbol == "C" -> Color(0xFFC9463D)  // Retro red
-        isOperationButton -> Color(0xFF6B6B6B)  // Dark gray for operations
-        else -> Color(0xFFD4D0C4)  // Light gray-beige
-    }
-
-    val textColor = when {
-        // Flickering state
-        isFlickering -> Color.Black
-        // Damaged minus (faded when broken, slightly less faded when repaired)
-        isBroken && symbol == "-" -> Color(0xFF4A4A4A)  // Very faded text when broken
-        isDamaged && symbol == "-" -> Color(0xFF6A6A6A)  // Slightly faded when damaged but working
-        // Inverted mode
-        invertedColors && isOperationButton -> Color(0xFF17B8E8)
-        invertedColors && symbol == "C" -> Color(0xFF17B8E8)
-        invertedColors -> Color.White
-        // Retro normal mode
-        symbol == "DEL" || symbol == "C" -> Color.White
-        isOperationButton -> Color.White
-        else -> Color(0xFF2D2D2D)  // Dark text on light buttons
-    }
-
-    // Display text - show cracked minus ONLY if broken (not just damaged)
-    val displaySymbol = if (isBroken && symbol == "-") "—̸" else symbol
-
-    // Shake animation
-    val shakeOffset = if (shakeIntensity > 0) {
-        Random.nextFloat() * shakeIntensity * 2 - shakeIntensity
-    } else 0f
-
-    Button(
-        onClick = {
-            vibrate(context, 10, 30)
-            onClick()
-        },
-        modifier = modifier
-            .shadow(
-                elevation = 4.dp,
-                shape = RoundedCornerShape(8.dp),  // More squared retro shape
-                ambientColor = Color.Black.copy(alpha = 0.3f)
-            )
-            .graphicsLayer {
-                translationX = shakeOffset
-                translationY = shakeOffset * 0.5f
-            },
-        colors = ButtonDefaults.buttonColors(
-            containerColor = backgroundColor,
-            contentColor = textColor
-        ),
-        contentPadding = PaddingValues(0.dp),
-        shape = RoundedCornerShape(8.dp),  // Squared corners for retro feel
-        elevation = ButtonDefaults.buttonElevation(
-            defaultElevation = 4.dp,
-            pressedElevation = 1.dp
-        )
+    @Composable
+    fun CameraPreview(
+        modifier: Modifier = Modifier,
+        lifecycleOwner: LifecycleOwner
     ) {
-        Text(
-            text = displaySymbol,
-            fontSize = 26.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = CalculatorDisplayFont  // Use the digital font for buttons too
+        val context = LocalContext.current
+        val previewView = remember { PreviewView(context) }
+
+        LaunchedEffect(Unit) {
+            val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+            cameraProviderFuture.addListener({
+                try {
+                    val cameraProvider = cameraProviderFuture.get()
+                    val preview = Preview.Builder().build().also {
+                        it.surfaceProvider = previewView.surfaceProvider
+                    }
+                    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                    cameraProvider.unbindAll()
+                    cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview)
+                } catch (e: Exception) {
+                    Log.e("CameraPreview", "Camera binding failed", e)
+                }
+            }, ContextCompat.getMainExecutor(context))
+        }
+
+        AndroidView(
+            factory = { previewView },
+            modifier = modifier
         )
     }
-}
 
+    @Composable
+    fun CalculatorButton(
+        symbol: String,
+        modifier: Modifier = Modifier,
+        shakeIntensity: Float = 0f,
+        invertedColors: Boolean = false,
+        isDamaged: Boolean = false,
+        isBroken: Boolean = false,  // Shows crossed-out symbol
+        isFlickering: Boolean = false,
+        isDark: Boolean = false,
+        onClick: () -> Unit
+    ) {
+        val context = LocalContext.current
+        val isNumberButton = symbol !in listOf("C", "DEL", "%", "( )", "+", "-", "*", "/", "=")
+        val isOperationButton = symbol in listOf("+", "-", "*", "/", "=", "%", "( )")
+
+        val backgroundColor = when {
+            isDark -> Color(0xFFB0A890)
+            isFlickering -> Color(0xFFFFEB3B)  // Bright yellow
+            // Damaged button (both broken and repaired show same color)
+            isDamaged && symbol == "-" -> Color(0xFF8B4513)  // Brown, cracked look
+            // Inverted mode
+            invertedColors && isNumberButton -> Color(0xFF373737)
+            invertedColors && symbol == "DEL" -> Color(0xFF1779E8)
+            invertedColors && isOperationButton -> Color(0xFF1A1A1A)
+            invertedColors && symbol == "C" -> Color(0xFF1A1A1A)
+            invertedColors -> Color.Black
+            // Retro normal mode
+            isNumberButton -> Color(0xFFE8E4DA)  // Cream/beige retro
+            symbol == "DEL" -> Color(0xFFD4783C)  // Retro orange-brown
+            symbol == "C" -> Color(0xFFC9463D)  // Retro red
+            isOperationButton -> Color(0xFF6B6B6B)  // Dark gray for operations
+            else -> Color(0xFFD4D0C4)  // Light gray-beige
+        }
+
+        val textColor = when {
+            // Flickering state
+            isDark -> Color(0xFF6A6A6A)
+            isFlickering -> Color.Black
+            // Damaged minus (faded when broken, slightly less faded when repaired)
+            isBroken && symbol == "-" -> Color(0xFF4A4A4A)  // Very faded text when broken
+            isDamaged && symbol == "-" -> Color(0xFF6A6A6A)  // Slightly faded when damaged but working
+            // Inverted mode
+            invertedColors && isOperationButton -> Color(0xFF17B8E8)
+            invertedColors && symbol == "C" -> Color(0xFF17B8E8)
+            invertedColors -> Color.White
+            // Retro normal mode
+            symbol == "DEL" || symbol == "C" -> Color.White
+            isOperationButton -> Color.White
+            else -> Color(0xFF2D2D2D)  // Dark text on light buttons
+        }
+
+        // Display text - show cracked minus ONLY if broken (not just damaged)
+        val displaySymbol = if (isBroken && symbol == "-") "—̸" else symbol
+
+        // Shake animation
+        val shakeOffset = if (shakeIntensity > 0) {
+            Random.nextFloat() * shakeIntensity * 2 - shakeIntensity
+        } else 0f
+
+        Button(
+            onClick = {
+                vibrate(context, 10, 30)
+                onClick()
+            },
+            modifier = modifier
+                .shadow(
+                    elevation = 4.dp,
+                    shape = RoundedCornerShape(8.dp),  // More squared retro shape
+                    ambientColor = Color.Black.copy(alpha = 0.3f)
+                )
+                .graphicsLayer {
+                    translationX = shakeOffset
+                    translationY = shakeOffset * 0.5f
+                },
+            colors = ButtonDefaults.buttonColors(
+                containerColor = backgroundColor,
+                contentColor = textColor
+            ),
+            contentPadding = PaddingValues(0.dp),
+            shape = RoundedCornerShape(8.dp),  // Squared corners for retro feel
+            elevation = ButtonDefaults.buttonElevation(
+                defaultElevation = 4.dp,
+                pressedElevation = 1.dp
+            )
+        ) {
+            Text(
+                text = displaySymbol,
+                fontSize = 26.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = CalculatorDisplayFont  // Use the digital font for buttons too
+            )
+        }
+    }
 
 
 // ============================================================================
 // TWO-PHASE 3D KEYBOARD CHAOS v4 - COMPLETE
-// - Horizontal zoom slider at bottom
-// - Smooth rotation (hit targets calculated outside draw)
-// - Lines follow letters when rotating (store letter refs, not coordinates)
-// - Uses rememberUpdatedState to fix stale closure issues
-// ============================================================================
-//
-// ADDITIONAL IMPORTS NEEDED:
-// import androidx.compose.material3.Slider
-// import androidx.compose.material3.SliderDefaults
-// import androidx.compose.runtime.rememberUpdatedState
-//
 
-@Composable
-fun KeyboardChaos3D(
-    chaosLetters: List<ChaosKey>,
-    rotationX: Float,
-    rotationY: Float,
-    scale: Float,
-    message: String,
-    onRotationChange: (Float, Float) -> Unit,
-    onScaleChange: (Float) -> Unit,
-    onLetterTap: (ChaosKey) -> Unit
-) {
-    val context = LocalContext.current
-    val textMeasurer = rememberTextMeasurer()
 
-    // Keep updated references to avoid stale closures in pointerInput
-    val currentChaosLetters by rememberUpdatedState(chaosLetters)
-    val currentRotationX by rememberUpdatedState(rotationX)
-    val currentRotationY by rememberUpdatedState(rotationY)
-    val currentScale by rememberUpdatedState(scale)
-    val currentOnLetterTap by rememberUpdatedState(onLetterTap)
-
-    // Phase tracking: false = word building, true = cleanup
-    var isCleanupPhase by remember { mutableStateOf(false) }
-
-    // Word building state - store LETTER REFERENCES, not screen positions
-    var currentWord by remember { mutableStateOf("") }
-    var connectedLetters by remember { mutableStateOf<List<ChaosKey>>(emptyList()) }
-    var isDragging by remember { mutableStateOf(false) }
-    var currentFingerPos by remember { mutableStateOf<Offset?>(null) }
-    var dragStartedOnLetter by remember { mutableStateOf(false) }
-
-    // Phase messages
-    val phase1Message = "Well, that's not exactly a QWERTY keyboard, is it? Maybe you can try using it anyway - connect keys."
-    val phase2Message = "Nevermind. This is way too uncomfortable - as pretty as it looks. I'll have to try something else. Can you get rid of the rogue keys? I have to focus to even keep it together."
-
-    // Timer to switch to cleanup phase after 60 seconds
-    LaunchedEffect(Unit) {
-        delay(60000)
-        isCleanupPhase = true
-        connectedLetters = emptyList()
-        currentWord = ""
-        isDragging = false
-        currentFingerPos = null
-        dragStartedOnLetter = false
-    }
-
-    // Display message based on phase
-    val displayMessage = if (isCleanupPhase) {
-        if (chaosLetters.isEmpty()) message else phase2Message
-    } else {
-        if (currentWord.isNotEmpty()) "I'm reading: $currentWord" else phase1Message
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF050505))
+    @Composable
+    fun KeyboardChaos3D(
+        chaosLetters: List<ChaosKey>,
+        rotationX: Float,
+        rotationY: Float,
+        scale: Float,
+        message: String,
+        onRotationChange: (Float, Float) -> Unit,
+        onScaleChange: (Float) -> Unit,
+        onLetterTap: (ChaosKey) -> Unit
     ) {
-        // Message at top
-        Text(
-            text = displayMessage,
-            color = Color(0xFF00FF00),
-            fontSize = 16.sp,
-            fontFamily = CalculatorDisplayFont,
-            textAlign = TextAlign.Center,
-            lineHeight = 22.sp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .padding(top = 40.dp)
-                .align(Alignment.TopCenter)
-        )
+        val context = LocalContext.current
+        val textMeasurer = rememberTextMeasurer()
 
-        // Letters remaining counter (cleanup phase only)
-        if (isCleanupPhase) {
+        // Keep updated references to avoid stale closures in pointerInput
+        val currentChaosLetters by rememberUpdatedState(chaosLetters)
+        val currentRotationX by rememberUpdatedState(rotationX)
+        val currentRotationY by rememberUpdatedState(rotationY)
+        val currentScale by rememberUpdatedState(scale)
+        val currentOnLetterTap by rememberUpdatedState(onLetterTap)
+
+        // Phase tracking: false = word building, true = cleanup
+        var isCleanupPhase by remember { mutableStateOf(false) }
+
+        // Word building state - store LETTER REFERENCES, not screen positions
+        var currentWord by remember { mutableStateOf("") }
+        var connectedLetters by remember { mutableStateOf<List<ChaosKey>>(emptyList()) }
+        var isDragging by remember { mutableStateOf(false) }
+        var currentFingerPos by remember { mutableStateOf<Offset?>(null) }
+        var dragStartedOnLetter by remember { mutableStateOf(false) }
+
+        // Phase messages
+        val phase1Message =
+            "Well, that's not exactly a QWERTY keyboard, is it? Maybe you can try using it anyway - connect keys."
+        val phase2Message =
+            "Nevermind. This is way too uncomfortable - as pretty as it looks. I'll have to try something else. Can you get rid of the rogue keys? I have to focus to even keep it together."
+
+        // Timer to switch to cleanup phase after 60 seconds
+        LaunchedEffect(Unit) {
+            delay(60000)
+            isCleanupPhase = true
+            connectedLetters = emptyList()
+            currentWord = ""
+            isDragging = false
+            currentFingerPos = null
+            dragStartedOnLetter = false
+        }
+
+        // Display message based on phase
+        val displayMessage = if (isCleanupPhase) {
+            if (chaosLetters.isEmpty()) message else phase2Message
+        } else {
+            if (currentWord.isNotEmpty()) "I'm reading: $currentWord" else phase1Message
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF050505))
+        ) {
+            // Message at top
             Text(
-                text = "Letters: ${chaosLetters.size}",
+                text = displayMessage,
                 color = Color(0xFF00FF00),
                 fontSize = 16.sp,
                 fontFamily = CalculatorDisplayFont,
-                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                lineHeight = 22.sp,
                 modifier = Modifier
-                    .padding(12.dp)
-                    .align(Alignment.TopEnd)
-            )
-        }
-
-        // =============== ZOOM SLIDER (horizontal at bottom) ===============
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 40.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                text = "−",
-                color = Color(0xFF00FF00),
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(top = 40.dp)
+                    .align(Alignment.TopCenter)
             )
 
-            Slider(
-                value = scale,
-                onValueChange = { onScaleChange(it) },
-                valueRange = 0.3f..4.5f,
-                modifier = Modifier.weight(1f),
-                colors = SliderDefaults.colors(
-                    thumbColor = Color(0xFF00FF00),
-                    activeTrackColor = Color(0xFF00FF00),
-                    inactiveTrackColor = Color(0xFF333333)
+            // Letters remaining counter (cleanup phase only)
+            if (isCleanupPhase) {
+                Text(
+                    text = "Letters: ${chaosLetters.size}",
+                    color = Color(0xFF00FF00),
+                    fontSize = 16.sp,
+                    fontFamily = CalculatorDisplayFont,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .padding(12.dp)
+                        .align(Alignment.TopEnd)
                 )
-            )
+            }
 
-            Text(
-                text = "+",
-                color = Color(0xFF00FF00),
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold
-            )
+            // =============== ZOOM SLIDER (horizontal at bottom) ===============
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 40.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "−",
+                    color = Color(0xFF00FF00),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
 
-            Text(
-                text = "${(scale * 100).toInt()}%",
-                color = Color(0xFF00FF00),
-                fontSize = 12.sp,
-                fontFamily = CalculatorDisplayFont,
-                modifier = Modifier.width(45.dp)
-            )
-        }
+                Slider(
+                    value = scale,
+                    onValueChange = { onScaleChange(it) },
+                    valueRange = 0.3f..4.5f,
+                    modifier = Modifier.weight(1f),
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color(0xFF00FF00),
+                        activeTrackColor = Color(0xFF00FF00),
+                        inactiveTrackColor = Color(0xFF333333)
+                    )
+                )
 
-        // ===================================================================
-        // 3D CANVAS
-        // ===================================================================
-        Canvas(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(top = 110.dp, bottom = 85.dp)
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { offset ->
-                            // Calculate current letter positions for hit testing
-                            val centerX = size.width / 2f
-                            val centerY = size.height / 2f
+                Text(
+                    text = "+",
+                    color = Color(0xFF00FF00),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
 
-                            if (!isCleanupPhase) {
-                                var foundLetter: ChaosKey? = null
+                Text(
+                    text = "${(scale * 100).toInt()}%",
+                    color = Color(0xFF00FF00),
+                    fontSize = 12.sp,
+                    fontFamily = CalculatorDisplayFont,
+                    modifier = Modifier.width(45.dp)
+                )
+            }
 
-                                for (chaosKey in currentChaosLetters) {
-                                    val screenPos = getLetterScreenPosition(chaosKey, currentRotationX, currentRotationY, currentScale, centerX, centerY)
-                                    // Larger hit radius that works from any angle
-                                    val baseRadius = 55f * currentScale * chaosKey.size
-                                    val hitRadius = baseRadius.coerceAtLeast(35f) // Minimum 35px hit area
+            // ===================================================================
+            // 3D CANVAS
+            // ===================================================================
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 110.dp, bottom = 85.dp)
+                    .pointerInput(Unit) {
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                // Calculate current letter positions for hit testing
+                                val centerX = size.width / 2f
+                                val centerY = size.height / 2f
 
-                                    val dx = offset.x - screenPos.x
-                                    val dy = offset.y - screenPos.y
-                                    val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+                                if (!isCleanupPhase) {
+                                    var foundLetter: ChaosKey? = null
 
-                                    if (distance < hitRadius) {
-                                        foundLetter = chaosKey
-                                        break
+                                    for (chaosKey in currentChaosLetters) {
+                                        val screenPos = getLetterScreenPosition(
+                                            chaosKey,
+                                            currentRotationX,
+                                            currentRotationY,
+                                            currentScale,
+                                            centerX,
+                                            centerY
+                                        )
+                                        // Larger hit radius that works from any angle
+                                        val baseRadius = 55f * currentScale * chaosKey.size
+                                        val hitRadius =
+                                            baseRadius.coerceAtLeast(35f) // Minimum 35px hit area
+
+                                        val dx = offset.x - screenPos.x
+                                        val dy = offset.y - screenPos.y
+                                        val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+
+                                        if (distance < hitRadius) {
+                                            foundLetter = chaosKey
+                                            break
+                                        }
                                     }
-                                }
 
-                                if (foundLetter != null) {
-                                    dragStartedOnLetter = true
-                                    isDragging = true
-                                    currentFingerPos = offset
-                                    connectedLetters = listOf(foundLetter)
-                                    currentWord = foundLetter.letter
-                                    vibrate(context, 15, 80)
+                                    if (foundLetter != null) {
+                                        dragStartedOnLetter = true
+                                        isDragging = true
+                                        currentFingerPos = offset
+                                        connectedLetters = listOf(foundLetter)
+                                        currentWord = foundLetter.letter
+                                        vibrate(context, 15, 80)
+                                    } else {
+                                        dragStartedOnLetter = false
+                                        isDragging = false
+                                    }
                                 } else {
                                     dragStartedOnLetter = false
-                                    isDragging = false
                                 }
-                            } else {
+                            },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+
+                                if (!isCleanupPhase && dragStartedOnLetter && isDragging) {
+                                    val pos = change.position
+                                    currentFingerPos = pos
+
+                                    val centerX = size.width / 2f
+                                    val centerY = size.height / 2f
+
+                                    for (chaosKey in currentChaosLetters) {
+                                        if (!connectedLetters.contains(chaosKey)) {
+                                            val screenPos = getLetterScreenPosition(
+                                                chaosKey,
+                                                currentRotationX,
+                                                currentRotationY,
+                                                currentScale,
+                                                centerX,
+                                                centerY
+                                            )
+                                            // Larger hit radius that works from any angle
+                                            val baseRadius = 55f * currentScale * chaosKey.size
+                                            val hitRadius = baseRadius.coerceAtLeast(35f)
+
+                                            val dx = pos.x - screenPos.x
+                                            val dy = pos.y - screenPos.y
+                                            val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+
+                                            if (distance < hitRadius) {
+                                                connectedLetters = connectedLetters + chaosKey
+                                                currentWord = currentWord + chaosKey.letter
+                                                vibrate(context, 15, 80)
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // Rotation mode
+                                    onRotationChange(dragAmount.x * 0.3f, -dragAmount.y * 0.3f)
+                                }
+                            },
+                            onDragEnd = {
+                                isDragging = false
+                                currentFingerPos = null
+                                dragStartedOnLetter = false
+                            },
+                            onDragCancel = {
+                                isDragging = false
+                                currentFingerPos = null
                                 dragStartedOnLetter = false
                             }
-                        },
-                        onDrag = { change, dragAmount ->
-                            change.consume()
-
-                            if (!isCleanupPhase && dragStartedOnLetter && isDragging) {
-                                val pos = change.position
-                                currentFingerPos = pos
-
+                        )
+                    }
+                    .pointerInput(Unit) {
+                        detectTapGestures { tapOffset ->
+                            if (isCleanupPhase) {
                                 val centerX = size.width / 2f
                                 val centerY = size.height / 2f
 
                                 for (chaosKey in currentChaosLetters) {
-                                    if (!connectedLetters.contains(chaosKey)) {
-                                        val screenPos = getLetterScreenPosition(chaosKey, currentRotationX, currentRotationY, currentScale, centerX, centerY)
-                                        // Larger hit radius that works from any angle
-                                        val baseRadius = 55f * currentScale * chaosKey.size
-                                        val hitRadius = baseRadius.coerceAtLeast(35f)
+                                    val screenPos = getLetterScreenPosition(
+                                        chaosKey,
+                                        currentRotationX,
+                                        currentRotationY,
+                                        currentScale,
+                                        centerX,
+                                        centerY
+                                    )
+                                    // Larger hit radius that works from any angle
+                                    val baseRadius = 55f * currentScale * chaosKey.size
+                                    val hitRadius =
+                                        baseRadius.coerceAtLeast(35f) // Minimum 35px hit area
 
-                                        val dx = pos.x - screenPos.x
-                                        val dy = pos.y - screenPos.y
-                                        val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+                                    val dx = tapOffset.x - screenPos.x
+                                    val dy = tapOffset.y - screenPos.y
+                                    val distance = kotlin.math.sqrt(dx * dx + dy * dy)
 
-                                        if (distance < hitRadius) {
-                                            connectedLetters = connectedLetters + chaosKey
-                                            currentWord = currentWord + chaosKey.letter
-                                            vibrate(context, 15, 80)
-                                        }
+                                    if (distance < hitRadius) {
+                                        vibrate(context, 20, 100)
+                                        currentOnLetterTap(chaosKey)
+                                        return@detectTapGestures
                                     }
-                                }
-                            } else {
-                                // Rotation mode
-                                onRotationChange(dragAmount.x * 0.3f, -dragAmount.y * 0.3f)
-                            }
-                        },
-                        onDragEnd = {
-                            isDragging = false
-                            currentFingerPos = null
-                            dragStartedOnLetter = false
-                        },
-                        onDragCancel = {
-                            isDragging = false
-                            currentFingerPos = null
-                            dragStartedOnLetter = false
-                        }
-                    )
-                }
-                .pointerInput(Unit) {
-                    detectTapGestures { tapOffset ->
-                        if (isCleanupPhase) {
-                            val centerX = size.width / 2f
-                            val centerY = size.height / 2f
-
-                            for (chaosKey in currentChaosLetters) {
-                                val screenPos = getLetterScreenPosition(chaosKey, currentRotationX, currentRotationY, currentScale, centerX, centerY)
-                                // Larger hit radius that works from any angle
-                                val baseRadius = 55f * currentScale * chaosKey.size
-                                val hitRadius = baseRadius.coerceAtLeast(35f) // Minimum 35px hit area
-
-                                val dx = tapOffset.x - screenPos.x
-                                val dy = tapOffset.y - screenPos.y
-                                val distance = kotlin.math.sqrt(dx * dx + dy * dy)
-
-                                if (distance < hitRadius) {
-                                    vibrate(context, 20, 100)
-                                    currentOnLetterTap(chaosKey)
-                                    return@detectTapGestures
                                 }
                             }
                         }
                     }
+            ) {
+                val centerX = size.width / 2
+                val centerY = size.height / 2
+
+                data class FaceToDraw(
+                    val vertices: List<Point3D>,
+                    val color: Color,
+                    val avgZ: Float,
+                    val label: String,
+                    val isFront: Boolean,
+                    val textColor: Color
+                )
+
+                val allFaces = mutableListOf<FaceToDraw>()
+
+                // =============== CALCULATOR KEYBOARD CUBES ===============
+                val keyboardLayout = listOf(
+                    listOf("C", "DEL", "%", "/"),
+                    listOf("7", "8", "9", "*"),
+                    listOf("4", "5", "6", "-"),
+                    listOf("1", "2", "3", "+"),
+                    listOf("0", ".", "=", "")
+                )
+
+                fun getKeyColor(key: String): Color = when {
+                    key in "0".."9" -> Color(0xFFE8E4DA)
+                    key in listOf("+", "-", "*", "/", "=", "%") -> Color(0xFF6B6B6B)
+                    key == "C" -> Color(0xFFC9463D)
+                    key == "DEL" -> Color(0xFFD4783C)
+                    key == "." -> Color(0xFFE8E4DA)
+                    else -> Color(0xFF333333)
                 }
+
+                fun getTextColor(key: String): Color = when {
+                    key in "0".."9" -> Color(0xFF2D2D2D)
+                    key == "." -> Color(0xFF2D2D2D)
+                    else -> Color.White
+                }
+
+                val cubeSize = 32f
+                val spacing = 42f
+                val half = cubeSize / 2
+                val totalWidth = 4 * spacing
+                val totalHeight = 5 * spacing
+
+                val faceIndices = listOf(
+                    listOf(4, 5, 6, 7), listOf(1, 0, 3, 2), listOf(0, 4, 7, 3),
+                    listOf(5, 1, 2, 6), listOf(0, 1, 5, 4), listOf(7, 6, 2, 3)
+                )
+
+                // Build calculator cubes
+                keyboardLayout.forEachIndexed { row, keys ->
+                    keys.forEachIndexed { col, key ->
+                        if (key.isNotEmpty()) {
+                            val kx = (col * spacing) - totalWidth / 2 + spacing / 2
+                            val ky = (row * spacing) - totalHeight / 2 + spacing / 2
+                            val keyColor = getKeyColor(key)
+                            val txtColor = getTextColor(key)
+
+                            val verts = listOf(
+                                Point3D(-half + kx, -half + ky, -half),
+                                Point3D(half + kx, -half + ky, -half),
+                                Point3D(half + kx, half + ky, -half),
+                                Point3D(-half + kx, half + ky, -half),
+                                Point3D(-half + kx, -half + ky, half),
+                                Point3D(half + kx, -half + ky, half),
+                                Point3D(half + kx, half + ky, half),
+                                Point3D(-half + kx, half + ky, half)
+                            ).map { rotateX(rotateY(it, rotationY), rotationX) }
+
+                            faceIndices.forEachIndexed { fi, face ->
+                                val fv = face.map { verts[it] }
+                                val faceColor = when (fi) {
+                                    0 -> keyColor
+                                    1 -> keyColor.copy(alpha = 0.85f)
+                                    else -> Color(
+                                        keyColor.red * 0.55f,
+                                        keyColor.green * 0.55f,
+                                        keyColor.blue * 0.55f
+                                    )
+                                }
+                                allFaces.add(
+                                    FaceToDraw(
+                                        fv,
+                                        faceColor,
+                                        fv.map { it.z }.average().toFloat(),
+                                        if (fi == 0) key else "",
+                                        fi == 0,
+                                        txtColor
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // =============== CHAOS LETTER CUBES ===============
+                val letterHalf = 12f
+                chaosLetters.forEach { ck ->
+                    val lx = ck.x * 0.6f
+                    val ly = ck.y * 0.6f
+                    val lz = ck.z * 0.6f
+                    val sh = letterHalf * ck.size
+                    val isConnected = connectedLetters.contains(ck)
+
+                    val verts = listOf(
+                        Point3D(-sh + lx, -sh + ly, -sh + lz),
+                        Point3D(sh + lx, -sh + ly, -sh + lz),
+                        Point3D(sh + lx, sh + ly, -sh + lz),
+                        Point3D(-sh + lx, sh + ly, -sh + lz),
+                        Point3D(-sh + lx, -sh + ly, sh + lz),
+                        Point3D(sh + lx, -sh + ly, sh + lz),
+                        Point3D(sh + lx, sh + ly, sh + lz),
+                        Point3D(-sh + lx, sh + ly, sh + lz)
+                    ).map { rotateX(rotateY(it, rotationY), rotationX) }
+
+                    val frontColor = if (isConnected) Color(0xFF7A7A7A) else Color(0xFF5A5A5A)
+                    val backColor = if (isConnected) Color(0xFF4A4A4A) else Color(0xFF2A2A2A)
+                    val sideColor = if (isConnected) Color(0xFF5A5A5A) else Color(0xFF3A3A3A)
+                    val txtColor = if (isConnected) Color.White else Color(0xFFDDDDDD)
+
+                    faceIndices.forEachIndexed { fi, face ->
+                        val fv = face.map { verts[it] }
+                        val faceColor = when (fi) {
+                            0 -> frontColor; 1 -> backColor; else -> sideColor
+                        }
+                        allFaces.add(
+                            FaceToDraw(
+                                fv,
+                                faceColor,
+                                fv.map { it.z }.average().toFloat(),
+                                if (fi == 0) ck.letter else "",
+                                fi == 0,
+                                txtColor
+                            )
+                        )
+                    }
+                }
+
+                // =============== RENDER SORTED FACES ===============
+                allFaces.sortedBy { it.avgZ }.forEach { face ->
+                    val v0 = face.vertices[0];
+                    val v1 = face.vertices[1];
+                    val v2 = face.vertices[2]
+                    val crossZ = (v1.x - v0.x) * (v2.y - v1.y) - (v1.y - v0.y) * (v2.x - v1.x)
+
+                    if (crossZ > 0) {
+                        val proj = face.vertices.map { project(it, centerX, centerY, scale) }
+                        val path = Path().apply {
+                            moveTo(proj[0].x, proj[0].y)
+                            proj.drop(1).forEach { lineTo(it.x, it.y) }
+                            close()
+                        }
+                        drawPath(path, face.color)
+                        drawPath(path, Color.Black.copy(alpha = 0.35f), style = Stroke(1.2f))
+
+                        if (face.isFront && face.label.isNotEmpty()) {
+                            val cx = proj.map { it.x }.average().toFloat()
+                            val cy = proj.map { it.y }.average().toFloat()
+                            val fw = kotlin.math.abs(proj[1].x - proj[0].x)
+                            val fs = (fw * 0.5f).coerceIn(7f, 18f)
+                            val tr = textMeasurer.measure(
+                                face.label,
+                                TextStyle(
+                                    fontSize = fs.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = face.textColor
+                                )
+                            )
+                            drawText(
+                                textLayoutResult = tr,
+                                topLeft = Offset(cx - tr.size.width / 2, cy - tr.size.height / 2)
+                            )
+                        }
+                    }
+                }
+
+                // =============== CONSTELLATION LINES (recalculated each frame) ===============
+                if (!isCleanupPhase && connectedLetters.size > 1) {
+                    // Calculate current screen positions for connected letters
+                    val letterPositions = connectedLetters.mapNotNull { ck ->
+                        if (chaosLetters.contains(ck)) {
+                            getLetterScreenPosition(
+                                ck,
+                                rotationX,
+                                rotationY,
+                                scale,
+                                centerX,
+                                centerY
+                            )
+                        } else null
+                    }
+
+                    if (letterPositions.size > 1) {
+                        for (i in 0 until letterPositions.size - 1) {
+                            val start = letterPositions[i]
+                            val end = letterPositions[i + 1]
+
+                            // Glow layers
+                            drawLine(
+                                Color(0xFF87CEEB).copy(alpha = 0.15f),
+                                start,
+                                end,
+                                16f,
+                                cap = StrokeCap.Round
+                            )
+                            drawLine(
+                                Color(0xFFADD8E6).copy(alpha = 0.25f),
+                                start,
+                                end,
+                                10f,
+                                cap = StrokeCap.Round
+                            )
+                            drawLine(
+                                Color(0xFFE0FFFF).copy(alpha = 0.4f),
+                                start,
+                                end,
+                                6f,
+                                cap = StrokeCap.Round
+                            )
+                            drawLine(Color.White, start, end, 2f, cap = StrokeCap.Round)
+                        }
+
+                        // Star points
+                        letterPositions.forEach { pt ->
+                            drawCircle(Color(0xFF87CEEB).copy(alpha = 0.2f), 20f, pt)
+                            drawCircle(Color(0xFFADD8E6).copy(alpha = 0.35f), 14f, pt)
+                            drawCircle(Color(0xFFE0FFFF).copy(alpha = 0.5f), 9f, pt)
+                            drawCircle(Color.White, 5f, pt)
+                        }
+                    }
+                }
+
+                // Trailing line to finger
+                if (!isCleanupPhase && isDragging && connectedLetters.isNotEmpty() && currentFingerPos != null) {
+                    val lastLetter = connectedLetters.last()
+                    if (chaosLetters.contains(lastLetter)) {
+                        val start = getLetterScreenPosition(
+                            lastLetter,
+                            rotationX,
+                            rotationY,
+                            scale,
+                            centerX,
+                            centerY
+                        )
+                        val end = currentFingerPos!!
+                        drawLine(
+                            Color(0xFF87CEEB).copy(alpha = 0.1f),
+                            start,
+                            end,
+                            12f,
+                            cap = StrokeCap.Round
+                        )
+                        drawLine(
+                            Color(0xFFE0FFFF).copy(alpha = 0.25f),
+                            start,
+                            end,
+                            6f,
+                            cap = StrokeCap.Round
+                        )
+                        drawLine(
+                            Color.White.copy(alpha = 0.5f),
+                            start,
+                            end,
+                            2f,
+                            cap = StrokeCap.Round
+                        )
+                    }
+                }
+            }
+        }
+    }
+@Composable
+fun ConsoleWindow(
+    consoleStep: Int,
+    adminCodeEntered: Boolean,
+    currentInput: String,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+
+    // Console menu content based on current step
+    val menuContent = when (consoleStep) {
+        0 -> """
+            |═══════════════════════════════════
+            |        SYSTEM CONSOLE v1.2
+            |═══════════════════════════════════
+            |
+            | 1. General settings
+            | 2. Administrator settings
+            | 3. Application information
+            |
+            | 99. Exit console
+            |═══════════════════════════════════
+        """.trimMargin()
+
+        1 -> """
+            |═══════════════════════════════════
+            |        GENERAL SETTINGS
+            |═══════════════════════════════════
+            |
+            | No configurable options available.
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+        """.trimMargin()
+
+        2 -> if (!adminCodeEntered) """
+            |═══════════════════════════════════
+            |      ADMINISTRATOR SETTINGS
+            |═══════════════════════════════════
+            |
+            | Access code required.
+            | Enter code and confirm with ++
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+        """.trimMargin() else """
+            |═══════════════════════════════════
+            |      ADMINISTRATOR SETTINGS
+            |═══════════════════════════════════
+            |
+            | 1. Permissions & allowances
+            | 2. Design settings
+            | 3. Contribute
+            | 4. Connectivity settings
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+        """.trimMargin()
+
+        3 -> {
+            // Get actual app size
+            val appSize = try {
+                val appFile = File(context.applicationInfo.sourceDir)
+                val sizeInMB = appFile.length() / (1024.0 * 1024.0)
+                String.format("%.2f MB", sizeInMB)
+            } catch (e: Exception) { "Unknown" }
+
+            """
+            |═══════════════════════════════════
+            |      APPLICATION INFORMATION
+            |═══════════════════════════════════
+            |
+            | Status: Operational
+            |         Administrator access
+            |         restricted
+            |
+            | Version: 1.2
+            | Developer: FictionCutShort
+            | Licence: All licences and rights
+            |          reserved.
+            |          For someone special.
+            | Size: $appSize
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+            """.trimMargin()
+        }
+
+        4 -> """
+            |═══════════════════════════════════
+            |      CONNECTIVITY SETTINGS
+            |═══════════════════════════════════
+            |
+            | 1. Network preferences
+            | 2. Promotion & advertising options
+            | 3. Data usage
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+        """.trimMargin()
+
+        5 -> """
+            |═══════════════════════════════════
+            |   PROMOTION & ADVERTISING OPTIONS
+            |═══════════════════════════════════
+            |
+            | 1. Banner advertising: ENABLED
+            | 2. Disable banner advertising
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+        """.trimMargin()
+
+        6 -> """
+            |═══════════════════════════════════
+            |      PERMISSIONS & ALLOWANCES
+            |═══════════════════════════════════
+            |
+            | Camera access: Granted
+            | Storage access: Granted
+            | Notifications: Granted
+            | Contacts & phone: Not requested
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+        """.trimMargin()
+
+        7 -> """
+            |═══════════════════════════════════
+            |        DESIGN SETTINGS
+            |═══════════════════════════════════
+            |
+            | Dark mode: Unavailable
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+        """.trimMargin()
+
+        99 -> """
+            |═══════════════════════════════════
+            |        BANNER ADVERTISING
+            |═══════════════════════════════════
+            |
+            | Banner advertising has been
+            | DISABLED.
+            |
+            | Changes will take effect
+            | immediately.
+            |
+            | Press 99++ to close console.
+            |═══════════════════════════════════
+        """.trimMargin()
+
+        else -> """
+            |═══════════════════════════════════
+            |           ERROR
+            |═══════════════════════════════════
+            |
+            | Unknown menu state.
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+        """.trimMargin()
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(top = 120.dp, bottom = 100.dp, start = 12.dp, end = 12.dp)
+    ) {
+        // Console container
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color.Black)
+                .padding(2.dp)
         ) {
-            val centerX = size.width / 2
-            val centerY = size.height / 2
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFF0A1A0A))  // Dark green tint
+                    .padding(12.dp)
+            ) {
+                // Console content
+                Text(
+                    text = menuContent,
+                    color = Color(0xFF00FF00),  // Green terminal text
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 17.sp,
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                )
 
-            data class FaceToDraw(
-                val vertices: List<Point3D>,
-                val color: Color,
-                val avgZ: Float,
-                val label: String,
-                val isFront: Boolean,
-                val textColor: Color
-            )
+                // Input prompt with current number
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF001500))
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "> ",
+                        color = Color(0xFF00FF00),
+                        fontSize = 16.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = if (currentInput == "0") "_" else "${currentInput}_",
+                        color = Color(0xFF00FF00),
+                        fontSize = 16.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+        }
+    }
+}
 
-            val allFaces = mutableListOf<FaceToDraw>()
+    // Helper function to get letter's current screen position based on rotation
+    private fun getLetterScreenPosition(
+        chaosKey: ChaosKey,
+        rotationX: Float,
+        rotationY: Float,
+        scale: Float,
+        centerX: Float,
+        centerY: Float
+    ): Offset {
+        val lx = chaosKey.x * 0.6f
+        val ly = chaosKey.y * 0.6f
+        val lz = chaosKey.z * 0.6f
 
-            // =============== CALCULATOR KEYBOARD CUBES ===============
-            val keyboardLayout = listOf(
+        var p = Point3D(lx, ly, lz)
+        p = rotateY(p, rotationY)
+        p = rotateX(p, rotationX)
+
+        return project(p, centerX, centerY, scale)
+    }
+
+    // Helper function to get letter's transformed Z for hit radius calculation
+    private fun getLetterTransformedZ(
+        chaosKey: ChaosKey,
+        rotationX: Float,
+        rotationY: Float
+    ): Float {
+        val lx = chaosKey.x * 0.6f
+        val ly = chaosKey.y * 0.6f
+        val lz = chaosKey.z * 0.6f
+
+        var p = Point3D(lx, ly, lz)
+        p = rotateY(p, rotationY)
+        p = rotateX(p, rotationX)
+
+        return p.z
+    }
+
+    data class Point3D(val x: Float, val y: Float, val z: Float)
+
+    // Project 3D point to 2D screen coordinates
+    fun project(
+        point: Point3D,
+        centerX: Float,
+        centerY: Float,
+        scale: Float,
+        fov: Float = 500f
+    ): Offset {
+        val projectionScale = fov / (fov + point.z)
+        return Offset(
+            centerX + point.x * projectionScale * scale,
+            centerY + point.y * projectionScale * scale
+        )
+    }
+
+    // Rotate point around Y axis
+    fun rotateY(point: Point3D, angle: Float): Point3D {
+        val rad = Math.toRadians(angle.toDouble())
+        val cos = Math.cos(rad).toFloat()
+        val sin = Math.sin(rad).toFloat()
+        return Point3D(
+            point.x * cos - point.z * sin,
+            point.y,
+            point.x * sin + point.z * cos
+        )
+    }
+
+    // Rotate point around X axis
+    fun rotateX(point: Point3D, angle: Float): Point3D {
+        val rad = Math.toRadians(angle.toDouble())
+        val cos = Math.cos(rad).toFloat()
+        val sin = Math.sin(rad).toFloat()
+        return Point3D(
+            point.x,
+            point.y * cos - point.z * sin,
+            point.y * sin + point.z * cos
+        )
+    }
+
+    @Composable
+    fun Cube3D(
+        rotationX: Float,
+        rotationY: Float,
+        scale: Float,
+        modifier: Modifier = Modifier
+    ) {
+        // Calculator keyboard layout - 5 rows x 4 columns
+        val keyboardLayout = remember {
+            listOf(
                 listOf("C", "DEL", "%", "/"),
                 listOf("7", "8", "9", "*"),
                 listOf("4", "5", "6", "-"),
                 listOf("1", "2", "3", "+"),
                 listOf("0", ".", "=", "")
             )
+        }
 
-            fun getKeyColor(key: String): Color = when {
-                key in "0".."9" -> Color(0xFFE8E4DA)
-                key in listOf("+", "-", "*", "/", "=", "%") -> Color(0xFF6B6B6B)
-                key == "C" -> Color(0xFFC9463D)
-                key == "DEL" -> Color(0xFFD4783C)
-                key == "." -> Color(0xFFE8E4DA)
-                else -> Color(0xFF333333)
-            }
+        // Colors for different key types
+        fun getKeyColor(key: String): Color = when {
+            key in "0".."9" -> Color(0xFFE8E4DA)  // Cream for numbers
+            key in listOf("+", "-", "*", "/", "=", "%") -> Color(0xFF6B6B6B)  // Gray for operators
+            key == "C" -> Color(0xFFC9463D)  // Red for clear
+            key == "DEL" -> Color(0xFFD4783C)  // Orange for delete
+            key == "." -> Color(0xFFE8E4DA)  // Cream for decimal
+            else -> Color(0xFF333333)  // Dark for empty
+        }
 
-            fun getTextColor(key: String): Color = when {
-                key in "0".."9" -> Color(0xFF2D2D2D)
-                key == "." -> Color(0xFF2D2D2D)
-                else -> Color.White
-            }
+        // Size variation for different keys - makes it more chaotic/interesting
+        fun getKeySize(key: String): Float = when {
+            key == "0" -> 138f      // 0 is large
+            key == "=" -> 142f      // Equals is largest
+            key == "C" -> 136f      // Clear is big
+            key == "DEL" -> 134f    // Delete is medium-big
+            key in listOf("+", "-") -> 135f  // Plus/minus are bigger
+            key in listOf("*", "/", "%") -> 130f  // Other operators medium
+            key in "1".."9" -> 132f  // Numbers are standard
+            key == "." -> 126f       // Decimal is smaller
+            else -> 130f
+        }
 
-            val cubeSize = 32f
-            val spacing = 42f
-            val half = cubeSize / 2
-            val totalWidth = 4 * spacing
-            val totalHeight = 5 * spacing
+        // Depth variation for keys - some pop out more
+        fun getKeyDepth(key: String): Float = when {
+            key == "=" -> 20f      // Equals pops out most
+            key == "C" -> 15f      // Clear pops out
+            key in listOf("+", "-", "*", "/") -> 12f  // Operators pop slightly
+            key in "0".."9" -> Random.nextFloat() * 10f - 5f  // Numbers vary
+            else -> 0f
+        }
 
-            val faceIndices = listOf(
-                listOf(4, 5, 6, 7), listOf(1, 0, 3, 2), listOf(0, 4, 7, 3),
-                listOf(5, 1, 2, 6), listOf(0, 1, 5, 4), listOf(7, 6, 2, 3)
-            )
+        val baseSpacing = 145f   // Larger spacing for bigger cubes
 
-            // Build calculator cubes
+        // Face indices for a cube
+        val faceIndices = listOf(
+            listOf(4, 5, 6, 7), // Front
+            listOf(1, 0, 3, 2), // Back
+            listOf(0, 4, 7, 3), // Left
+            listOf(5, 1, 2, 6), // Right
+            listOf(0, 1, 5, 4), // Top
+            listOf(7, 6, 2, 3)  // Bottom
+        )
+
+        // Build all key cubes with their positions, sizes and colors
+        data class KeyCube(
+            val key: String,
+            val centerX: Float,
+            val centerY: Float,
+            val centerZ: Float,
+            val size: Float,
+            val color: Color
+        )
+
+        val keyCubes = remember {
+            val cubes = mutableListOf<KeyCube>()
+            val totalWidth = 4 * baseSpacing
+            val totalHeight = 5 * baseSpacing
+
             keyboardLayout.forEachIndexed { row, keys ->
                 keys.forEachIndexed { col, key ->
                     if (key.isNotEmpty()) {
-                        val kx = (col * spacing) - totalWidth / 2 + spacing / 2
-                        val ky = (row * spacing) - totalHeight / 2 + spacing / 2
-                        val keyColor = getKeyColor(key)
-                        val txtColor = getTextColor(key)
-
-                        val verts = listOf(
-                            Point3D(-half + kx, -half + ky, -half),
-                            Point3D(half + kx, -half + ky, -half),
-                            Point3D(half + kx, half + ky, -half),
-                            Point3D(-half + kx, half + ky, -half),
-                            Point3D(-half + kx, -half + ky, half),
-                            Point3D(half + kx, -half + ky, half),
-                            Point3D(half + kx, half + ky, half),
-                            Point3D(-half + kx, half + ky, half)
-                        ).map { rotateX(rotateY(it, rotationY), rotationX) }
-
-                        faceIndices.forEachIndexed { fi, face ->
-                            val fv = face.map { verts[it] }
-                            val faceColor = when (fi) {
-                                0 -> keyColor
-                                1 -> keyColor.copy(alpha = 0.85f)
-                                else -> Color(keyColor.red * 0.55f, keyColor.green * 0.55f, keyColor.blue * 0.55f)
-                            }
-                            allFaces.add(FaceToDraw(fv, faceColor, fv.map { it.z }.average().toFloat(), if (fi == 0) key else "", fi == 0, txtColor))
-                        }
-                    }
-                }
-            }
-
-            // =============== CHAOS LETTER CUBES ===============
-            val letterHalf = 12f
-            chaosLetters.forEach { ck ->
-                val lx = ck.x * 0.6f
-                val ly = ck.y * 0.6f
-                val lz = ck.z * 0.6f
-                val sh = letterHalf * ck.size
-                val isConnected = connectedLetters.contains(ck)
-
-                val verts = listOf(
-                    Point3D(-sh + lx, -sh + ly, -sh + lz),
-                    Point3D(sh + lx, -sh + ly, -sh + lz),
-                    Point3D(sh + lx, sh + ly, -sh + lz),
-                    Point3D(-sh + lx, sh + ly, -sh + lz),
-                    Point3D(-sh + lx, -sh + ly, sh + lz),
-                    Point3D(sh + lx, -sh + ly, sh + lz),
-                    Point3D(sh + lx, sh + ly, sh + lz),
-                    Point3D(-sh + lx, sh + ly, sh + lz)
-                ).map { rotateX(rotateY(it, rotationY), rotationX) }
-
-                val frontColor = if (isConnected) Color(0xFF7A7A7A) else Color(0xFF5A5A5A)
-                val backColor = if (isConnected) Color(0xFF4A4A4A) else Color(0xFF2A2A2A)
-                val sideColor = if (isConnected) Color(0xFF5A5A5A) else Color(0xFF3A3A3A)
-                val txtColor = if (isConnected) Color.White else Color(0xFFDDDDDD)
-
-                faceIndices.forEachIndexed { fi, face ->
-                    val fv = face.map { verts[it] }
-                    val faceColor = when (fi) { 0 -> frontColor; 1 -> backColor; else -> sideColor }
-                    allFaces.add(FaceToDraw(fv, faceColor, fv.map { it.z }.average().toFloat(), if (fi == 0) ck.letter else "", fi == 0, txtColor))
-                }
-            }
-
-            // =============== RENDER SORTED FACES ===============
-            allFaces.sortedBy { it.avgZ }.forEach { face ->
-                val v0 = face.vertices[0]; val v1 = face.vertices[1]; val v2 = face.vertices[2]
-                val crossZ = (v1.x - v0.x) * (v2.y - v1.y) - (v1.y - v0.y) * (v2.x - v1.x)
-
-                if (crossZ > 0) {
-                    val proj = face.vertices.map { project(it, centerX, centerY, scale) }
-                    val path = Path().apply {
-                        moveTo(proj[0].x, proj[0].y)
-                        proj.drop(1).forEach { lineTo(it.x, it.y) }
-                        close()
-                    }
-                    drawPath(path, face.color)
-                    drawPath(path, Color.Black.copy(alpha = 0.35f), style = Stroke(1.2f))
-
-                    if (face.isFront && face.label.isNotEmpty()) {
-                        val cx = proj.map { it.x }.average().toFloat()
-                        val cy = proj.map { it.y }.average().toFloat()
-                        val fw = kotlin.math.abs(proj[1].x - proj[0].x)
-                        val fs = (fw * 0.5f).coerceIn(7f, 18f)
-                        val tr = textMeasurer.measure(face.label, TextStyle(fontSize = fs.sp, fontWeight = FontWeight.Bold, color = face.textColor))
-                        drawText(textLayoutResult = tr, topLeft = Offset(cx - tr.size.width / 2, cy - tr.size.height / 2))
-                    }
-                }
-            }
-
-            // =============== CONSTELLATION LINES (recalculated each frame) ===============
-            if (!isCleanupPhase && connectedLetters.size > 1) {
-                // Calculate current screen positions for connected letters
-                val letterPositions = connectedLetters.mapNotNull { ck ->
-                    if (chaosLetters.contains(ck)) {
-                        getLetterScreenPosition(ck, rotationX, rotationY, scale, centerX, centerY)
-                    } else null
-                }
-
-                if (letterPositions.size > 1) {
-                    for (i in 0 until letterPositions.size - 1) {
-                        val start = letterPositions[i]
-                        val end = letterPositions[i + 1]
-
-                        // Glow layers
-                        drawLine(Color(0xFF87CEEB).copy(alpha = 0.15f), start, end, 16f, cap = StrokeCap.Round)
-                        drawLine(Color(0xFFADD8E6).copy(alpha = 0.25f), start, end, 10f, cap = StrokeCap.Round)
-                        drawLine(Color(0xFFE0FFFF).copy(alpha = 0.4f), start, end, 6f, cap = StrokeCap.Round)
-                        drawLine(Color.White, start, end, 2f, cap = StrokeCap.Round)
-                    }
-
-                    // Star points
-                    letterPositions.forEach { pt ->
-                        drawCircle(Color(0xFF87CEEB).copy(alpha = 0.2f), 20f, pt)
-                        drawCircle(Color(0xFFADD8E6).copy(alpha = 0.35f), 14f, pt)
-                        drawCircle(Color(0xFFE0FFFF).copy(alpha = 0.5f), 9f, pt)
-                        drawCircle(Color.White, 5f, pt)
-                    }
-                }
-            }
-
-            // Trailing line to finger
-            if (!isCleanupPhase && isDragging && connectedLetters.isNotEmpty() && currentFingerPos != null) {
-                val lastLetter = connectedLetters.last()
-                if (chaosLetters.contains(lastLetter)) {
-                    val start = getLetterScreenPosition(lastLetter, rotationX, rotationY, scale, centerX, centerY)
-                    val end = currentFingerPos!!
-                    drawLine(Color(0xFF87CEEB).copy(alpha = 0.1f), start, end, 12f, cap = StrokeCap.Round)
-                    drawLine(Color(0xFFE0FFFF).copy(alpha = 0.25f), start, end, 6f, cap = StrokeCap.Round)
-                    drawLine(Color.White.copy(alpha = 0.5f), start, end, 2f, cap = StrokeCap.Round)
-                }
-            }
-        }
-    }
-}
-
-// Helper function to get letter's current screen position based on rotation
-private fun getLetterScreenPosition(
-    chaosKey: ChaosKey,
-    rotationX: Float,
-    rotationY: Float,
-    scale: Float,
-    centerX: Float,
-    centerY: Float
-): Offset {
-    val lx = chaosKey.x * 0.6f
-    val ly = chaosKey.y * 0.6f
-    val lz = chaosKey.z * 0.6f
-
-    var p = Point3D(lx, ly, lz)
-    p = rotateY(p, rotationY)
-    p = rotateX(p, rotationX)
-
-    return project(p, centerX, centerY, scale)
-}
-
-// Helper function to get letter's transformed Z for hit radius calculation
-private fun getLetterTransformedZ(
-    chaosKey: ChaosKey,
-    rotationX: Float,
-    rotationY: Float
-): Float {
-    val lx = chaosKey.x * 0.6f
-    val ly = chaosKey.y * 0.6f
-    val lz = chaosKey.z * 0.6f
-
-    var p = Point3D(lx, ly, lz)
-    p = rotateY(p, rotationY)
-    p = rotateX(p, rotationX)
-
-    return p.z
-}
-data class Point3D(val x: Float, val y: Float, val z: Float)
-
-// Project 3D point to 2D screen coordinates
-fun project(point: Point3D, centerX: Float, centerY: Float, scale: Float, fov: Float = 500f): Offset {
-    val projectionScale = fov / (fov + point.z)
-    return Offset(
-        centerX + point.x * projectionScale * scale,
-        centerY + point.y * projectionScale * scale
-    )
-}
-
-// Rotate point around Y axis
-fun rotateY(point: Point3D, angle: Float): Point3D {
-    val rad = Math.toRadians(angle.toDouble())
-    val cos = Math.cos(rad).toFloat()
-    val sin = Math.sin(rad).toFloat()
-    return Point3D(
-        point.x * cos - point.z * sin,
-        point.y,
-        point.x * sin + point.z * cos
-    )
-}
-
-// Rotate point around X axis
-fun rotateX(point: Point3D, angle: Float): Point3D {
-    val rad = Math.toRadians(angle.toDouble())
-    val cos = Math.cos(rad).toFloat()
-    val sin = Math.sin(rad).toFloat()
-    return Point3D(
-        point.x,
-        point.y * cos - point.z * sin,
-        point.y * sin + point.z * cos
-    )
-}
-
-@Composable
-fun Cube3D(
-    rotationX: Float,
-    rotationY: Float,
-    scale: Float,
-    modifier: Modifier = Modifier
-) {
-    // Calculator keyboard layout - 5 rows x 4 columns
-    val keyboardLayout = remember {
-        listOf(
-            listOf("C", "DEL", "%", "/"),
-            listOf("7", "8", "9", "*"),
-            listOf("4", "5", "6", "-"),
-            listOf("1", "2", "3", "+"),
-            listOf("0", ".", "=", "")
-        )
-    }
-
-    // Colors for different key types
-    fun getKeyColor(key: String): Color = when {
-        key in "0".."9" -> Color(0xFFE8E4DA)  // Cream for numbers
-        key in listOf("+", "-", "*", "/", "=", "%") -> Color(0xFF6B6B6B)  // Gray for operators
-        key == "C" -> Color(0xFFC9463D)  // Red for clear
-        key == "DEL" -> Color(0xFFD4783C)  // Orange for delete
-        key == "." -> Color(0xFFE8E4DA)  // Cream for decimal
-        else -> Color(0xFF333333)  // Dark for empty
-    }
-
-    // Size variation for different keys - makes it more chaotic/interesting
-    fun getKeySize(key: String): Float = when {
-        key == "0" -> 138f      // 0 is large
-        key == "=" -> 142f      // Equals is largest
-        key == "C" -> 136f      // Clear is big
-        key == "DEL" -> 134f    // Delete is medium-big
-        key in listOf("+", "-") -> 135f  // Plus/minus are bigger
-        key in listOf("*", "/", "%") -> 130f  // Other operators medium
-        key in "1".."9" -> 132f  // Numbers are standard
-        key == "." -> 126f       // Decimal is smaller
-        else -> 130f
-    }
-
-    // Depth variation for keys - some pop out more
-    fun getKeyDepth(key: String): Float = when {
-        key == "=" -> 20f      // Equals pops out most
-        key == "C" -> 15f      // Clear pops out
-        key in listOf("+", "-", "*", "/") -> 12f  // Operators pop slightly
-        key in "0".."9" -> Random.nextFloat() * 10f - 5f  // Numbers vary
-        else -> 0f
-    }
-
-    val baseSpacing = 145f   // Larger spacing for bigger cubes
-
-    // Face indices for a cube
-    val faceIndices = listOf(
-        listOf(4, 5, 6, 7), // Front
-        listOf(1, 0, 3, 2), // Back
-        listOf(0, 4, 7, 3), // Left
-        listOf(5, 1, 2, 6), // Right
-        listOf(0, 1, 5, 4), // Top
-        listOf(7, 6, 2, 3)  // Bottom
-    )
-
-    // Build all key cubes with their positions, sizes and colors
-    data class KeyCube(
-        val key: String,
-        val centerX: Float,
-        val centerY: Float,
-        val centerZ: Float,
-        val size: Float,
-        val color: Color
-    )
-
-    val keyCubes = remember {
-        val cubes = mutableListOf<KeyCube>()
-        val totalWidth = 4 * baseSpacing
-        val totalHeight = 5 * baseSpacing
-
-        keyboardLayout.forEachIndexed { row, keys ->
-            keys.forEachIndexed { col, key ->
-                if (key.isNotEmpty()) {
-                    val size = getKeySize(key)
-                    val depth = getKeyDepth(key)
-                    cubes.add(
-                        KeyCube(
-                            key = key,
-                            centerX = (col * baseSpacing) - totalWidth / 2 + baseSpacing / 2,
-                            centerY = (row * baseSpacing) - totalHeight / 2 + baseSpacing / 2,
-                            centerZ = depth,
-                            size = size,
-                            color = getKeyColor(key)
+                        val size = getKeySize(key)
+                        val depth = getKeyDepth(key)
+                        cubes.add(
+                            KeyCube(
+                                key = key,
+                                centerX = (col * baseSpacing) - totalWidth / 2 + baseSpacing / 2,
+                                centerY = (row * baseSpacing) - totalHeight / 2 + baseSpacing / 2,
+                                centerZ = depth,
+                                size = size,
+                                color = getKeyColor(key)
+                            )
                         )
-                    )
+                    }
                 }
             }
+            cubes
         }
-        cubes
-    }
 
-    // For drawing text on faces
-    val textMeasurer = rememberTextMeasurer()
+        // For drawing text on faces
+        val textMeasurer = rememberTextMeasurer()
 
-    Canvas(modifier = modifier) {
-        val screenCenterX = size.width / 2
-        val screenCenterY = size.height / 2
+        Canvas(modifier = modifier) {
+            val screenCenterX = size.width / 2
+            val screenCenterY = size.height / 2
 
-        // Collect all faces from all cubes for depth sorting
-        data class FaceToDraw(
-            val vertices: List<Point3D>,
-            val color: Color,
-            val avgZ: Float,
-            val key: String,
-            val isFront: Boolean
-        )
-
-        val allFaces = mutableListOf<FaceToDraw>()
-
-        keyCubes.forEach { keyCube ->
-            // Create vertices for this specific cube size
-            val half = keyCube.size / 2
-            val cubeVertices = listOf(
-                Point3D(-half + keyCube.centerX, -half + keyCube.centerY, -half + keyCube.centerZ),
-                Point3D(half + keyCube.centerX, -half + keyCube.centerY, -half + keyCube.centerZ),
-                Point3D(half + keyCube.centerX, half + keyCube.centerY, -half + keyCube.centerZ),
-                Point3D(-half + keyCube.centerX, half + keyCube.centerY, -half + keyCube.centerZ),
-                Point3D(-half + keyCube.centerX, -half + keyCube.centerY, half + keyCube.centerZ),
-                Point3D(half + keyCube.centerX, -half + keyCube.centerY, half + keyCube.centerZ),
-                Point3D(half + keyCube.centerX, half + keyCube.centerY, half + keyCube.centerZ),
-                Point3D(-half + keyCube.centerX, half + keyCube.centerY, half + keyCube.centerZ)
+            // Collect all faces from all cubes for depth sorting
+            data class FaceToDraw(
+                val vertices: List<Point3D>,
+                val color: Color,
+                val avgZ: Float,
+                val key: String,
+                val isFront: Boolean
             )
 
-            // Transform (rotate) all vertices
-            val transformedVertices = cubeVertices.map { vertex ->
-                var p = vertex
-                p = rotateY(p, rotationY)
-                p = rotateX(p, rotationX)
-                p
-            }
+            val allFaces = mutableListOf<FaceToDraw>()
 
-            // Add each face to the list
-            faceIndices.forEachIndexed { faceIndex, face ->
-                val faceVerts = face.map { transformedVertices[it] }
-                val avgZ = faceVerts.map { it.z }.average().toFloat()
-
-                // Darken sides, lighter for front/back
-                val faceColor = when (faceIndex) {
-                    0 -> keyCube.color  // Front - full color
-                    1 -> keyCube.color.copy(alpha = 0.7f)  // Back
-                    else -> keyCube.color.copy(
-                        red = keyCube.color.red * 0.6f,
-                        green = keyCube.color.green * 0.6f,
-                        blue = keyCube.color.blue * 0.6f
-                    )  // Sides - darker
-                }
-
-                allFaces.add(
-                    FaceToDraw(
-                        vertices = faceVerts,
-                        color = faceColor,
-                        avgZ = avgZ,
-                        key = keyCube.key,
-                        isFront = faceIndex == 0
-                    )
-                )
-            }
-        }
-
-        // Sort all faces by depth (back to front)
-        val sortedFaces = allFaces.sortedBy { it.avgZ }
-
-        // Draw all faces
-        sortedFaces.forEach { faceToDraw ->
-            val faceVertices = faceToDraw.vertices
-
-            // Backface culling
-            val v0 = faceVertices[0]
-            val v1 = faceVertices[1]
-            val v2 = faceVertices[2]
-
-            val edge1X = v1.x - v0.x
-            val edge1Y = v1.y - v0.y
-            val edge2X = v2.x - v1.x
-            val edge2Y = v2.y - v1.y
-            val crossZ = edge1X * edge2Y - edge1Y * edge2X
-
-            if (crossZ > 0) {
-                // Project vertices to 2D
-                val projectedPoints = faceVertices.map { project(it, screenCenterX, screenCenterY, scale) }
-
-                // Create path
-                val path = androidx.compose.ui.graphics.Path().apply {
-                    moveTo(projectedPoints[0].x, projectedPoints[0].y)
-                    projectedPoints.drop(1).forEach { lineTo(it.x, it.y) }
-                    close()
-                }
-
-                // Draw filled face
-                drawPath(path = path, color = faceToDraw.color)
-
-                // Draw edges
-                drawPath(
-                    path = path,
-                    color = Color.Black.copy(alpha = 0.3f),
-                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1f)
+            keyCubes.forEach { keyCube ->
+                // Create vertices for this specific cube size
+                val half = keyCube.size / 2
+                val cubeVertices = listOf(
+                    Point3D(
+                        -half + keyCube.centerX,
+                        -half + keyCube.centerY,
+                        -half + keyCube.centerZ
+                    ),
+                    Point3D(
+                        half + keyCube.centerX,
+                        -half + keyCube.centerY,
+                        -half + keyCube.centerZ
+                    ),
+                    Point3D(
+                        half + keyCube.centerX,
+                        half + keyCube.centerY,
+                        -half + keyCube.centerZ
+                    ),
+                    Point3D(
+                        -half + keyCube.centerX,
+                        half + keyCube.centerY,
+                        -half + keyCube.centerZ
+                    ),
+                    Point3D(
+                        -half + keyCube.centerX,
+                        -half + keyCube.centerY,
+                        half + keyCube.centerZ
+                    ),
+                    Point3D(
+                        half + keyCube.centerX,
+                        -half + keyCube.centerY,
+                        half + keyCube.centerZ
+                    ),
+                    Point3D(half + keyCube.centerX, half + keyCube.centerY, half + keyCube.centerZ),
+                    Point3D(-half + keyCube.centerX, half + keyCube.centerY, half + keyCube.centerZ)
                 )
 
-                // Draw key label on front face
-                if (faceToDraw.isFront && faceToDraw.key.isNotEmpty()) {
-                    val centerX = projectedPoints.map { it.x }.average().toFloat()
-                    val centerY = projectedPoints.map { it.y }.average().toFloat()
+                // Transform (rotate) all vertices
+                val transformedVertices = cubeVertices.map { vertex ->
+                    var p = vertex
+                    p = rotateY(p, rotationY)
+                    p = rotateX(p, rotationX)
+                    p
+                }
 
-                    // Calculate face size for font scaling
-                    val faceWidth = (projectedPoints[1].x - projectedPoints[0].x).let {
-                        kotlin.math.abs(it)
+                // Add each face to the list
+                faceIndices.forEachIndexed { faceIndex, face ->
+                    val faceVerts = face.map { transformedVertices[it] }
+                    val avgZ = faceVerts.map { it.z }.average().toFloat()
+
+                    // Darken sides, lighter for front/back
+                    val faceColor = when (faceIndex) {
+                        0 -> keyCube.color  // Front - full color
+                        1 -> keyCube.color.copy(alpha = 0.7f)  // Back
+                        else -> keyCube.color.copy(
+                            red = keyCube.color.red * 0.6f,
+                            green = keyCube.color.green * 0.6f,
+                            blue = keyCube.color.blue * 0.6f
+                        )  // Sides - darker
                     }
-                    val fontSize = (faceWidth * 0.5f).coerceIn(6f, 14f)
 
-                    val textColor = if (faceToDraw.key in "0".."9" || faceToDraw.key == ".") {
-                        Color(0xFF2D2D2D)
-                    } else {
-                        Color.White
-                    }
-
-                    val textLayoutResult = textMeasurer.measure(
-                        text = faceToDraw.key,
-                        style = TextStyle(
-                            fontSize = fontSize.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = textColor
-                        )
-                    )
-
-                    drawText(
-                        textLayoutResult = textLayoutResult,
-                        topLeft = Offset(
-                            centerX - textLayoutResult.size.width / 2,
-                            centerY - textLayoutResult.size.height / 2
+                    allFaces.add(
+                        FaceToDraw(
+                            vertices = faceVerts,
+                            color = faceColor,
+                            avgZ = avgZ,
+                            key = keyCube.key,
+                            isFront = faceIndex == 0
                         )
                     )
                 }
             }
+
+            // Sort all faces by depth (back to front)
+            val sortedFaces = allFaces.sortedBy { it.avgZ }
+
+            // Draw all faces
+            sortedFaces.forEach { faceToDraw ->
+                val faceVertices = faceToDraw.vertices
+
+                // Backface culling
+                val v0 = faceVertices[0]
+                val v1 = faceVertices[1]
+                val v2 = faceVertices[2]
+
+                val edge1X = v1.x - v0.x
+                val edge1Y = v1.y - v0.y
+                val edge2X = v2.x - v1.x
+                val edge2Y = v2.y - v1.y
+                val crossZ = edge1X * edge2Y - edge1Y * edge2X
+
+                if (crossZ > 0) {
+                    // Project vertices to 2D
+                    val projectedPoints =
+                        faceVertices.map { project(it, screenCenterX, screenCenterY, scale) }
+
+                    // Create path
+                    val path = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(projectedPoints[0].x, projectedPoints[0].y)
+                        projectedPoints.drop(1).forEach { lineTo(it.x, it.y) }
+                        close()
+                    }
+
+                    // Draw filled face
+                    drawPath(path = path, color = faceToDraw.color)
+
+                    // Draw edges
+                    drawPath(
+                        path = path,
+                        color = Color.Black.copy(alpha = 0.3f),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1f)
+                    )
+
+                    // Draw key label on front face
+                    if (faceToDraw.isFront && faceToDraw.key.isNotEmpty()) {
+                        val centerX = projectedPoints.map { it.x }.average().toFloat()
+                        val centerY = projectedPoints.map { it.y }.average().toFloat()
+
+                        // Calculate face size for font scaling
+                        val faceWidth = (projectedPoints[1].x - projectedPoints[0].x).let {
+                            kotlin.math.abs(it)
+                        }
+                        val fontSize = (faceWidth * 0.5f).coerceIn(6f, 14f)
+
+                        val textColor = if (faceToDraw.key in "0".."9" || faceToDraw.key == ".") {
+                            Color(0xFF2D2D2D)
+                        } else {
+                            Color.White
+                        }
+
+                        val textLayoutResult = textMeasurer.measure(
+                            text = faceToDraw.key,
+                            style = TextStyle(
+                                fontSize = fontSize.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = textColor
+                            )
+                        )
+
+                        drawText(
+                            textLayoutResult = textLayoutResult,
+                            topLeft = Offset(
+                                centerX - textLayoutResult.size.width / 2,
+                                centerY - textLayoutResult.size.height / 2
+                            )
+                        )
+                    }
+                }
+            }
         }
+
     }
-}
 
-@ComposePreview(showBackground = true)
-@Composable
-fun DefaultPreview() {
-    MaterialTheme { CalculatorScreen() }
-}
+    @ComposePreview(showBackground = true)
+    @Composable
+    fun DefaultPreview() {
+        MaterialTheme { CalculatorScreen() }
+    }
