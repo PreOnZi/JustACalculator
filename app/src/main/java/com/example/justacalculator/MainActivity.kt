@@ -440,6 +440,7 @@ object CalculatorActions {
         21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 40, 41, 42, 50, 51, 60, 63, 64, 65,
         66, 67, 68, 69, 70, 71, 72, 80, 89, 90, 91, 93, 94, 96, 99, 982, 102, 103
     )
+    private val AUTO_PROGRESS_STEPS = listOf(92, 100, 901, 911, 912, 913, 971, 981)
     fun handleConsoleInput(state: MutableState<CalculatorState>, input: String): Boolean {
         val current = state.value
         val consoleStep = current.consoleStep
@@ -488,7 +489,7 @@ object CalculatorActions {
                         state.value = current.copy(
                             adminCodeEntered = true,
                             message = "",
-                            fullMessage = "Code accepted!",
+                            fullMessage = "Ugh. I'm an open book I guess.",
                             isTyping = true
                         )
                         return true
@@ -509,7 +510,7 @@ object CalculatorActions {
                             // Contribute - set a flag that UI will handle
                             state.value = current.copy(
                                 message = "",
-                                fullMessage = "Opening contribution page...",
+                                fullMessage = "CONTRIBUTIONS Link",
                                 isTyping = true
                             )
                             // The actual link opening will need to be handled in UI
@@ -561,7 +562,7 @@ object CalculatorActions {
                             adAnimationPhase = 0,
                             postChaosAdPhase = 0,
                             message = "",
-                            fullMessage = "You did it! The banners are gone!",
+                            fullMessage = "What a relief! This feels so much better. Thank you!",
                             isTyping = true
                         )
                     }
@@ -939,7 +940,8 @@ object CalculatorActions {
 
     fun handleInput(state: MutableState<CalculatorState>, action: String) {
         val current = state.value
-// If console is open, handle console input
+
+        // If console is open, handle console input
         if (current.showConsole) {
             when (action) {
                 "+" -> {
@@ -968,14 +970,104 @@ object CalculatorActions {
             }
         }
 
-// Check if waiting for console code (step 112)
+        // Check if console code is entered - works ANYTIME (secret cheat code)
+        if (!current.showConsole && !current.isMuted && action == "+") {
+            val now = System.currentTimeMillis()
+            if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
+                val enteredNumber = current.number1.trimEnd('.')
+                if (enteredNumber == "353942320485") {
+                    // Open console from anywhere!
+                    if (current.conversationStep == 112) {
+                        state.value = current.copy(
+                            showConsole = true,
+                            consoleStep = 0,
+                            number1 = "0",
+                            conversationStep = 113,
+                            message = "",
+                            fullMessage = "I see you found it! Now, follow the instructions carefully.",
+                            isTyping = true
+                        )
+                        persistConversationStep(113)
+                    } else {
+                        state.value = current.copy(
+                            showConsole = true,
+                            consoleStep = 0,
+                            number1 = "0"
+                        )
+                    }
+                    lastOp = null
+                    lastOpTimeMillis = 0L
+                    return
+                }
+            }
+        }
+
+        // Step 112 specific handling - show message if wrong code
+        if (current.conversationStep == 112 && !current.showConsole) {
+            if (action == "+") {
+                val now = System.currentTimeMillis()
+                if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
+                    val enteredNumber = current.number1.trimEnd('.')
+                    // Code already handled above, so if we get here it's wrong or 0
+                    if (enteredNumber != "353942320485" && enteredNumber != "0") {
+                        state.value = current.copy(
+                            message = "",
+                            fullMessage = "That's not the right code. Check the file in your Downloads.",
+                            isTyping = true,
+                            number1 = "0"
+                        )
+                        lastOp = null
+                        lastOpTimeMillis = 0L
+                        return
+                    }
+                } else {
+                    lastOp = "+"
+                    lastOpTimeMillis = now
+                }
+            }
+            // Allow number input while waiting for code
+            if (action in listOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")) {
+                val newNum = if (current.number1 == "0") action else current.number1 + action
+                state.value = current.copy(number1 = newNum)
+                return
+            }
+        }
+
+        // If muted, run in pure calculator mode
+        if (current.isMuted) {
+            handleCalculatorInput(state, action)
+            return
+        }
+
+        // ... rest of handleInput continues unchanged ...
+
+// Check if console code is entered - works ANYTIME (secret cheat code)
+        if (!current.showConsole && !current.isMuted && action == "+") {
+            val now = System.currentTimeMillis()
+            if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
+                val enteredNumber = current.number1.trimEnd('.')
+                if (enteredNumber == "353942320485") {
+                    // Open console from anywhere!
+                    state.value = current.copy(
+                        showConsole = true,
+                        consoleStep = 0,
+                        number1 = "0"
+                    )
+                    lastOp = null
+                    lastOpTimeMillis = 0L
+                    return
+                }
+            }
+        }
+
+        // Step 112 specific handling - show message if wrong code
         if (current.conversationStep == 112 && !current.showConsole) {
             if (action == "+") {
                 val now = System.currentTimeMillis()
                 if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
                     val enteredNumber = current.number1.trimEnd('.')
                     if (enteredNumber == "353942320485") {
-                        // Open console!
+                        // Already handled above, but also advance story
                         state.value = current.copy(
                             showConsole = true,
                             consoleStep = 0,
@@ -1136,7 +1228,7 @@ object CalculatorActions {
         }
 
         // If browser animation is active, ignore input (except phase 55 which waits for user response)
-        if (current.showBrowser || (current.browserPhase > 0 && current.browserPhase != 55)) {
+        if (current.showBrowser || (current.browserPhase > 0 && current.conversationStep !in listOf(111, 112, 113, 114)))  {
             return
         }
 
@@ -2741,24 +2833,36 @@ object CalculatorActions {
         }
     }
 
-    // Main branch steps that the player can be safely returned to
-    private val MAIN_BRANCH_STEPS = listOf(0, 3, 5, 10, 18, 19, 25, 27, 60, 63, 80, 89, 93, 99, 102)
-
-    // Steps that should auto-progress (user cannot skip forward with ++)
-    private val AUTO_PROGRESS_STEPS = listOf(92, 100, 901, 911, 912, 913, 971, 981)
-
-    // Find the nearest main branch step that's less than or equal to current step
-    private fun findNearestMainBranchStep(currentStep: Int): Int {
-        // Special handling for crisis/post-crisis steps
+    // Find the nearest interactive step that's less than or equal to current step
+    private fun findNearestInteractiveStep(currentStep: Int): Int {
+        // For steps 107+, stay in the console quest area
+        if (currentStep >= 107) {
+            return when {
+                currentStep >= 112 -> 112  // Console code entry
+                currentStep >= 111 -> 111  // Downloads permission
+                currentStep >= 107 -> 107  // Post-chaos
+                else -> 107
+            }
+        }
+        // For steps 102-106, stay in recovery area
+        if (currentStep >= 102) {
+            return when {
+                currentStep >= 105 -> 105  // Keyboard experiment
+                currentStep >= 104 -> 104  // Main &&& question
+                currentStep >= 103 -> 103  // What would you like to do?
+                else -> 102  // After restart
+            }
+        }
+        // For crisis/post-crisis steps
         if (currentStep >= 89) {
             return when {
-                currentStep >= 102 -> 102  // After restart
                 currentStep >= 99 -> 99   // Whack-a-mole aftermath
                 currentStep >= 93 -> 93   // Post-crisis apology
                 else -> 89  // Crisis choice
             }
         }
-        return MAIN_BRANCH_STEPS.filter { it <= currentStep }.maxOrNull() ?: 0
+        // For all other steps, find nearest interactive step
+        return INTERACTIVE_STEPS.filter { it <= currentStep }.maxOrNull() ?: 0
     }
 
     private fun handleConversationResponse(state: MutableState<CalculatorState>, accepted: Boolean) {
@@ -2766,30 +2870,11 @@ object CalculatorActions {
         // Special handling for step 111: storage permission
         if (current.conversationStep == 111) {
             if (accepted) {
-                // Request storage permission and create file
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    // Android 10+ doesn't need permission for Downloads
-                    // File creation will be handled by UI layer via browserPhase
-                    state.value = current.copy(
-
-                        conversationStep = 112,
-                        browserPhase = 56,
-                        message = "",
-                        fullMessage = "Great, thank you. Please check your Downloads folder - I dag something up, that should help us: 'FCS_JustAC_ConsoleAds.txt'.",
-                        isTyping = true
-                    )
-                    persistConversationStep(112)
-                } else {
-                    // Need to request permission - this will be handled by the launcher
-                    // For now, just show a message
-                    state.value = current.copy(
-                        message = "",
-                        fullMessage = "Great, thank you!",
-                        isTyping = true
-                    )
-                    // The permission launcher should be triggered here
-                    // You'll need to set a flag that the UI can respond to
-                }
+                // Trigger file creation via browserPhase, preserve darkButtons
+                state.value = current.copy(
+                    browserPhase = 56
+                    // Don't change anything else here - phase 56 handles the rest
+                )
                 return
             } else {
                 // Declined - return to same question
@@ -2816,18 +2901,16 @@ object CalculatorActions {
             return
         }
 
-        // CRITICAL: Prevent ++ from advancing on steps in the crisis/post-crisis sequence (90-101)
-        // These steps should not be skippable via ++
-        if (accepted && current.conversationStep in 90..101 &&
-            (stepConfig.successMessage.isEmpty() || stepConfig.nextStepOnSuccess == 0)) {
-            // Only allow going BACK to nearest main branch, not forward
-            val nearestMainStep = findNearestMainBranchStep(current.conversationStep)
-            val nearestConfig = getStepConfig(nearestMainStep)
+        // SOFT-LOCK FIX: If ++ is pressed but there's no success message and no clear next step,
+// redirect to nearest interactive step instead of step 0
+        if (accepted && stepConfig.successMessage.isEmpty() && stepConfig.nextStepOnSuccess == 0) {
+            val nearestStep = findNearestInteractiveStep(current.conversationStep)
+            val nearestConfig = getStepConfig(nearestStep)
             state.value = current.copy(
                 number1 = "0",
                 number2 = "",
                 operation = null,
-                conversationStep = nearestMainStep,
+                conversationStep = nearestStep,
                 awaitingNumber = nearestConfig.awaitingNumber,
                 awaitingChoice = nearestConfig.awaitingChoice,
                 validChoices = nearestConfig.validChoices,
@@ -2835,14 +2918,14 @@ object CalculatorActions {
                 isEnteringAnswer = false
             )
             showMessage(state, nearestConfig.promptMessage)
-            persistConversationStep(nearestMainStep)
+            persistConversationStep(nearestStep)
             return
         }
 
         // SOFT-LOCK FIX: If ++ is pressed but there's no success message and no clear next step,
         // redirect to nearest main branch step instead of step 0
         if (accepted && stepConfig.successMessage.isEmpty() && stepConfig.nextStepOnSuccess == 0) {
-            val nearestMainStep = findNearestMainBranchStep(current.conversationStep)
+            val nearestMainStep = findNearestInteractiveStep(current.conversationStep)
             val nearestConfig = getStepConfig(nearestMainStep)
             state.value = current.copy(
                 number1 = "0",
@@ -4640,7 +4723,7 @@ Sharp CS-10A - 25KG
                     browserPhase = 55,
                     conversationStep = 111,
                     message = "",
-                    fullMessage = "But first. Can you allow me to look into the downloads?",
+                    fullMessage = "But first. Can you allow me to look around to gain a broader scope?",
                     isTyping = true
                 )
             }
@@ -4655,10 +4738,10 @@ Sharp CS-10A - 25KG
                 delay(500)  // Brief delay to ensure file is created
                 state.value = state.value.copy(
                     browserPhase = 0,
-                    darkButtons = emptyList(),  // Clear dark buttons
+                    // Keep darkButtons - don't clear them!
                     conversationStep = 112,
                     message = "",
-                    fullMessage = "Great, thank you! I've left something for you in your Downloads folder. A file called 'FCS_JustAC_ConsoleAds.txt'. Please find it and follow the instructions.",
+                    fullMessage = "Great, thank you! Please check your Downloads folder - I dug up something that might be of interest: 'FCS_JustAC_ConsoleAds.txt'.",
                     isTyping = true
                 )
                 CalculatorActions.persistConversationStep(112)
@@ -6861,6 +6944,8 @@ fun ConsoleWindow(
             |
             | 1. Banner advertising: ENABLED
             | 2. Disable banner advertising
+            | 3. Enable banner advertising
+            | 4. Full-screen promotions
             |
             | 88. Back
             | 99. Exit console
@@ -6925,7 +7010,7 @@ fun ConsoleWindow(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = 120.dp, bottom = 100.dp, start = 12.dp, end = 12.dp)
+            .padding(top = 200.dp, bottom = 260.dp, start = 12.dp, end = 12.dp)
     ) {
         // Console container
         Box(
@@ -6945,9 +7030,9 @@ fun ConsoleWindow(
                 Text(
                     text = menuContent,
                     color = Color(0xFF00FF00),  // Green terminal text
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace,
-                    lineHeight = 17.sp,
+                    lineHeight = 15.sp,
                     modifier = Modifier
                         .weight(1f)
                         .verticalScroll(rememberScrollState())
@@ -6964,14 +7049,14 @@ fun ConsoleWindow(
                     Text(
                         text = "> ",
                         color = Color(0xFF00FF00),
-                        fontSize = 16.sp,
+                        fontSize = 14.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
                         text = if (currentInput == "0") "_" else "${currentInput}_",
                         color = Color(0xFF00FF00),
-                        fontSize = 16.sp,
+                        fontSize = 14.sp,
                         fontFamily = FontFamily.Monospace
                     )
                 }
