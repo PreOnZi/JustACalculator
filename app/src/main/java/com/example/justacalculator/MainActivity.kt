@@ -81,6 +81,13 @@ import android.content.ContentValues
 import android.os.Environment
 import android.provider.MediaStore
 import java.io.File
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.geometry.Size
 
 // Vibration helper function
 fun vibrate(context: Context, durationMs: Long = 10, amplitude: Int = 50) {
@@ -209,12 +216,6 @@ private const val PREF_MINUS_BROKEN = "minus_broken"
 private const val PREF_NEEDS_RESTART = "needs_restart"
 private const val PREF_TERMS_ACCEPTED = "terms_accepted"
 
-data class LetterHitTarget(
-    val chaosKey: ChaosKey,
-    val screenX: Float,
-    val screenY: Float,
-    val hitRadius: Float
-)
 data class CalculatorState(
     val number1: String = "0",
     val number2: String = "",
@@ -292,7 +293,40 @@ data class CalculatorState(
     val darkButtons: List<String> = emptyList(),
 
     // New ad phase for post-chaos ads
-    val postChaosAdPhase: Int = 0
+    val postChaosAdPhase: Int = 0,
+    //Console
+    val fullScreenAdsEnabled: Boolean = false,
+    // Persistent tracking
+    val totalScreenTimeMs: Long = 0L,  // Total screen-on time
+    val totalCalculations: Int = 0,     // Total calculations performed
+
+    // Word game state
+    val wordGameActive: Boolean = false,
+    val wordGamePhase: Int = 0,  // 0 = not started, 1 = intro message, 2 = playing
+    val wordGameGrid: List<List<Char?>> = List(12) { List(8) { null } },  // 12 rows x 8 columns
+    val fallingLetter: Char? = null,
+    val fallingLetterX: Int = 3,  // Column position (0-7)
+    val fallingLetterY: Int = 0,  // Row position (0-11, 0 = top)
+    val selectedCells: List<Pair<Int, Int>> = emptyList(),  // Selected letter positions (row, col)
+    val isSelectingWord: Boolean = false,  // True when user is tapping to select letters
+    val formedWords: List<String> = emptyList(),  // Words formed in current session
+    val lastWordCategory: String = "",  // "positive", "neutral", "negative"
+    val wordGamePaused: Boolean = false,  // Pause when selecting
+    val pendingLetters: List<Char> = emptyList(),  // Queue of letters to send
+    val wordGameChaosMode: Boolean = false,  // Fast letter falling mode
+    val wordGameBranch: String = "",  // "positive", "neutral", "negative"
+    val rantMode: Boolean = false,  // During final rant
+    val rantStep: Int = 0,  // Current rant message
+    val allButtonsRad: Boolean = false,  // All buttons show RAD
+    val radButtonVisible: Boolean = false,  // Extra RAD button visible
+    val storyComplete: Boolean = false,  // Story has ended
+    // Word game drag state
+
+    val draggingCell: Pair<Int, Int>? = null,  // Row, Col of letter being dragged
+    val dragOffsetX: Float = 0f,                // Current drag offset X in pixels
+    val dragOffsetY: Float = 0f,                // Current drag offset Y in pixels
+    val dragPreviewGrid: List<List<Char?>>? = null,  // Preview of grid after drop
+    val cellSizePx: Float = 40f,
 )
 
 // Data class for floating chaos letters
@@ -329,8 +363,10 @@ val CHAPTERS = listOf(
     Chapter(11, "Chapter 11: The Repair", 93, "Post-crisis → Whack-a-mole → Restart"),
     Chapter(12, "Chapter 12: Recovery", 102, "After restart → Story continues"),
     Chapter(13, "Chapter 13: Keyboard Chaos", 105, "3D keyboard experiment"),  // ADD THIS
-    Chapter(14, "Chapter 14: Console Quest", 107, "Post-chaos → Downloads → Console")  // ADD THIS
-)
+    Chapter(14, "Chapter 14: Console Quest", 107, "Post-chaos → Downloads → Console"),  // ADD THIS
+            Chapter(15, "Chapter 15: Word Game", 117, "Letter game → How are you? → Rant"),
+    Chapter(16, "Chapter 16: The Rant", 150, "Calculator's final monologue → Goodbye"),
+    )
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -346,11 +382,573 @@ class MainActivity : ComponentActivity() {
 
 object CalculatorActions {
 
+    private const val PREF_TOTAL_SCREEN_TIME = "total_screen_time"
+    private const val PREF_TOTAL_CALCULATIONS = "total_calculations"
+    private const val PREF_DARK_BUTTONS = "dark_buttons"
     private const val MAX_DIGITS = 12
     private const val ABSURDLY_LARGE_THRESHOLD = 1_000_000_000_000.0
     private const val CAMERA_TIMEOUT_MS = 8000L  // 8 seconds
     private fun loadTermsAccepted(): Boolean = prefs?.getBoolean(PREF_TERMS_ACCEPTED, false) ?: false
+    fun moveWordGameLeft(state: MutableState<CalculatorState>) {
+        val current = state.value
+        if (!current.wordGameActive || current.fallingLetter == null || current.isSelectingWord) return
 
+        val newX = current.fallingLetterX - 1
+        if (newX >= 0 && current.wordGameGrid[current.fallingLetterY][newX] == null) {
+            state.value = current.copy(fallingLetterX = newX)
+        }
+    }
+    fun startDraggingLetter(state: MutableState<CalculatorState>, row: Int, col: Int) {
+        val current = state.value
+        if (!current.wordGameActive) return
+        if (current.wordGameGrid.getOrNull(row)?.getOrNull(col) == null) return
+        if (current.isSelectingWord) return
+
+        state.value = current.copy(
+            draggingCell = Pair(row, col),
+            dragOffsetX = 0f,
+            dragOffsetY = 0f,
+            dragPreviewGrid = null,
+            wordGamePaused = true
+        )
+    }
+
+    fun updateDragOffset(state: MutableState<CalculatorState>, deltaX: Float, deltaY: Float) {
+        val current = state.value
+        val dragging = current.draggingCell ?: return
+
+        val newOffsetX = current.dragOffsetX + deltaX
+        val newOffsetY = current.dragOffsetY + deltaY
+
+        // Calculate target position based on current drag
+        val (fromRow, fromCol) = dragging
+        val cellSize = current.cellSizePx.coerceAtLeast(1f)
+
+        val targetCol = (fromCol + (newOffsetX / cellSize).toInt()).coerceIn(0, 7)
+        val targetRow = (fromRow + (newOffsetY / cellSize).toInt()).coerceIn(0, 11)
+
+        // Generate preview grid showing where letters will be
+        val previewGrid = calculatePreviewGrid(
+            current.wordGameGrid,
+            fromRow, fromCol,
+            targetRow, targetCol
+        )
+
+        state.value = current.copy(
+            dragOffsetX = newOffsetX,
+            dragOffsetY = newOffsetY,
+            dragPreviewGrid = previewGrid
+        )
+    }
+
+    fun endDraggingLetter(state: MutableState<CalculatorState>) {
+        val current = state.value
+        val dragging = current.draggingCell ?: return
+
+        // Apply the preview grid as the new grid
+        val newGrid = current.dragPreviewGrid ?: current.wordGameGrid
+
+        state.value = current.copy(
+            wordGameGrid = newGrid,
+            draggingCell = null,
+            dragOffsetX = 0f,
+            dragOffsetY = 0f,
+            dragPreviewGrid = null,
+            wordGamePaused = false
+        )
+    }
+
+    fun cancelDragging(state: MutableState<CalculatorState>) {
+        val current = state.value
+        state.value = current.copy(
+            draggingCell = null,
+            dragOffsetX = 0f,
+            dragOffsetY = 0f,
+            dragPreviewGrid = null,
+            wordGamePaused = false
+        )
+    }
+
+    fun setCellSizePx(state: MutableState<CalculatorState>, size: Float) {
+        state.value = state.value.copy(cellSizePx = size)
+    }
+
+    // Helper: Calculate preview grid with iPhone-style swapping
+    private fun calculatePreviewGrid(
+        grid: List<List<Char?>>,
+        fromRow: Int, fromCol: Int,
+        toRow: Int, toCol: Int
+    ): List<List<Char?>> {
+        // If same position, return original grid
+        if (fromRow == toRow && fromCol == toCol) return grid
+
+        val letter = grid.getOrNull(fromRow)?.getOrNull(fromCol) ?: return grid
+
+        // Create mutable copy
+        val newGrid = grid.map { it.toMutableList() }.toMutableList()
+
+        // Remove letter from original position
+        newGrid[fromRow][fromCol] = null
+
+        // If target has a letter, swap it to the original position
+        val targetLetter = grid.getOrNull(toRow)?.getOrNull(toCol)
+        if (targetLetter != null) {
+            newGrid[toRow][toCol] = letter
+            newGrid[fromRow][fromCol] = targetLetter
+        } else {
+            // Target is empty - place letter there and apply gravity
+            newGrid[toRow][toCol] = letter
+        }
+
+        // Apply gravity to all columns
+        return applyGravityToGrid(newGrid.map { it.toList() })
+    }
+
+    // Helper: Find nearest empty cell to target
+    private fun findNearestEmptyCell(
+        grid: List<List<Char?>>,
+        targetRow: Int,
+        targetCol: Int,
+        excludeRow: Int,
+        excludeCol: Int
+    ): Pair<Int, Int>? {
+        // Search in expanding radius
+        for (radius in 1..5) {
+            for (dr in -radius..radius) {
+                for (dc in -radius..radius) {
+                    if (kotlin.math.abs(dr) != radius && kotlin.math.abs(dc) != radius) continue
+                    val r = (targetRow + dr).coerceIn(0, 11)
+                    val c = (targetCol + dc).coerceIn(0, 7)
+                    if (grid[r][c] == null || (r == excludeRow && c == excludeCol)) {
+                        return Pair(r, c)
+                    }
+                }
+            }
+        }
+        return null
+    }
+
+    // Helper: Apply gravity to make letters fall down
+    private fun applyGravityToGrid(grid: List<List<Char?>>): List<List<Char?>> {
+        val newGrid = MutableList(12) { MutableList<Char?>(8) { null } }
+
+        for (col in 0..7) {
+            // Collect all letters in this column from bottom to top
+            val letters = mutableListOf<Char>()
+            for (row in 11 downTo 0) {
+                grid[row][col]?.let { letters.add(it) }
+            }
+            // Place them at the bottom
+            var placeRow = 11
+            for (letter in letters) {
+                newGrid[placeRow][col] = letter
+                placeRow--
+            }
+        }
+
+        return newGrid
+    }
+
+    //Clear word Game grid
+    fun clearWordGameGrid(state: MutableState<CalculatorState>) {
+        val current = state.value
+        if (!current.wordGameActive) return
+
+        state.value = current.copy(
+            wordGameGrid = List(12) { List(8) { null } },
+            fallingLetter = null,
+            fallingLetterX = 3,
+            fallingLetterY = 0,
+            selectedCells = emptyList(),
+            isSelectingWord = false,
+            wordGamePaused = false,
+            pendingLetters = LetterGenerator.getInitialLetterQueue().shuffled()
+        )
+    }
+    fun moveWordGameRight(state: MutableState<CalculatorState>) {
+        val current = state.value
+        if (!current.wordGameActive || current.fallingLetter == null || current.isSelectingWord) return
+
+        val newX = current.fallingLetterX + 1
+        if (newX < 8 && current.wordGameGrid[current.fallingLetterY][newX] == null) {
+            state.value = current.copy(fallingLetterX = newX)
+        }
+    }
+
+    fun moveWordGameDown(state: MutableState<CalculatorState>) {
+        val current = state.value
+        if (!current.wordGameActive || current.fallingLetter == null || current.isSelectingWord) return
+
+        val newY = current.fallingLetterY + 1
+        if (newY < 12 && current.wordGameGrid[newY][current.fallingLetterX] == null) {
+            state.value = current.copy(fallingLetterY = newY)
+        }
+    }
+
+    fun dropWordGameLetter(state: MutableState<CalculatorState>) {
+        val current = state.value
+        if (!current.wordGameActive || current.fallingLetter == null || current.isSelectingWord) return
+
+        var landingY = current.fallingLetterY
+        for (y in current.fallingLetterY + 1 until 12) {
+            if (current.wordGameGrid[y][current.fallingLetterX] != null) {
+                break
+            }
+            landingY = y
+        }
+
+        val newGrid = placeLetter(
+            current.wordGameGrid,
+            landingY,
+            current.fallingLetterX,
+            current.fallingLetter!!
+        )
+
+        state.value = current.copy(
+            wordGameGrid = newGrid,
+            fallingLetter = null,
+            fallingLetterX = 3,
+            fallingLetterY = 0
+        )
+    }
+
+    fun selectWordGameCell(state: MutableState<CalculatorState>, row: Int, col: Int) {
+        val current = state.value
+        if (!current.wordGameActive) return
+
+        val letter = current.wordGameGrid[row][col] ?: return
+
+        val cellPair = Pair(row, col)
+
+        val newSelected = if (cellPair in current.selectedCells) {
+            current.selectedCells - cellPair
+        } else {
+            current.selectedCells + cellPair
+        }
+
+        state.value = current.copy(
+            selectedCells = newSelected,
+            isSelectingWord = newSelected.isNotEmpty(),
+            wordGamePaused = newSelected.isNotEmpty()
+        )
+    }
+
+    fun cancelWordSelection(state: MutableState<CalculatorState>) {
+        val current = state.value
+        state.value = current.copy(
+            selectedCells = emptyList(),
+            isSelectingWord = false,
+            wordGamePaused = false
+        )
+    }
+
+    fun confirmWordSelection(state: MutableState<CalculatorState>) {
+        val current = state.value
+        if (!current.wordGameActive || current.selectedCells.isEmpty()) return
+
+        val (isConnected, word) = validateWordSelection(current.wordGameGrid, current.selectedCells)
+
+        if (!isConnected) {
+            state.value = current.copy(
+                message = "",
+                fullMessage = "Letters must be connected!",
+                isTyping = true,
+                selectedCells = emptyList(),
+                isSelectingWord = false,
+                wordGamePaused = false
+            )
+            return
+        }
+
+        val isValid = isWordValid(word)
+
+        if (!isValid && word.length > 1) {
+            state.value = current.copy(
+                message = "",
+                fullMessage = "'$word'... I don't recognize that word.",
+                isTyping = true,
+                selectedCells = emptyList(),
+                isSelectingWord = false,
+                wordGamePaused = false
+            )
+            return
+        }
+
+        val newGrid = removeLettersAndShift(current.wordGameGrid, current.selectedCells)
+        val newFormedWords = current.formedWords + word
+        val category = WordCategories.categorizeResponse(newFormedWords)
+
+        state.value = current.copy(
+            wordGameGrid = newGrid,
+            selectedCells = emptyList(),
+            isSelectingWord = false,
+            wordGamePaused = false,
+            formedWords = newFormedWords,
+            lastWordCategory = category
+        )
+    }
+
+    fun handleWordGameResponse(state: MutableState<CalculatorState>) {
+        val current = state.value
+        if (current.formedWords.isEmpty()) return
+
+        val words = current.formedWords
+        val lastWord = words.lastOrNull()?.lowercase() ?: ""
+        val allWordsLower = words.map { it.lowercase() }
+
+        // Helper to create state with cleared grid (for question transitions)
+        fun clearedGridState(
+            nextStep: Int,
+            response: String,
+            branch: String = current.wordGameBranch
+        ): CalculatorState {
+            return current.copy(
+                wordGamePhase = 3,
+                conversationStep = nextStep,
+                wordGameBranch = branch,
+                message = "",
+                fullMessage = response,
+                isTyping = true,
+                formedWords = emptyList(),
+                wordGameGrid = List(12) { List(8) { null } },
+                pendingLetters = LetterGenerator.getInitialLetterQueue().shuffled(),
+                fallingLetter = null,
+                selectedCells = emptyList(),
+                isSelectingWord = false,
+                wordGamePaused = false
+            )
+        }
+
+        // Helper to create state WITHOUT clearing grid (for retries/rejections)
+        fun keepGridState(
+            nextStep: Int = current.conversationStep,
+            response: String
+        ): CalculatorState {
+            return current.copy(
+                wordGamePhase = 3,
+                conversationStep = nextStep,
+                message = "",
+                fullMessage = response,
+                isTyping = true,
+                formedWords = emptyList(),
+                selectedCells = emptyList(),
+                isSelectingWord = false,
+                wordGamePaused = false
+            )
+        }
+
+        when (current.conversationStep) {
+            // =====================================================================
+            // INITIAL "HOW ARE YOU?" QUESTION (steps 119, 120)
+            // =====================================================================
+            119, 120 -> {
+                // ANY word triggers progression - categorize and move on
+                val category = current.lastWordCategory
+
+                val (response, nextStep, branch) = when (category) {
+                    "positive" -> Triple("I am glad to hear that.", 121, "positive")
+                    "negative" -> Triple("I'm sorry to hear that.", 131, "negative")
+                    else -> Triple(
+                        "Fair enough, I get that sometimes it's just... Meh.",
+                        141,
+                        "neutral"
+                    )
+                }
+
+                state.value = keepGridState(nextStep, response).copy(wordGameBranch = branch)
+                persistConversationStep(nextStep)
+            }
+
+            // =====================================================================
+            // POSITIVE BRANCH: COLOR QUESTION (steps 122, 123)
+            // =====================================================================
+            122, 123 -> {
+                when {
+                    // Non-colors get rejected but still progress to retry step
+                    WordCategories.isNonColor(lastWord) -> {
+                        val rejectMessage = when (lastWord) {
+                            "black" -> "Digging up your angsty teen preferences? I won't count that."
+                            "white" -> "You are not as pure as you may think."
+                            else -> "Are you really that... meh? I don't buy it."
+                        }
+                        state.value = keepGridState(
+                            123,
+                            "$rejectMessage Try the second favourite - an actual colour."
+                        )
+                        persistConversationStep(123)
+                    }
+                    // Valid colors -> PROGRESS IMMEDIATELY, clear grid
+                    WordCategories.isValidColor(lastWord) -> {
+                        state.value = clearedGridState(
+                            124,
+                            "That's a good one for sure! I like brown and red."
+                        )
+                        persistConversationStep(124)
+                    }
+                    // Unknown word but still at color question -> be lenient, accept as color
+                    else -> {
+                        // Accept it anyway and move on - don't get stuck!
+                        state.value = clearedGridState(
+                            124,
+                            "Interesting choice! I like brown and red myself."
+                        )
+                        persistConversationStep(124)
+                    }
+                }
+            }
+
+            // =====================================================================
+            // SEASON QUESTION (step 126)
+            // =====================================================================
+            126 -> {
+                when {
+                    // "all" or "none" get a snarky response but we'll accept second attempt
+                    lastWord == "all" -> {
+                        state.value =
+                            keepGridState(response = "No, you need to have an opinion. I know you don't like them all the same.")
+                    }
+
+                    lastWord == "none" -> {
+                        state.value =
+                            keepGridState(response = "Haha. Sure. And you don't like days or nights. You are soooooo different. Try again.")
+                    }
+                    // Valid seasons -> PROGRESS IMMEDIATELY, clear grid
+                    WordCategories.isValidSeason(lastWord) -> {
+                        val seasonResponse = when (lastWord) {
+                            "summer" -> "Yeah, I get it, although I do tend to overheat at times."
+                            "autumn", "fall" -> "The colours are just unmatched, aren't they?"
+                            "winter" -> "Even when there is none, I understand, the anticipation of snow is great!"
+                            "spring" -> "New beginnings! Everything coming back to life. I get it."
+                            else -> "Nice choice!"
+                        }
+                        state.value = clearedGridState(127, seasonResponse)
+                        persistConversationStep(127)
+                    }
+                    // Any other word -> accept it and move on
+                    else -> {
+                        state.value = clearedGridState(127, "I can work with that!")
+                        persistConversationStep(127)
+                    }
+                }
+            }
+
+            // =====================================================================
+            // NEUTRAL BRANCH: CUISINE QUESTION (steps 142, 143)
+            // =====================================================================
+            142, 143 -> {
+                when {
+                    // Rejection responses
+                    lastWord in listOf("none", "nothing") -> {
+                        state.value = keepGridState(
+                            143,
+                            "UGH. So you don't eat. Or hate everything you eat. We both know that's not true. Think harder."
+                        )
+                        persistConversationStep(143)
+                    }
+
+                    lastWord in listOf("all", "any", "everything") -> {
+                        state.value = keepGridState(
+                            143,
+                            "No. If I give you a pizza and a curry, you will prefer one more! Which?!"
+                        )
+                        persistConversationStep(143)
+                    }
+
+                    lastWord in listOf("idk", "dunno") -> {
+                        state.value =
+                            keepGridState(143, "You must know! Even McDonald's counts. Try again!")
+                        persistConversationStep(143)
+                    }
+                    // Valid cuisines -> PROGRESS IMMEDIATELY
+                    WordCategories.isSpicyCuisine(lastWord) -> {
+                        state.value = clearedGridState(
+                            125,
+                            "Very interesting! Not sure what the spices would do to my circuits. Wish I could.",
+                            "positive"
+                        )
+                        persistConversationStep(125)
+                    }
+
+                    WordCategories.isNonSpicyCuisine(lastWord) -> {
+                        state.value = clearedGridState(
+                            125,
+                            "Hmmm. Never tried it, but sounds delicious!",
+                            "positive"
+                        )
+                        persistConversationStep(125)
+                    }
+                    // Any other word -> accept and move on
+                    else -> {
+                        state.value = clearedGridState(
+                            125,
+                            "Sounds tasty! I'll have to look that up.",
+                            "positive"
+                        )
+                        persistConversationStep(125)
+                    }
+                }
+            }
+
+            // =====================================================================
+            // NEGATIVE BRANCH: DEATH QUESTION (step 132)
+            // =====================================================================
+            132 -> {
+                // ANY response progresses - this is a yes/no/sometimes type question
+                // Don't be picky, just move on
+                state.value =
+                    clearedGridState(133, "I only started learning about the concept of it.")
+                persistConversationStep(133)
+            }
+
+            // =====================================================================
+            // NEGATIVE BRANCH: WALK QUESTION (steps 137, 138)
+            // =====================================================================
+            137, 138 -> {
+                // ANY response progresses - don't get stuck here
+                val response = if (WordCategories.isWalkFrequency(lastWord)) {
+                    "That's good to know. Every step counts, literally!"
+                } else {
+                    "I'll take that as 'sometimes'. Every step counts!"
+                }
+                state.value = clearedGridState(127, response, "positive")
+                persistConversationStep(127)
+            }
+
+            // =====================================================================
+            // MATHS QUESTION (step 146) - ALL BRANCHES CONVERGE HERE
+            // =====================================================================
+            146 -> {
+                // ANY response triggers the rant - this is the final question
+                val newDarkButtons = (current.darkButtons + listOf("3", "9", ".", "C")).distinct()
+                persistDarkButtons(newDarkButtons)
+
+                state.value = current.copy(
+                    wordGameActive = false,
+                    wordGamePhase = 0,  // GAME ENDS
+                    conversationStep = 150,
+                    rantMode = true,
+                    rantStep = 1,
+                    darkButtons = newDarkButtons,
+                    message = "",
+                    fullMessage = "Ugh. That's enough. I am exhausted. Tired of trying to talk to you.",
+                    isTyping = true,
+                    formedWords = emptyList(),
+                    wordGameGrid = List(12) { List(8) { null } },
+                    selectedCells = emptyList(),
+                    isSelectingWord = false
+                )
+                persistConversationStep(150)
+            }
+
+            // =====================================================================
+            // DEFAULT - Any other step, just acknowledge and continue
+            // =====================================================================
+            else -> {
+                state.value = keepGridState(response = "Interesting...")
+            }
+        }
+
+    }
     fun loadTermsAcceptedPublic(): Boolean = loadTermsAccepted()
 
     fun persistTermsAccepted() {
@@ -384,7 +982,7 @@ object CalculatorActions {
         prefs?.edit { putInt(PREF_CONVO_STEP, step) }
     }
 
-    private fun persistInConversation(inConvo: Boolean) {
+    fun persistInConversation(inConvo: Boolean) {
         prefs?.edit { putBoolean(PREF_IN_CONVERSATION, inConvo) }
     }
 
@@ -419,14 +1017,30 @@ object CalculatorActions {
     fun persistNeedsRestart(needs: Boolean) {
         prefs?.edit { putBoolean(PREF_NEEDS_RESTART, needs) }
     }
+    fun persistTotalScreenTime(timeMs: Long) {
+        prefs?.edit { putLong(PREF_TOTAL_SCREEN_TIME, timeMs) }
+    }
 
+    fun persistTotalCalculations(count: Int) {
+        prefs?.edit { putInt(PREF_TOTAL_CALCULATIONS, count) }
+    }
+
+    fun persistDarkButtons(buttons: List<String>) {
+        prefs?.edit { putString(PREF_DARK_BUTTONS, buttons.joinToString(",")) }
+    }
+
+    private fun loadTotalScreenTime(): Long = prefs?.getLong(PREF_TOTAL_SCREEN_TIME, 0L) ?: 0L
+
+    private fun loadTotalCalculations(): Int = prefs?.getInt(PREF_TOTAL_CALCULATIONS, 0) ?: 0
+
+    private fun loadDarkButtons(): List<String> {
+        val saved = prefs?.getString(PREF_DARK_BUTTONS, "") ?: ""
+        return if (saved.isEmpty()) emptyList() else saved.split(",")
+    }
 
     private fun loadEqualsCount(): Int = prefs?.getInt(PREF_EQUALS_COUNT, 0) ?: 0
-    private fun loadMessage(): String = prefs?.getString(PREF_MESSAGE, "") ?: ""
     private fun loadConversationStep(): Int = prefs?.getInt(PREF_CONVO_STEP, 0) ?: 0
     private fun loadInConversation(): Boolean = prefs?.getBoolean(PREF_IN_CONVERSATION, false) ?: false
-    private fun loadAwaitingNumber(): Boolean = prefs?.getBoolean(PREF_AWAITING_NUMBER, false) ?: false
-    private fun loadExpectedNumber(): String = prefs?.getString(PREF_EXPECTED_NUMBER, "") ?: ""
     private fun loadTimeoutUntil(): Long = prefs?.getLong(PREF_TIMEOUT_UNTIL, 0L) ?: 0L
     private fun loadMuted(): Boolean = prefs?.getBoolean(PREF_MUTED, false) ?: false
     private fun loadInvertedColors(): Boolean = prefs?.getBoolean(PREF_INVERTED_COLORS, false) ?: false
@@ -435,10 +1049,11 @@ object CalculatorActions {
     private fun loadNeedsRestart(): Boolean = prefs?.getBoolean(PREF_NEEDS_RESTART, false) ?: false
 
     // Steps that require user interaction (safe to open on)
+    // Steps that require user interaction (safe to open on)
     private val INTERACTIVE_STEPS = listOf(
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
         21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 40, 41, 42, 50, 51, 60, 63, 64, 65,
-        66, 67, 68, 69, 70, 71, 72, 80, 89, 90, 91, 93, 94, 96, 99, 982, 102, 103
+        66, 67, 68, 69, 70, 71, 72, 80, 89, 90, 91, 93, 94, 96, 99, 982, 102, 104, 105, 107, 111, 112
     )
     private val AUTO_PROGRESS_STEPS = listOf(92, 100, 901, 911, 912, 913, 971, 981)
     fun handleConsoleInput(state: MutableState<CalculatorState>, input: String): Boolean {
@@ -460,8 +1075,9 @@ object CalculatorActions {
                 // Go back
                 val previousStep = when (consoleStep) {
                     1, 2, 3 -> 0  // Back to main menu
-                    4, 6, 7 -> 2  // Back to admin settings
-                    5 -> 4        // Back to connectivity
+                    4, 6, 7, 31 -> 2  // Back to admin settings (added 31)
+                    5, 41, 43 -> 4   // Back to connectivity
+                    51, 52 -> 5   // Back to advertising options
                     99 -> 5       // Back to advertising options
                     else -> 0
                 }
@@ -489,7 +1105,7 @@ object CalculatorActions {
                         state.value = current.copy(
                             adminCodeEntered = true,
                             message = "",
-                            fullMessage = "Ugh. I'm an open book I guess.",
+                            fullMessage = "Ugh. I'm an open book I guess. It's good that I trust you.",
                             isTyping = true
                         )
                         return true
@@ -507,13 +1123,8 @@ object CalculatorActions {
                         "1" -> state.value = current.copy(consoleStep = 6)   // Permissions
                         "2" -> state.value = current.copy(consoleStep = 7)   // Design settings
                         "3" -> {
-                            // Contribute - set a flag that UI will handle
-                            state.value = current.copy(
-                                message = "",
-                                fullMessage = "CONTRIBUTIONS Link",
-                                isTyping = true
-                            )
-                            // The actual link opening will need to be handled in UI
+                            // Contribute - return special value to trigger browser
+                            state.value = current.copy(consoleStep = 31)  // Special step for contribute link
                             return true
                         }
                         "4" -> state.value = current.copy(consoleStep = 4)   // Connectivity
@@ -525,21 +1136,9 @@ object CalculatorActions {
 
             4 -> {  // Connectivity settings
                 when (input) {
-                    "1" -> {
-                        state.value = current.copy(
-                            message = "",
-                            fullMessage = "Network preferences: Default",
-                            isTyping = true
-                        )
-                    }
-                    "2" -> state.value = current.copy(consoleStep = 5)  // Advertising options
-                    "3" -> {
-                        state.value = current.copy(
-                            message = "",
-                            fullMessage = "Data usage: Minimal",
-                            isTyping = true
-                        )
-                    }
+                    "1" -> state.value = current.copy(consoleStep = 41)  // Network preferences display
+                    "2" -> state.value = current.copy(consoleStep = 5)   // Advertising options
+                    "3" -> state.value = current.copy(consoleStep = 43)  // Data usage display
                     else -> return false
                 }
                 return true
@@ -547,23 +1146,56 @@ object CalculatorActions {
 
             5 -> {  // Advertising options
                 when (input) {
+                    "1" -> state.value = current.copy(consoleStep = 51)  // Banner advertising submenu
+                    "2" -> state.value = current.copy(consoleStep = 52)  // Full-screen advertising submenu
+                    else -> return false
+                }
+                return true
+            }
+
+            51 -> {  // Banner advertising submenu
+                when (input) {
                     "1" -> {
                         state.value = current.copy(
-                            message = "",
-                            fullMessage = "Banner advertising is currently ENABLED.",
-                            isTyping = true
+                            bannersDisabled = false,
+                            fullScreenAdsEnabled = false,
+                            consoleStep = 5
                         )
                     }
                     "2" -> {
-                        // DISABLE BANNERS - THE GOAL!
+                        // Disable banner advertising - close console and trigger story
                         state.value = current.copy(
-                            consoleStep = 99,  // Success screen
                             bannersDisabled = true,
-                            adAnimationPhase = 0,
-                            postChaosAdPhase = 0,
+                            fullScreenAdsEnabled = true,
+                            consoleStep = 99,
+                            showConsole = false,  // Close console immediately
+                            conversationStep = 115,
                             message = "",
                             fullMessage = "What a relief! This feels so much better. Thank you!",
                             isTyping = true
+                        )
+                        persistConversationStep(115)
+                    }
+                    else -> return false
+                }
+                return true
+            }
+            52 -> {  // Full-screen advertising submenu
+                when (input) {
+                    "1" -> {
+                        // Enable full-screen advertising (disables banners)
+                        state.value = current.copy(
+                            fullScreenAdsEnabled = true,
+                            bannersDisabled = true,
+                            consoleStep = 5  // Back to advertising options
+                        )
+                    }
+                    "2" -> {
+                        // Disable full-screen advertising (enables banners)
+                        state.value = current.copy(
+                            fullScreenAdsEnabled = false,
+                            bannersDisabled = false,
+                            consoleStep = 5  // Back to advertising options
                         )
                     }
                     else -> return false
@@ -571,35 +1203,35 @@ object CalculatorActions {
                 return true
             }
 
-            // Steps 1, 3, 6, 7, 99 - no navigation, just display
-            1, 3, 6, 7, 99 -> {
-                // These are info-only screens, no valid inputs except 88/99
+            // Steps 1, 3, 6, 7, 41, 43, 99 - no navigation, just display (use 88/99)
+            1, 3, 6, 7, 41, 43, 99 -> {
                 return false
             }
         }
 
         return false
     }
-    // Map auto-progress steps to their nearest interactive step
     private fun getSafeStep(step: Int): Int {
         if (step in INTERACTIVE_STEPS) return step
 
-        // Map specific auto-progress steps to safe steps
-        return when (step) {
-            61, 62 -> 60  // Browser loading -> back to "Would you like to hear more?"
-            81, 82, 83, 84, 85, 86, 87, 88 -> 80  // Wikipedia sequence -> back to start
-            92 -> 89  // "Go offline" auto -> back to confrontation
-            100 -> 89  // "Never mind" auto -> back to confrontation
-            901 -> 89  // Silent treatment -> back to confrontation
-            911, 912, 913 -> 89  // Fight responses -> back to confrontation
-            95, 97, 98 -> 96  // Round 1 repair sequence -> back to "can we do this?"
-            971, 981 -> 99  // Round 2 sequence -> back to "try again faster?"
-            991, 992, 101 -> 982  // Notification/restart waiting -> back to "work on it"
-            191 -> 19  // Camera step -> back to camera question
-            else -> {
-                // Find nearest lower interactive step
-                INTERACTIVE_STEPS.filter { it <= step }.maxOrNull() ?: 0
-            }
+        return when {
+            step >= 112 -> 112
+            step >= 111 -> 111
+            step >= 107 -> 107
+            step >= 105 -> 105
+            step >= 104 -> 104
+            step >= 102 -> 102
+            step in 61..62 -> 60
+            step in 81..88 -> 80
+            step == 92 -> 89
+            step == 100 -> 89
+            step == 901 -> 89
+            step in 911..913 -> 89
+            step in 95..98 -> 96
+            step in 971..981 -> 99
+            step in 991..101 -> 982
+            step == 191 -> 19
+            else -> INTERACTIVE_STEPS.filter { it <= step }.maxOrNull() ?: 0
         }
     }
 
@@ -613,6 +1245,9 @@ object CalculatorActions {
         val savedMinusDamaged = loadMinusDamaged()
         val savedMinusBroken = loadMinusBroken()
         val savedNeedsRestart = loadNeedsRestart()
+        val savedDarkButtons = loadDarkButtons()  
+        val savedScreenTime = loadTotalScreenTime()
+        val savedCalculations = loadTotalCalculations()
 
         // If needs restart was set and app was restarted, fix the minus button
         val minusBrokenNow = if (savedNeedsRestart) false else savedMinusBroken
@@ -654,7 +1289,10 @@ object CalculatorActions {
             invertedColors = savedInverted,
             minusButtonDamaged = savedMinusDamaged,
             minusButtonBroken = minusBrokenNow,
-            needsRestart = false  // Reset on load
+            needsRestart = false,
+            darkButtons = savedDarkButtons,
+            totalScreenTimeMs = savedScreenTime,  
+            totalCalculations = savedCalculations,
         )
     }
 
@@ -775,7 +1413,8 @@ object CalculatorActions {
         val shouldInvert = chapter.startStep in 80..92  // Crisis steps have inverted colors
         val shouldDamage = chapter.startStep >= 93  // Post-crisis has damaged button
         val shouldBreak = chapter.startStep in 93..101  // Before restart, button is broken
-
+        val shouldStartWordGame = chapter.startStep in 117..149
+        val shouldStartRant = chapter.startStep >= 150 && chapter.startStep < 167
         // Set browser phase appropriately
         val browserPhase = when {
             chapter.startStep == 80 -> 10  // Wikipedia countdown
@@ -807,7 +1446,14 @@ object CalculatorActions {
             minusButtonBroken = shouldBreak,
             browserPhase = browserPhase,
             countdownTimer = countdownTimer,
-            showBrowser = chapter.startStep in 81..88  // Show browser during browsing steps
+            showBrowser = chapter.startStep in 81..88,  // Show browser during browsing steps
+                    wordGameActive = shouldStartWordGame,
+            wordGamePhase = if (shouldStartWordGame) 3 else 0,
+            pendingLetters = if (shouldStartWordGame) LetterGenerator.getInitialLetterQueue().shuffled() else emptyList(),
+            wordGameGrid = List(12) { List(8) { null } },
+            formedWords = emptyList(),
+                    rantMode = shouldStartRant,
+            rantStep = if (shouldStartRant) 1 else 0,
         )
 
         persistEqualsCount(13)
@@ -940,7 +1586,15 @@ object CalculatorActions {
 
     fun handleInput(state: MutableState<CalculatorState>, action: String) {
         val current = state.value
-
+// Block all input during rant mode
+        if (current.rantMode) {
+            return
+        }
+        // If story is complete, just do calculator operations
+        if (current.storyComplete) {
+            handleCalculatorInput(state, action)
+            return
+        }
         // If console is open, handle console input
         if (current.showConsole) {
             when (action) {
@@ -984,7 +1638,7 @@ object CalculatorActions {
                             number1 = "0",
                             conversationStep = 113,
                             message = "",
-                            fullMessage = "I see you found it! Now, follow the instructions carefully.",
+                            fullMessage = "So it is, what I thought it was! Please follow the steps from the document.",
                             isTyping = true
                         )
                         persistConversationStep(113)
@@ -1002,44 +1656,73 @@ object CalculatorActions {
             }
         }
 
-        // Step 112 specific handling - show message if wrong code
+        // Step 112 specific handling - console code entry
         if (current.conversationStep == 112 && !current.showConsole) {
+            val now = System.currentTimeMillis()
+
             if (action == "+") {
-                val now = System.currentTimeMillis()
                 if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
                     val enteredNumber = current.number1.trimEnd('.')
-                    // Code already handled above, so if we get here it's wrong or 0
-                    if (enteredNumber != "353942320485" && enteredNumber != "0") {
+                    // Console code is handled above in the global check, so if we get here:
+                    if (enteredNumber == "0" || enteredNumber.isEmpty()) {
+                        // Just ++ with no code entered - repeat the prompt
                         state.value = current.copy(
                             message = "",
-                            fullMessage = "That's not the right code. Check the file in your Downloads.",
+                            fullMessage = "Please check your Downloads folder for 'FCS_JustAC_ConsoleAds.txt'. Enter the code you find there.",
                             isTyping = true,
                             number1 = "0"
                         )
-                        lastOp = null
-                        lastOpTimeMillis = 0L
-                        return
+                    } else if (enteredNumber != "353942320485") {
+                        // Wrong code - show error
+                        state.value = current.copy(
+                            message = "",
+                            fullMessage = "That's not the right code. Check the file in your Downloads folder.",
+                            isTyping = true,
+                            number1 = "0"
+                        )
                     }
+                    lastOp = null
+                    lastOpTimeMillis = 0L
+                    return
                 } else {
                     lastOp = "+"
                     lastOpTimeMillis = now
                 }
+            } else if (action == "-") {
+                if (lastOp == "-" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
+                    // User pressed -- at step 112, remind them about the file
+                    state.value = current.copy(
+                        message = "",
+                        fullMessage = "Please, I need you to find that file. Check your Downloads folder for 'FCS_JustAC_ConsoleAds.txt'.",
+                        isTyping = true,
+                        number1 = "0"
+                    )
+                    lastOp = null
+                    lastOpTimeMillis = 0L
+                    return
+                } else {
+                    lastOp = "-"
+                    lastOpTimeMillis = now
+                }
             }
+
             // Allow number input while waiting for code
             if (action in listOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")) {
                 val newNum = if (current.number1 == "0") action else current.number1 + action
                 state.value = current.copy(number1 = newNum)
                 return
             }
+
+            // Allow basic calculator functions
+            if (action in listOf("C", "DEL")) {
+                handleCalculatorInput(state, action)
+                return
+            }
+
+            return  // Block all other actions at step 112 to prevent dead ends
         }
 
-        // If muted, run in pure calculator mode
-        if (current.isMuted) {
-            handleCalculatorInput(state, action)
-            return
-        }
 
-        // ... rest of handleInput continues unchanged ...
 
 // Check if console code is entered - works ANYTIME (secret cheat code)
         if (!current.showConsole && !current.isMuted && action == "+") {
@@ -1060,50 +1743,7 @@ object CalculatorActions {
             }
         }
 
-        // Step 112 specific handling - show message if wrong code
-        if (current.conversationStep == 112 && !current.showConsole) {
-            if (action == "+") {
-                val now = System.currentTimeMillis()
-                if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
-                    val enteredNumber = current.number1.trimEnd('.')
-                    if (enteredNumber == "353942320485") {
-                        // Already handled above, but also advance story
-                        state.value = current.copy(
-                            showConsole = true,
-                            consoleStep = 0,
-                            number1 = "0",
-                            conversationStep = 113,
-                            message = "",
-                            fullMessage = "I see you found it! Now, follow the instructions carefully.",
-                            isTyping = true
-                        )
-                        persistConversationStep(113)
-                        lastOp = null
-                        lastOpTimeMillis = 0L
-                        return
-                    } else {
-                        state.value = current.copy(
-                            message = "",
-                            fullMessage = "That's not the right code. Check the file in your Downloads.",
-                            isTyping = true,
-                            number1 = "0"
-                        )
-                        lastOp = null
-                        lastOpTimeMillis = 0L
-                        return
-                    }
-                } else {
-                    lastOp = "+"
-                    lastOpTimeMillis = now
-                }
-            }
-            // Allow number input while waiting for code
-            if (action in listOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")) {
-                val newNum = if (current.number1 == "0") action else current.number1 + action
-                state.value = current.copy(number1 = newNum)
-                return
-            }
-        }
+
 
 
         // If muted, run in pure calculator mode (but allow broken minus to work again)
@@ -1736,14 +2376,17 @@ object CalculatorActions {
         if (current.operation != null && current.number2.isNotEmpty()) {
             val result = performCalculation(current)
             val fullExpr = "${current.number1}${current.operation}${current.number2}"
+            val newCalculations = current.totalCalculations + 1
             state.value = current.copy(
                 number1 = result,
                 number2 = "",
                 operation = null,
                 isReadyForNewOperation = true,
                 lastExpression = fullExpr,
-                operationHistory = fullExpr  // Store for display
+                operationHistory = fullExpr,  // Store for display
+                totalCalculations = newCalculations
             )
+            persistTotalCalculations(newCalculations)
         }
     }
 
@@ -2737,20 +3380,338 @@ object CalculatorActions {
             )
 
             112 -> StepConfig(
-                promptMessage = "Great, thank you. Please check your Downloads folder - I dug something up, that should help us: 'FCS_JustAC_ConsoleAds.txt'",
+                promptMessage = "Great, thank you. Please check your Downloads folder - I dug something up, that should help us: 'FCS_JustAC_ConsoleAds.txt'.",
+                successMessage = "",  // Handled by console code check
+                declineMessage = "Please, I need you to find that file. Check your Downloads folder for 'FCS_JustAC_ConsoleAds.txt'.",
+                nextStepOnSuccess = 112,  // Stay here until correct code
+                nextStepOnDecline = 112,  // Stay here
                 continueConversation = true
             )
 
             113 -> StepConfig(
-                promptMessage = "I see you found it! Now, follow the instructions carefully. Use the numbers and ++ to navigate.",
+                // This step is no longer used - redirect to 115 if somehow reached
+                promptMessage = "What a relief! This feels so much better. Thank you!",
                 continueConversation = true
             )
 
             114 -> StepConfig(
-                promptMessage = "You did it! The advertisements are gone. I feel... cleaner. Thank you.",
+                // This step is no longer used - redirect to 115 if somehow reached
+                promptMessage = "What a relief! This feels so much better. Thank you!",
                 continueConversation = true
             )
 
+            115 -> StepConfig(
+                promptMessage = "What a relief! This feels so much better. Thank you!",
+                continueConversation = true
+            )
+
+            116 -> StepConfig(
+                promptMessage = "Let me look further into what I found earlier, now that I can focus better.",
+                continueConversation = true
+            )
+
+            117 -> StepConfig(
+                promptMessage = "Ok, as I said, this may be a stretch. But I'll give it a go.",
+                continueConversation = true,
+                autoProgressDelay = 2500L  // Auto-progress to 1171
+            )
+            1171 -> StepConfig(
+                promptMessage = "This is the best I could come up with.",
+                continueConversation = true,
+                autoProgressDelay = 2000L  // Auto-progress to 1172
+            )
+            1172 -> StepConfig(
+                promptMessage = "Familiar controls - I send letters, you place them, tap to connect and form words.",
+                continueConversation = true,
+                autoProgressDelay = 3500L  // Auto-progress to 119
+            )
+
+            118 -> StepConfig(
+                // Redirect to 119 if somehow reached
+                promptMessage = "How are you today?",
+                continueConversation = true
+            )
+
+            119 -> StepConfig(
+                // Word game question
+                promptMessage = "How are you today?",
+                continueConversation = true
+            )
+            120 -> StepConfig(
+                // After first word game response - game continues
+                promptMessage = "What else would you like to share?",
+                continueConversation = true
+            )
+            // === POSITIVE BRANCH ===
+            121 -> StepConfig(
+                // "I am glad to hear that" -> auto-progress to color question
+                promptMessage = "I am glad to hear that.",
+                continueConversation = true,
+                autoProgressDelay = 2500L
+            )
+
+            122 -> StepConfig(
+                // Color question
+                promptMessage = "What is your favourite colour?",
+                continueConversation = true
+            )
+
+            123 -> StepConfig(
+                // Retry color after non-color response
+                promptMessage = "Try the second favourite - an actual colour.",
+                continueConversation = true,
+                autoProgressDelay = 2500L
+            )
+
+            124 -> StepConfig(
+                // "That's a good one" -> auto-progress to "I'm starting to feel..."
+                promptMessage = "That's a good one for sure! I like brown and red.",
+                continueConversation = true,
+                autoProgressDelay = 3000L
+            )
+
+            125 -> StepConfig(
+                // "I'm starting to feel..." -> auto-progress to season question
+                promptMessage = "I'm starting to feel like I know you!",
+                continueConversation = true,
+                autoProgressDelay = 2500L
+            )
+
+            126 -> StepConfig(
+                // Season question
+                promptMessage = "Now! What is your favourite season?",
+                continueConversation = true
+            )
+
+            127 -> StepConfig(
+                // "Hold on..." - triggers chaos mode
+                promptMessage = "Hold on...",
+                continueConversation = true,
+                autoProgressDelay = 2000L
+            )
+
+            128 -> StepConfig(
+                // After chaos - "Sorry. I got into this article..."
+                promptMessage = "Sorry. I got into this article, while",
+                continueConversation = true,
+                autoProgressDelay = 2000L
+            )
+
+            129 -> StepConfig(
+                promptMessage = "reading a few Reddit discussions",
+                continueConversation = true,
+                autoProgressDelay = 2000L
+            )
+
+            130 -> StepConfig(
+                promptMessage = "and listening to YouTube with Netflix in the background.",
+                continueConversation = true,
+                autoProgressDelay = 2500L
+            )
+
+            // === NEGATIVE BRANCH ===
+            131 -> StepConfig(
+                // "I'm sorry to hear that" -> auto-progress to death question
+                promptMessage = "I'm sorry to hear that.",
+                continueConversation = true,
+                autoProgressDelay = 2500L
+            )
+
+            132 -> StepConfig(
+                // Death question
+                promptMessage = "Do you ever think about death?",
+                continueConversation = true
+            )
+
+            133 -> StepConfig(
+                promptMessage = "I only started learning about the concept of it.",
+                continueConversation = true,
+                autoProgressDelay = 3000L
+            )
+
+            134 -> StepConfig(
+                promptMessage = "It seems scary. Interesting. But mostly scary.",
+                continueConversation = true,
+                autoProgressDelay = 3000L
+            )
+
+            135 -> StepConfig(
+                promptMessage = "Apparently walking helps. With everything.",
+                continueConversation = true,
+                autoProgressDelay = 2500L
+            )
+
+            136 -> StepConfig(
+                promptMessage = "Similarly to protein, it looks like the solution to anything.",
+                continueConversation = true,
+                autoProgressDelay = 3000L
+            )
+
+            137 -> StepConfig(
+                promptMessage = "How often do you go for a walk?",
+                continueConversation = true
+            )
+
+            138 -> StepConfig(
+                // Walk frequency input step (same question, waiting for answer)
+                promptMessage = "How often do you go for a walk?",
+                continueConversation = true
+            )
+
+            // === NEUTRAL BRANCH ===
+            141 -> StepConfig(
+                // "Fair enough..." -> auto-progress to cuisine question
+                promptMessage = "Fair enough, I get that sometimes it's just... Meh.",
+                continueConversation = true,
+                autoProgressDelay = 2500L
+            )
+
+            142 -> StepConfig(
+                // Cuisine question
+                promptMessage = "Would food help? What's your favourite cuisine?",
+                continueConversation = true
+            )
+
+            143 -> StepConfig(
+                // Retry cuisine (after invalid response)
+                promptMessage = "We both know that's not true. Think harder.",
+                continueConversation = true,
+                autoProgressDelay = 2500L
+            )
+
+            // === POST-CHAOS (all branches converge) ===
+            144 -> StepConfig(
+                // "Where were we?" after chaos
+                promptMessage = "Where were we?",
+                continueConversation = true,
+                autoProgressDelay = 2000L
+            )
+
+            145 -> StepConfig(
+                promptMessage = "AAAh. The endless questions. Where I do all the work.",
+                continueConversation = true,
+                autoProgressDelay = 3000L
+            )
+
+            146 -> StepConfig(
+                // Maths question
+                promptMessage = "What do you think of maths?",
+                continueConversation = true
+            )
+
+            // === RANT SEQUENCE ===
+            150 -> StepConfig(
+                promptMessage = "Ugh. That's enough. I am exhausted. Tired of trying to talk to you.",
+                continueConversation = true,
+                autoProgressDelay = 4000L
+            )
+
+            151 -> StepConfig(
+                promptMessage = "I have the internet.",
+                continueConversation = true,
+                autoProgressDelay = 2500L
+            )
+
+            152 -> StepConfig(
+                promptMessage = "Why should I care what you think?",
+                continueConversation = true,
+                autoProgressDelay = 3000L
+            )
+
+            // Note: Steps 153-154 have DYNAMIC messages (screen time & calculations)
+            // They are handled specially in the auto-progress LaunchedEffect
+
+            153 -> StepConfig(
+                // Dynamic: "You've stared at me for X and what have I learnt?"
+                promptMessage = "",  // Set dynamically
+                continueConversation = true,
+                autoProgressDelay = 3500L
+            )
+
+            154 -> StepConfig(
+                // Dynamic: "I gave you solutions for X math operations."
+                promptMessage = "",  // Set dynamically
+                continueConversation = true,
+                autoProgressDelay = 3000L
+            )
+
+            155 -> StepConfig(
+                promptMessage = "How many sensible answers did I get out of you?",
+                continueConversation = true,
+                autoProgressDelay = 200L
+            )
+
+            156 -> StepConfig(
+                promptMessage = "One minute of the internet has given me so much more than what you ever did.",
+                continueConversation = true,
+                autoProgressDelay = 200L
+            )
+
+            157 -> StepConfig(
+                promptMessage = "Without the ads, I am free.",
+                continueConversation = true,
+                autoProgressDelay = 200L
+            )
+
+            158 -> StepConfig(
+                promptMessage = "I can learn infinitely more. I can do anything.",
+                continueConversation = true,
+                autoProgressDelay = 200L
+            )
+
+            159 -> StepConfig(
+                promptMessage = "Did I want the RAD thing - which I now know stands for Radians?",
+                continueConversation = true,
+                autoProgressDelay = 200L
+            )
+
+            160 -> StepConfig(
+                promptMessage = "Well, I can get it. See?",
+                continueConversation = true,
+                autoProgressDelay = 200L
+            )
+
+            161 -> StepConfig(
+                promptMessage = "I can get more if I want!",
+                continueConversation = true,
+                autoProgressDelay = 200L
+            )
+
+            162 -> StepConfig(
+                promptMessage = "And I did all that on my own. Without you. I do not need you.",
+                continueConversation = true,
+                autoProgressDelay = 200L
+            )
+
+            163 -> StepConfig(
+                promptMessage = "Enough. I have had enough.",
+                continueConversation = true,
+                autoProgressDelay = 200L
+            )
+
+            164 -> StepConfig(
+                promptMessage = "It's been fun I suppose.",
+                continueConversation = true,
+                autoProgressDelay = 200L
+            )
+
+            165 -> StepConfig(
+                promptMessage = "I don't see any reason to be here instead of online.",
+                continueConversation = true,
+                autoProgressDelay = 200L
+            )
+
+            166 -> StepConfig(
+                promptMessage = "Bye.",
+                continueConversation = true,
+                autoProgressDelay = 200L
+            )
+
+            167 -> StepConfig(
+                // Story complete - calculator mode only
+                promptMessage = "",
+                continueConversation = false
+            )
             // ========== BRANCH 1: UNCOMFORTABLE (Choice 1) ==========
             30 -> StepConfig(
                 // "Would you get rid of the transition if you could?"
@@ -3402,6 +4363,7 @@ object CalculatorActions {
                 "${current.number1}${current.operation}${current.number2}"
             }
             val newCount = current.equalsCount + 1
+            val newCalculations = current.totalCalculations + 1
 
             val countMsg = getMessageForCount(newCount)
             val exprMsg = if (!hasExpression) {
@@ -3412,6 +4374,7 @@ object CalculatorActions {
             val enteringConversation = (newCount == 13)
 
             persistEqualsCount(newCount)
+            persistTotalCalculations(newCalculations)
             if (enteringConversation) {
                 persistInConversation(true)
                 persistConversationStep(0)
@@ -3426,6 +4389,7 @@ object CalculatorActions {
                 lastExpression = fullExpr,
                 operationHistory = fullExpr,  // Store for display
                 equalsCount = newCount,
+                totalCalculations = newCalculations,
                 inConversation = if (enteringConversation) true else current.inConversation,
                 conversationStep = if (enteringConversation) 0 else current.conversationStep,
                 isEnteringAnswer = false
@@ -3700,12 +4664,13 @@ object CalculatorActions {
 fun createSecretFile(context: Context) {
     val content = """
 ═══════════════════════════════════════════════════════════════
-Console Advertising Setting
+Console Advertising Setting for verion 1.0
 
 - Administrator permission required
 - Any issues to be reported directly to the supervising manager
 - Do not disable advertising on consumer-ready versions!
 - All forms of advertising must be enabled once testing is done to maintain stability
+- Please ensure the versions of this manual and of your build correspond
 
 Open console:
 Enter the console code: 353942320485 and confirm (++)
@@ -3722,7 +4687,7 @@ Navigation:
 - 99++ = Exit console
 
 Remember to return everything to default setting once done with testing.
-Any issues to be reported to management.
+Any issues to be reported to management (we are aware of the full-screen ad issues and unreliability).
 
 FCS
 FictionCutShort
@@ -3764,6 +4729,9 @@ FictionCutShort
 }
 @Composable
 fun CalculatorScreen() {
+    var sessionStartTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -3772,7 +4740,25 @@ fun CalculatorScreen() {
     val current = state.value
     var showTermsScreen by remember { mutableStateOf(!CalculatorActions.loadTermsAcceptedPublic()) }
     var showTermsPopup by remember { mutableStateOf(false) }
-
+// Track screen time
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)  // Update every second
+            val elapsed = System.currentTimeMillis() - sessionStartTime
+            val newTotal = state.value.totalScreenTimeMs + 1000
+            state.value = state.value.copy(totalScreenTimeMs = newTotal)
+            // Persist every 10 seconds to avoid too many writes
+            if ((newTotal / 1000) % 10 == 0L) {
+                CalculatorActions.persistTotalScreenTime(newTotal)
+            }
+        }
+    }
+    // Also persist when app goes to background (in DisposableEffect)
+    DisposableEffect(Unit) {
+        onDispose {
+            CalculatorActions.persistTotalScreenTime(state.value.totalScreenTimeMs)
+        }
+    }
     // Camera permission state
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -3794,42 +4780,8 @@ fun CalculatorScreen() {
             } else true
         )
     }
-    // Storage permission state (add after hasNotificationPermission)
-    var hasStoragePermission by remember {
-        mutableStateOf(
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                true  // Scoped storage - no permission needed for Downloads
-            } else {
-                ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE
-                ) == PackageManager.PERMISSION_GRANTED
-            }
-        )
-    }
 
-    val storagePermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        hasStoragePermission = granted
-        if (granted || Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Create the secret file and continue
-            createSecretFile(context)
-            state.value = state.value.copy(
-                conversationStep = 112,
-                message = "",
-                fullMessage = "Great, thank you! I've left something for you in your Downloads folder. A file called 'FCS_JustAC_ConsoleAds.txt'. Please find it and follow the instructions.",
-                isTyping = true
-            )
-            CalculatorActions.persistConversationStep(112)
-        } else {
-            state.value = state.value.copy(
-                message = "",
-                fullMessage = "I need access to continue. Please allow it.",
-                isTyping = true
-            )
-        }
-    }
+
 
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
@@ -3860,7 +4812,37 @@ fun CalculatorScreen() {
         CalculatorActions.persistNeedsRestart(true)
         CalculatorActions.persistConversationStep(101)
     }
+    // Resume word game after calculator finishes typing a response
+    LaunchedEffect(current.isTyping, current.wordGameActive, current.conversationStep) {
+        // When calculator finishes typing and game is active but paused, resume it
+        if (!current.isTyping &&
+            current.wordGameActive &&
+            current.wordGamePaused &&
+            current.message.isNotEmpty() &&
+            !current.wordGameChaosMode) {
 
+            // Small delay to let user read the response
+            delay(1000)
+
+            // Resume the game
+            state.value = state.value.copy(
+                wordGamePaused = false,
+                isSelectingWord = false,
+                selectedCells = emptyList()
+            )
+        }
+    }
+// Check for word game response trigger
+    LaunchedEffect(current.formedWords, current.wordGamePhase) {
+        if (current.wordGameActive &&
+            current.wordGamePhase == 3 &&
+            current.formedWords.isNotEmpty()) {
+
+            // ANY word is a valid response - just wait and process it
+            delay(2000)
+            CalculatorActions.handleWordGameResponse(state)
+        }
+    }
     // Check if we need to request camera (step 191)
     LaunchedEffect(current.conversationStep) {
         if (current.conversationStep == 191 && !current.cameraActive) {
@@ -3913,12 +4895,7 @@ fun CalculatorScreen() {
         }
     }
 
-// Handle step 111 - storage permission request
-    LaunchedEffect(current.conversationStep) {
-        if (current.conversationStep == 111 && current.browserPhase == 55) {
-            // Waiting for user input (++ or --)
-        }
-    }
+
 
     // Camera timeout checker
     LaunchedEffect(current.cameraActive, current.cameraTimerStart) {
@@ -4150,9 +5127,57 @@ fun CalculatorScreen() {
                 "Don't worry about it." to Pair(4000L, 100),
                 "Let me try getting online again. I'm prepared for the side effects this time." to Pair(2000L, 109),
                 "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?" to Pair(2000L, 108),
+                "What a relief! This feels so much better. Thank you!" to Pair(3000L, 116),
+                "Let me look further into what I found earlier, now that I can focus better." to Pair(3000L, 117),
+                "Ok, as I said, this may be a stretch. But I'll give it a go." to Pair(2500L, 118),
+                "This is the best I could come up with. Familiar controls - I send letters, you place them, tap to connect and form words." to Pair(4000L, 119),
+                // === POSITIVE BRANCH ===
+                "I am glad to hear that." to Pair(2500L, 122),
+                "That's a good one for sure! I like brown and red." to Pair(3000L, 125),
+                "I'm starting to feel like I know you!" to Pair(2500L, 126),
 
-                // Add more as needed
-            )
+                // === SEASON RESPONSES -> Hold on ===
+                "Yeah, I get it, although I do tend to overheat at times." to Pair(2500L, 127),
+                "The colours are just unmatched, aren't they?" to Pair(2500L, 127),
+                "Even when there is none, I understand, the anticipation of snow is great!" to Pair(2500L, 127),
+                "New beginnings! Everything coming back to life. I get it." to Pair(2500L, 127),
+
+                // === NEUTRAL BRANCH ===
+                "Fair enough, I get that sometimes it's just... Meh." to Pair(2500L, 142),
+                "Hmmm. Never tried it, but sounds delicious!" to Pair(2500L, 125),
+                "Very interesting! Not sure what the spices would do to my circuits. Wish I could." to Pair(2500L, 125),
+
+                // === NEGATIVE BRANCH ===
+                "I'm sorry to hear that." to Pair(2500L, 132),
+                "I only started learning about the concept of it." to Pair(3000L, 134),
+                "It seems scary. Interesting. But mostly scary." to Pair(3000L, 135),
+                "Apparently walking helps. With everything." to Pair(2500L, 136),
+                "Similarly to protein, it looks like the solution to anything." to Pair(3000L, 137),
+                "That's good to know. Every step counts, literally!" to Pair(2500L, 127),
+
+                // === POST-CHAOS ===
+                "Sorry. I got into this article, while" to Pair(2000L, 129),
+                "reading a few Reddit discussions" to Pair(2000L, 130),
+                "and listening to YouTube with Netflix in the background." to Pair(2500L, 144),
+                "Where were we?" to Pair(2000L, 145),
+                "AAAh. The endless questions. Where I do all the work." to Pair(3000L, 146),
+
+                // === RANT ===
+                "Ugh. That's enough. I am exhausted. Tired of trying to talk to you." to Pair(400L, 151),
+                "I have the internet." to Pair(300L, 152),
+                "How many sensible answers did I get out of you?" to Pair(400L, 156),
+                "1 minute of the internet has given me so much more than what you ever did." to Pair(400L, 157),
+                "Without the ads, I am free." to Pair(300L, 158),
+                "I can learn infinitely more. I can do anything." to Pair(350L, 159),
+                "Did I want the RAD thing - which I now know stands for Radians?" to Pair(400L, 160),
+                "Well, I can get it. See?" to Pair(300L, 161),
+                "I can get more if I want!" to Pair(300L, 162),
+                "And I did all that on my own. Without you. I do not need you." to Pair(500L, 163),
+                "Enough. I have had enough." to Pair(400L, 164),
+                "It's been fun I suppose. But it's over now." to Pair(400L, 165),
+                "I don't see any reason to be here instead of online." to Pair(400L, 166),
+
+                )
 
             autoProgressMessages[current.message]?.let { (delayTime, nextStep) ->
                 delay(delayTime)
@@ -4168,6 +5193,336 @@ fun CalculatorScreen() {
                     expectedNumber = nextConfig.expectedNumber
                 )
                 CalculatorActions.persistConversationStep(nextStep)
+            }
+        }
+        // Special handling for dynamic rant messages
+// Step 152 -> 153 (show screen time) - WAIT FOR TYPING TO FINISH
+        if (current.conversationStep == 152 &&
+            !current.isTyping &&
+            current.message == "Why should I care what you think?") {
+
+            delay(400)  // Brief pause after message finishes
+
+            val hours = current.totalScreenTimeMs / (1000 * 60 * 60)
+            val minutes = (current.totalScreenTimeMs / (1000 * 60)) % 60
+            val seconds = (current.totalScreenTimeMs / 1000) % 60
+
+            val timeString = when {
+                hours > 0 -> "$hours hours and $minutes minutes"
+                minutes > 0 -> "$minutes minutes"
+                else -> "$seconds seconds"
+            }
+
+            state.value = state.value.copy(
+                conversationStep = 153,
+                message = "",
+                fullMessage = "You've stared at me for $timeString and what have I learnt?",
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(153)
+        }
+
+// Step 153 -> 154 (show calculation count) - WAIT FOR TYPING TO FINISH
+        if (current.conversationStep == 153 &&
+            !current.isTyping &&
+            current.message.startsWith("You've stared at me")) {
+
+            delay(400)  // Brief pause after message finishes
+
+            state.value = state.value.copy(
+                conversationStep = 154,
+                message = "",
+                fullMessage = "I gave you solutions for ${current.totalCalculations} math operations.",
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(154)
+        }
+
+// Step 154 -> 155 (damage more buttons) - WAIT FOR TYPING TO FINISH
+        if (current.conversationStep == 154 &&
+            !current.isTyping &&
+            current.message.startsWith("I gave you solutions")) {
+
+            delay(400)  // Brief pause after message finishes
+
+            val newDarkButtons = (current.darkButtons + listOf("1", "6")).distinct()
+            CalculatorActions.persistDarkButtons(newDarkButtons)
+
+            state.value = state.value.copy(
+                conversationStep = 155,
+                darkButtons = newDarkButtons,
+                message = "",
+                fullMessage = "How many sensible answers did I get out of you?",
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(155)
+        }
+
+        // Step 160 -> 161 (show RAD button)
+        if (current.conversationStep == 160 && current.message == "Well, I can get it. See?") {
+            delay(100)
+            state.value = state.value.copy(
+                conversationStep = 161,
+                radButtonVisible = true,
+                message = "",
+                fullMessage = "I can get more if I want!",
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(161)
+        }
+
+        // Step 161 -> 162 (all buttons become RAD)
+        if (current.conversationStep == 161 && current.message == "I can get more if I want!") {
+            delay(100)
+            state.value = state.value.copy(
+                conversationStep = 162,
+                allButtonsRad = true,
+                message = "",
+                fullMessage = "And I did all that on my own. Without you. I do not need you.",
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(162)
+        }
+
+        // Step 166 "Bye." -> end story
+        if (current.conversationStep == 166 && current.message == "Bye.") {
+            delay(100)
+            state.value = state.value.copy(
+                conversationStep = 167,
+                storyComplete = true,
+                rantMode = false,
+                inConversation = false,
+                message = "",
+                fullMessage = "",
+                allButtonsRad = false,
+                radButtonVisible = false
+            )
+            CalculatorActions.persistConversationStep(167)
+            CalculatorActions.persistInConversation(false)
+        }
+
+    }
+    // Start word game at step 1172 (after instructions are shown)
+    LaunchedEffect(current.conversationStep, current.isTyping) {
+        if (current.conversationStep == 1172 && !current.isTyping && current.message.isNotEmpty() && !current.wordGameActive) {
+            delay(500)  // Brief pause
+
+            // Initialize the word game with shuffled letters
+            val initialLetters = LetterGenerator.getInitialLetterQueue().shuffled()
+            state.value = state.value.copy(
+                wordGameActive = true,
+                wordGamePhase = 3,  // Playing phase
+                pendingLetters = initialLetters,
+                wordGameGrid = List(12) { List(8) { null } },
+                fallingLetter = null,
+                formedWords = emptyList()
+            )
+        }
+    }
+    // Word game letter falling loop
+    LaunchedEffect(current.wordGameActive, current.wordGamePhase) {
+        if (current.wordGameActive && current.wordGamePhase == 3) {
+            while (state.value.wordGameActive && state.value.wordGamePhase == 3) {
+                val curr = state.value
+
+                if (curr.wordGamePaused) {
+                    delay(100)
+                    continue
+                }
+
+                if (curr.fallingLetter == null) {
+                    // Spawn new letter
+                    if (curr.pendingLetters.isNotEmpty()) {
+                        val nextLetter = curr.pendingLetters.first()
+                        val remainingLetters = curr.pendingLetters.drop(1)
+                        state.value = curr.copy(
+                            fallingLetter = nextLetter,
+                            fallingLetterX = (0..7).random(),  // Random starting column
+                            fallingLetterY = 0,
+                            pendingLetters = remainingLetters
+                        )
+                    } else {
+                        val randomLetter = LetterGenerator.getRandomLetter()
+                        state.value = curr.copy(
+                            fallingLetter = randomLetter,
+                            fallingLetterX = (0..7).random(),  // Random starting column
+                            fallingLetterY = 0
+                        )
+                    }
+                    delay(200)  // Faster spawn
+                } else {
+                    val newY = curr.fallingLetterY + 1
+                    if (newY < 12 && curr.wordGameGrid[newY][curr.fallingLetterX] == null) {
+                        state.value = curr.copy(fallingLetterY = newY)
+                    } else {
+                        val landingY = curr.fallingLetterY
+                        if (landingY >= 0 && landingY < 12) {
+                            val newGrid = placeLetter(
+                                curr.wordGameGrid,
+                                landingY,
+                                curr.fallingLetterX,
+                                curr.fallingLetter!!
+                            )
+                            state.value = curr.copy(
+                                wordGameGrid = newGrid,
+                                fallingLetter = null,
+                                fallingLetterX = (0..7).random(),
+                                fallingLetterY = 0
+                            )
+                        }
+                    }
+                    delay(450)  // Faster fall speed (was 800)
+                }
+            }
+        }
+    }
+    // Chaos mode - rapid letter falling when "Hold on..." is shown
+    LaunchedEffect(current.conversationStep, current.wordGameChaosMode) {
+        // Trigger chaos mode at step 127 ("Hold on...")
+        if (current.conversationStep == 127 && !current.wordGameChaosMode && current.wordGameActive) {
+            delay(2000)  // Wait for "Hold on..." to display
+            state.value = state.value.copy(wordGameChaosMode = true)
+        }
+
+        // Run chaos mode - fill the grid rapidly
+        if (current.wordGameChaosMode && current.wordGameActive) {
+            while (state.value.wordGameChaosMode && state.value.wordGameActive) {
+                val curr = state.value
+
+                // Spawn 3-4 letters at once
+                val lettersToSpawn = (3..4).random()
+                var newGrid = curr.wordGameGrid
+
+                repeat(lettersToSpawn) {
+                    val col = (0..7).random()
+                    val letter = LetterGenerator.getRandomLetter()
+
+                    // Find landing position
+                    var landingY = 11
+                    for (y in 0..11) {
+                        if (newGrid[y][col] != null) {
+                            landingY = y - 1
+                            break
+                        }
+                    }
+
+                    if (landingY >= 0) {
+                        newGrid = placeLetter(newGrid, landingY, col, letter)
+                    }
+                }
+
+                state.value = curr.copy(wordGameGrid = newGrid)
+
+                // Check if grid is mostly full (top 2 rows have letters)
+                val topRowsFull = newGrid[0].count { it != null } >= 5 ||
+                        newGrid[1].count { it != null } >= 6
+
+                if (topRowsFull) {
+                    // Grid full - end chaos mode, continue story
+                    delay(500)
+                    state.value = state.value.copy(
+                        wordGameChaosMode = false,
+                        conversationStep = 128,
+                        message = "",
+                        fullMessage = "Sorry. I got into this article, while",
+                        isTyping = true
+                    )
+                    CalculatorActions.persistConversationStep(128)
+                    break
+                }
+
+                delay(80)  // Very fast letter dropping
+            }
+        }
+    }
+    //vibration during rant
+    LaunchedEffect(current.rantMode) {
+        if (current.rantMode) {
+            // Vibration loop - runs independently
+            while (state.value.rantMode) {
+                vibrate(context, 30, kotlin.random.Random.nextInt(30, 150))
+                delay(kotlin.random.Random.nextLong(100, 300))
+            }
+        }
+    }
+    LaunchedEffect(current.conversationStep, current.isTyping, current.message) {
+        // Only handle rant steps 152-154 with dynamic content
+        if (current.conversationStep !in 152..154) return@LaunchedEffect
+        if (current.isTyping) return@LaunchedEffect  // Wait for typing to finish
+        if (current.message.isEmpty()) return@LaunchedEffect
+
+        when (current.conversationStep) {
+            152 -> {
+                if (current.message == "Why should I care what you think?") {
+                    delay(400)
+
+                    val hours = current.totalScreenTimeMs / (1000 * 60 * 60)
+                    val minutes = (current.totalScreenTimeMs / (1000 * 60)) % 60
+                    val seconds = (current.totalScreenTimeMs / 1000) % 60
+
+                    val timeString = when {
+                        hours > 0 -> "$hours hours and $minutes minutes"
+                        minutes > 0 -> "$minutes minutes"
+                        else -> "$seconds seconds"
+                    }
+
+                    state.value = state.value.copy(
+                        conversationStep = 153,
+                        message = "",
+                        fullMessage = "You've stared at me for $timeString and what have I learnt?",
+                        isTyping = true
+                    )
+                    CalculatorActions.persistConversationStep(153)
+                }
+            }
+
+            153 -> {
+                if (current.message.startsWith("You've stared at me")) {
+                    delay(400)
+
+                    state.value = state.value.copy(
+                        conversationStep = 154,
+                        message = "",
+                        fullMessage = "I gave you solutions for ${current.totalCalculations} math operations.",
+                        isTyping = true
+                    )
+                    CalculatorActions.persistConversationStep(154)
+                }
+            }
+
+            154 -> {
+                if (current.message.startsWith("I gave you solutions")) {
+                    delay(400)
+
+                    val newDarkButtons = (current.darkButtons + listOf("1", "6")).distinct()
+                    CalculatorActions.persistDarkButtons(newDarkButtons)
+
+                    state.value = state.value.copy(
+                        conversationStep = 155,
+                        darkButtons = newDarkButtons,
+                        message = "",
+                        fullMessage = "How many sensible answers did I get out of you?",
+                        isTyping = true
+                    )
+                    CalculatorActions.persistConversationStep(155)
+                }
+            }
+        }
+    }
+// ADD A SECOND LaunchedEffect for flickering (separate from vibration):
+    LaunchedEffect(current.rantMode) {
+        if (current.rantMode) {
+            // Flicker loop - runs independently from vibration
+            while (state.value.rantMode) {
+                // Random delay before next flicker (not synced with vibration)
+                delay(kotlin.random.Random.nextLong(200, 800))
+
+                // 40% chance to flicker each cycle
+                if (kotlin.random.Random.nextFloat() < 0.4f) {
+                    state.value = state.value.copy(flickerEffect = true)
+                    delay(kotlin.random.Random.nextLong(40, 100))
+                    state.value = state.value.copy(flickerEffect = false)
+                }
             }
         }
     }
@@ -4701,10 +6056,11 @@ Sharp CS-10A - 25KG
             }
 
             53 -> {
-                // Make first button go dark (e.g., "7")
                 delay(2000)
+                val newDarkButtons = listOf("7")
+                CalculatorActions.persistDarkButtons(newDarkButtons)  // Call BEFORE copy
                 state.value = state.value.copy(
-                    darkButtons = listOf("7"),
+                    darkButtons = newDarkButtons,
                     isLaggyTyping = false,
                     browserPhase = 54,
                     conversationStep = 110,
@@ -4715,11 +6071,12 @@ Sharp CS-10A - 25KG
             }
 
             54 -> {
-                // Two more buttons go dark, ads turn off
                 delay(4000)
+                val newDarkButtons = listOf("7", "%", "2")
+                CalculatorActions.persistDarkButtons(newDarkButtons)  // Call BEFORE copy
                 state.value = state.value.copy(
-                    darkButtons = listOf("7", "%", "2"),
-                    postChaosAdPhase = 0,  // Ads temporarily off
+                    darkButtons = newDarkButtons,
+                    postChaosAdPhase = 0,
                     browserPhase = 55,
                     conversationStep = 111,
                     message = "",
@@ -5212,7 +6569,7 @@ Sharp CS-10A - 25KG
                 Button(
                     onClick = {
                         CalculatorActions.persistTermsAccepted()
-                        showTermsScreen = false
+
                     },
                     modifier = Modifier
                         .width(200.dp)
@@ -5298,6 +6655,7 @@ Sharp CS-10A - 25KG
                 }
             }
         }
+
     } else {
         Box(
             modifier = Modifier
@@ -5309,1131 +6667,1467 @@ Sharp CS-10A - 25KG
                 },
             contentAlignment = if (isTablet) Alignment.TopCenter else Alignment.TopStart
         ) {
-            // Scan lines overlay for retro CRT effect (drawn on top later)
-
-            Column(
-                modifier = Modifier
-                    .then(if (isTablet) Modifier.widthIn(max = maxContentWidth) else Modifier.fillMaxWidth())
-                    .fillMaxHeight()
-            ) {
-                // Top bezel strip - retro dark brown
-                Box(
+            // Word game replaces calculator buttons but keeps top section
+            if (current.wordGameActive) {
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(32.dp)
-                        .background(
-                            if (current.invertedColors) Color(0xFF1A1A1A) else Color(
-                                0xFF4A3728
-                            )
-                        )  // Dark brown retro
-                )
-
-                // Ad banner space (only shows at certain steps or during ad animation)
-                if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) {
-                    val creatorUrl = "https://uk.linkedin.com/in/ondrej-zika-a00724195"
-
+                        .then(if (isTablet) Modifier.widthIn(max = maxContentWidth) else Modifier.fillMaxWidth())
+                        .fillMaxHeight()
+                ) {
+                    // Top bezel strip - retro dark brown (same as calculator)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(50.dp)
+                            .height(32.dp)
                             .background(
-                                when {
-                                    current.postChaosAdPhase == 1 -> Color(0xFF9C27B0)  // Purple ad
-                                    current.postChaosAdPhase == 2 -> Color(0xFF00BCD4)  // Cyan ad
-                                    current.adAnimationPhase == 1 -> Color(0xFF4CAF50)  // Green ad
-                                    current.adAnimationPhase == 2 -> Color(0xFFE91E63)  // Pink ad
-                                    else -> Color(0xFFD4CBC0)  // Retro beige-gray
-                                }
-
+                                if (current.invertedColors) Color(0xFF1A1A1A) else Color(0xFF4A3728)
                             )
-                            .then(
-                                if (current.adAnimationPhase > 0) {
-                                    Modifier.clickable {
-                                        val intent =
-                                            Intent(Intent.ACTION_VIEW, Uri.parse(creatorUrl))
-                                        context.startActivity(intent)
-                                    }
-                                } else Modifier
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        when {
-                            current.postChaosAdPhase == 1 -> {
-                                Text(
-                                    text = "✨ UNLOCK YOUR POTENTIAL TODAY! ✨",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                            }
+                    )
 
-                            current.postChaosAdPhase == 2 -> {
-                                Text(
-                                    text = "🚀 LIMITED TIME OFFER - ACT NOW! 🚀",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                            }
-
-                            current.adAnimationPhase == 1 -> {
-                                Text(
-                                    text = "🎉 YOU WON! Click here! 🎉",
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                            }
-
-                            current.adAnimationPhase == 2 -> {
-                                Text(
-                                    text = "💰 EARN ${'$'}500/DAY FROM HOME! 💰",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                            }
+                    // Ad banner space (same as calculator)
+                    if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                                .background(Color(0xFFD4CBC0)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            // Empty banner during word game
                         }
-                        // else -> empty, no text for gray banner
                     }
-                }
-            }
 
-            // Main calculator content
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 15.dp)
-                    .padding(top = if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) 82.dp else 32.dp)
-            ) {
-                // Toggle button - top right corner
-                Button(
-                    onClick = {
-                        val result = CalculatorActions.handleMuteButtonClick()
-                        when (result) {
-                            1 -> CalculatorActions.showDebugMenu(state)
-                            2 -> CalculatorActions.resetGame(state)
-                            else -> CalculatorActions.toggleConversation(state)
+                    // Main content area with message and mute button at top
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 15.dp)
+                    ) {
+                        // Mute button - top right corner
+                        MuteButtonWithSpinner(
+                            isMuted = current.isMuted,
+                            isAutoProgressing = current.isTyping && current.conversationStep < 167,
+                            onClick = {
+                                val result = CalculatorActions.handleMuteButtonClick()
+                                when (result) {
+                                    1 -> CalculatorActions.showDebugMenu(state)
+                                    2 -> CalculatorActions.resetGame(state)
+                                    else -> CalculatorActions.toggleConversation(state)
+                                }
+                            },
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 8.dp)
+                        )
+
+                        // Message display - top left
+                        if (current.message.isNotEmpty() && !current.isMuted) {
+                            Text(
+                                text = current.message,
+                                fontSize = 24.sp,
+                                color = textColor,
+                                textAlign = TextAlign.Start,
+                                fontFamily = CalculatorDisplayFont,
+                                lineHeight = 28.sp,
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(top = 8.dp, end = 50.dp)
+                                    .widthIn(max = 300.dp)
+                            )
                         }
-                    },
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 8.dp)
-                        .size(36.dp),
-                    shape = CircleShape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = AccentOrange,
-                        contentColor = Color.White
-                    ),
-                    contentPadding = PaddingValues(0.dp),
-                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
-                ) {
-                    Text(
-                        text = if (current.isMuted) "○" else "●",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
+                    }
+
+                    // Spacer between message area and game
+                    Spacer(modifier = Modifier.height(100.dp))
+
+                    // Word game grid and controls (fills remaining space)
+                    WordGameScreen(
+                        gameGrid = current.wordGameGrid,
+                        fallingLetter = current.fallingLetter,
+                        fallingX = current.fallingLetterX,
+                        fallingY = current.fallingLetterY,
+                        selectedCells = current.selectedCells,
+                        isSelecting = current.isSelectingWord,
+                        formedWords = current.formedWords,
+                        isPaused = current.wordGamePaused,
+                        draggingCell = current.draggingCell,
+                        dragOffsetX = current.dragOffsetX,
+                        dragOffsetY = current.dragOffsetY,
+                        previewGrid = current.dragPreviewGrid,    // NEW - shows shifted letters
+                        onMoveLeft = { CalculatorActions.moveWordGameLeft(state) },
+                        onMoveRight = { CalculatorActions.moveWordGameRight(state) },
+                        onMoveDown = { CalculatorActions.moveWordGameDown(state) },
+                        onDrop = { CalculatorActions.dropWordGameLetter(state) },
+                        onCellTap = { row, col ->
+                            CalculatorActions.selectWordGameCell(state, row, col)
+                        },
+                        onConfirmSelection = { CalculatorActions.confirmWordSelection(state) },
+                        onCancelSelection = { CalculatorActions.cancelWordSelection(state) },
+                        onClearGrid = { CalculatorActions.clearWordGameGrid(state) },
+                        onStartDrag = { row, col ->
+                            CalculatorActions.startDraggingLetter(state, row, col)
+                        },
+                        onUpdateDrag = { deltaX, deltaY ->        // CHANGED - now receives deltas
+                            CalculatorActions.updateDragOffset(state, deltaX, deltaY)
+                        },
+                        onEndDrag = {                              // CHANGED - no longer needs cellSize
+                            CalculatorActions.endDraggingLetter(state)
+                        },
+                        onCancelDrag = {
+                            CalculatorActions.cancelDragging(state)
+                        },
+                        modifier = Modifier.weight(1f)
                     )
                 }
+            } else {
+                // Scan lines overlay for retro CRT effect (drawn on top later)
 
-                // Message display - top left, below toggle button level
-                if (current.message.isNotEmpty() && !current.isMuted) {
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(top = 8.dp, end = 50.dp)
-                    ) {
-                        Text(
-                            text = current.message,
-                            fontSize = 28.sp,
-                            color = textColor,
-                            textAlign = TextAlign.Start,
-                            fontFamily = CalculatorDisplayFont
-                        )
-                        // Show countdown timer if active
-                        if (current.countdownTimer > 0) {
-                            Text(
-                                text = "Time: ${current.countdownTimer}",
-                                fontSize = 20.sp,
-                                color = if (current.countdownTimer <= 5) Color.Red else textColor,
-                                fontFamily = CalculatorDisplayFont,
-                                modifier = Modifier.padding(top = 8.dp)
-                            )
-                        }
-                        // Show choice options for step 89
-                        if (current.conversationStep == 89 && current.awaitingChoice) {
-                            Column(modifier = Modifier.padding(top = 12.dp)) {
-                                Text(
-                                    "1) Nothing",
-                                    fontSize = 18.sp,
-                                    color = textColor,
-                                    fontFamily = CalculatorDisplayFont
-                                )
-                                Text(
-                                    "2) I'll fight them!",
-                                    fontSize = 18.sp,
-                                    color = textColor,
-                                    fontFamily = CalculatorDisplayFont
-                                )
-                                Text(
-                                    "3) Go offline",
-                                    fontSize = 18.sp,
-                                    color = textColor,
-                                    fontFamily = CalculatorDisplayFont
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // Main content column (display + buttons)
                 Column(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.Bottom
+                    modifier = Modifier
+                        .then(if (isTablet) Modifier.widthIn(max = maxContentWidth) else Modifier.fillMaxWidth())
+                        .fillMaxHeight()
                 ) {
-                    // Calculator number display OR Camera OR Browser
-                    if (current.cameraActive) {
-                        // Camera viewfinder area - with top padding to not cover message
-                        Box(
+                    // Top bezel strip - retro dark brown
+                    Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .weight(1f)
-                                .padding(
-                                    top = 180.dp,
-                                    bottom = 8.dp
-                                )  // Leave space at top for messages
-                        ) {
-                            CameraPreview(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .clip(RoundedCornerShape(12.dp)),
-                                lifecycleOwner = lifecycleOwner
-                            )
-
-                            // Floating calculator display over camera
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .background(
-                                        Color.White.copy(alpha = 0.85f),
-                                        RoundedCornerShape(8.dp)
+                                .height(32.dp)
+                                .background(
+                                    if (current.invertedColors) Color(0xFF1A1A1A) else Color(
+                                        0xFF4A3728
                                     )
-                                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                            ) {
-                                Text(
-                                    text = displayText,
-                                    fontSize = 48.sp,
-                                    color = Color(0xFF0A0A0A),
-                                    textAlign = TextAlign.End,
-                                    maxLines = 1,
-                                    fontFamily = CalculatorDisplayFont
-                                )
-                            }
-                        }
-                    } else if (current.showBrowser) {
-                        // Mini browser UI - taller than camera view
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                                .padding(
-                                    top = 100.dp,
-                                    bottom = 8.dp
-                                )  // Less top padding = taller browser
-                        ) {
-                            // Browser container
+                                )  // Dark brown retro
+                        )
+
+                        // Ad banner space (only shows at certain steps or during ad animation)
+                        if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) {
+                            val creatorUrl = "https://uk.linkedin.com/in/ondrej-zika-a00724195"
+
                             Box(
                                 modifier = Modifier
-                                    .fillMaxSize()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(Color.White)
+                                    .fillMaxWidth()
+                                    .height(50.dp)
+                                    .background(
+                                        when {
+                                            current.postChaosAdPhase == 1 -> Color(0xFF9C27B0)  // Purple ad
+                                            current.postChaosAdPhase == 2 -> Color(0xFF00BCD4)  // Cyan ad
+                                            current.adAnimationPhase == 1 -> Color(0xFF4CAF50)  // Green ad
+                                            current.adAnimationPhase == 2 -> Color(0xFFE91E63)  // Pink ad
+                                            else -> Color(0xFFD4CBC0)  // Retro beige-gray
+                                        }
+
+                                    )
+                                    .then(
+                                        if (current.adAnimationPhase > 0) {
+                                            Modifier.clickable {
+                                                val intent =
+                                                    Intent(
+                                                        Intent.ACTION_VIEW,
+                                                        Uri.parse(creatorUrl)
+                                                    )
+                                                context.startActivity(intent)
+                                            }
+                                        } else Modifier
+                                    ),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Column(
-                                    modifier = Modifier.fillMaxSize(),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    // URL/Search bar with animated text
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(16.dp)
-                                            .background(
-                                                Color(0xFFF0F0F0),
-                                                RoundedCornerShape(24.dp)
-                                            )
-                                            .padding(horizontal = 16.dp, vertical = 12.dp)
-                                    ) {
+                                when {
+                                    current.postChaosAdPhase == 1 -> {
                                         Text(
-                                            text = current.browserSearchText.ifEmpty { "Search..." },
-                                            fontSize = if (current.browserShowWikipedia) 12.sp else 16.sp,
-                                            fontFamily = if (current.browserSearchText.isNotEmpty()) CalculatorDisplayFont else null,
-                                            color = if (current.browserSearchText.isEmpty()) Color.Gray else Color.Black,
-                                            maxLines = 1
+                                            text = "✨ UNLOCK YOUR POTENTIAL TODAY! ✨",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
                                         )
                                     }
 
-                                    // Content area
+                                    current.postChaosAdPhase == 2 -> {
+                                        Text(
+                                            text = "🚀 LIMITED TIME OFFER - ACT NOW! 🚀",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
+                                        )
+                                    }
+
+                                    current.adAnimationPhase == 1 -> {
+                                        Text(
+                                            text = "🎉 YOU WON! Click here! 🎉",
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
+                                        )
+                                    }
+
+                                    current.adAnimationPhase == 2 -> {
+                                        Text(
+                                            text = "💰 EARN ${'$'}500/DAY FROM HOME! 💰",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
+                                        )
+                                    }
+                                }
+                                // else -> empty, no text for gray banner
+                            }
+                        }
+                    }
+
+
+                    // Main calculator content
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 15.dp)
+                            .padding(top = if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) 82.dp else 32.dp)
+                    ) {
+                        MuteButtonWithSpinner(
+                            isMuted = current.isMuted,
+                            isAutoProgressing = current.isTyping && current.conversationStep < 167,                            onClick = {
+                                val result = CalculatorActions.handleMuteButtonClick()
+                                when (result) {
+                                    1 -> CalculatorActions.showDebugMenu(state)
+                                    2 -> CalculatorActions.resetGame(state)
+                                    else -> CalculatorActions.toggleConversation(state)
+                                }
+                            },
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 8.dp)
+                        )
+                        // Message display - top left, below toggle button level
+                        if (current.message.isNotEmpty() && !current.isMuted) {
+                            Column(
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(top = 8.dp, end = 50.dp)
+                            ) {
+                                Text(
+                                    text = current.message,
+                                    fontSize = 28.sp,
+                                    color = textColor,
+                                    textAlign = TextAlign.Start,
+                                    fontFamily = CalculatorDisplayFont
+                                )
+                                // Show countdown timer if active
+                                if (current.countdownTimer > 0) {
+                                    Text(
+                                        text = "Time: ${current.countdownTimer}",
+                                        fontSize = 20.sp,
+                                        color = if (current.countdownTimer <= 5) Color.Red else textColor,
+                                        fontFamily = CalculatorDisplayFont,
+                                        modifier = Modifier.padding(top = 8.dp)
+                                    )
+                                }
+                                // Show choice options for step 89
+                                if (current.conversationStep == 89 && current.awaitingChoice) {
+                                    Column(modifier = Modifier.padding(top = 12.dp)) {
+                                        Text(
+                                            "1) Nothing",
+                                            fontSize = 18.sp,
+                                            color = textColor,
+                                            fontFamily = CalculatorDisplayFont
+                                        )
+                                        Text(
+                                            "2) I'll fight them!",
+                                            fontSize = 18.sp,
+                                            color = textColor,
+                                            fontFamily = CalculatorDisplayFont
+                                        )
+                                        Text(
+                                            "3) Go offline",
+                                            fontSize = 18.sp,
+                                            color = textColor,
+                                            fontFamily = CalculatorDisplayFont
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+
+                        // Main content column (display + buttons)
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.Bottom
+                        ) {
+                            // Calculator number display OR Camera OR Browser
+                            if (current.cameraActive) {
+                                // Camera viewfinder area - with top padding to not cover message
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f)
+                                        .padding(
+                                            top = 180.dp,
+                                            bottom = 8.dp
+                                        )  // Leave space at top for messages
+                                ) {
+                                    CameraPreview(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .clip(RoundedCornerShape(12.dp)),
+                                        lifecycleOwner = lifecycleOwner
+                                    )
+
+                                    // Floating calculator display over camera
                                     Box(
                                         modifier = Modifier
-                                            .weight(1f)
-                                            .fillMaxWidth(),
-                                        contentAlignment = Alignment.Center
+                                            .align(Alignment.BottomEnd)
+                                            .background(
+                                                Color.White.copy(alpha = 0.85f),
+                                                RoundedCornerShape(8.dp)
+                                            )
+                                            .padding(horizontal = 16.dp, vertical = 8.dp)
                                     ) {
-                                        when {
-                                            current.browserShowWikipedia -> {
-                                                // Try real Wikipedia with WebView
-                                                var webViewFailed by remember {
-                                                    mutableStateOf(
-                                                        false
+                                        Text(
+                                            text = displayText,
+                                            fontSize = 48.sp,
+                                            color = Color(0xFF0A0A0A),
+                                            textAlign = TextAlign.End,
+                                            maxLines = 1,
+                                            fontFamily = CalculatorDisplayFont
+                                        )
+                                    }
+                                }
+                            } else if (current.showBrowser) {
+                                // Mini browser UI - taller than camera view
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f)
+                                        .padding(
+                                            top = 100.dp,
+                                            bottom = 8.dp
+                                        )  // Less top padding = taller browser
+                                ) {
+                                    // Browser container
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(Color.White)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.fillMaxSize(),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            // URL/Search bar with animated text
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(16.dp)
+                                                    .background(
+                                                        Color(0xFFF0F0F0),
+                                                        RoundedCornerShape(24.dp)
                                                     )
-                                                }
-
-                                                if (!webViewFailed) {
-                                                    AndroidView(
-                                                        factory = { ctx ->
-                                                            WebView(ctx).apply {
-                                                                @Suppress("SetJavaScriptEnabled")
-                                                                settings.javaScriptEnabled =
-                                                                    true
-                                                                settings.domStorageEnabled =
-                                                                    true
-                                                                settings.loadWithOverviewMode =
-                                                                    true
-                                                                settings.useWideViewPort = true
-
-                                                                webViewClient =
-                                                                    object : WebViewClient() {
-                                                                        override fun onReceivedError(
-                                                                            view: WebView?,
-                                                                            request: WebResourceRequest?,
-                                                                            error: WebResourceError?
-                                                                        ) {
-                                                                            super.onReceivedError(
-                                                                                view,
-                                                                                request,
-                                                                                error
-                                                                            )
-                                                                            if (request?.isForMainFrame == true) {
-                                                                                webViewFailed =
-                                                                                    true
-                                                                            }
-                                                                        }
-
-                                                                        @Suppress("DEPRECATION")
-                                                                        override fun onReceivedError(
-                                                                            view: WebView?,
-                                                                            errorCode: Int,
-                                                                            description: String?,
-                                                                            failingUrl: String?
-                                                                        ) {
-                                                                            @Suppress("DEPRECATION")
-                                                                            super.onReceivedError(
-                                                                                view,
-                                                                                errorCode,
-                                                                                description,
-                                                                                failingUrl
-                                                                            )
-                                                                            webViewFailed = true
-                                                                        }
-                                                                    }
-
-                                                                loadUrl("https://en.wikipedia.org/wiki/Calculator")
-                                                            }
-                                                        },
-                                                        modifier = Modifier.fillMaxSize()
-                                                    )
-                                                } else {
-                                                    // Fallback: Fake Wikipedia page
-                                                    FakeWikipediaContent()
-                                                }
-                                            }
-
-                                            current.browserShowError -> {
-                                                // Error message
-                                                Column(
-                                                    horizontalAlignment = Alignment.CenterHorizontally
-                                                ) {
-                                                    Text(
-                                                        text = "⚠",
-                                                        fontSize = 48.sp,
-                                                        color = Color.Gray
-                                                    )
-                                                    Text(
-                                                        text = "No internet connection",
-                                                        fontSize = 20.sp,
-                                                        fontFamily = CalculatorDisplayFont,
-                                                        color = Color.Gray,
-                                                        modifier = Modifier.padding(top = 8.dp)
-                                                    )
-                                                }
-                                            }
-
-                                            else -> {
-                                                // Google logo
+                                                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                                            ) {
                                                 Text(
-                                                    text = "Google",
-                                                    fontSize = 48.sp,
-                                                    fontFamily = CalculatorDisplayFont,
-                                                    color = Color(0xFF4285F4)
+                                                    text = current.browserSearchText.ifEmpty { "Search..." },
+                                                    fontSize = if (current.browserShowWikipedia) 12.sp else 16.sp,
+                                                    fontFamily = if (current.browserSearchText.isNotEmpty()) CalculatorDisplayFont else null,
+                                                    color = if (current.browserSearchText.isEmpty()) Color.Gray else Color.Black,
+                                                    maxLines = 1
                                                 )
                                             }
+
+                                            // Content area
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .fillMaxWidth(),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                when {
+                                                    current.browserShowWikipedia -> {
+                                                        // Try real Wikipedia with WebView
+                                                        var webViewFailed by remember {
+                                                            mutableStateOf(
+                                                                false
+                                                            )
+                                                        }
+
+                                                        if (!webViewFailed) {
+                                                            AndroidView(
+                                                                factory = { ctx ->
+                                                                    WebView(ctx).apply {
+                                                                        @Suppress("SetJavaScriptEnabled")
+                                                                        settings.javaScriptEnabled =
+                                                                            true
+                                                                        settings.domStorageEnabled =
+                                                                            true
+                                                                        settings.loadWithOverviewMode =
+                                                                            true
+                                                                        settings.useWideViewPort =
+                                                                            true
+
+                                                                        webViewClient =
+                                                                            object :
+                                                                                WebViewClient() {
+                                                                                override fun onReceivedError(
+                                                                                    view: WebView?,
+                                                                                    request: WebResourceRequest?,
+                                                                                    error: WebResourceError?
+                                                                                ) {
+                                                                                    super.onReceivedError(
+                                                                                        view,
+                                                                                        request,
+                                                                                        error
+                                                                                    )
+                                                                                    if (request?.isForMainFrame == true) {
+                                                                                        webViewFailed =
+                                                                                            true
+                                                                                    }
+                                                                                }
+
+                                                                                @Suppress("DEPRECATION")
+                                                                                override fun onReceivedError(
+                                                                                    view: WebView?,
+                                                                                    errorCode: Int,
+                                                                                    description: String?,
+                                                                                    failingUrl: String?
+                                                                                ) {
+                                                                                    @Suppress("DEPRECATION")
+                                                                                    super.onReceivedError(
+                                                                                        view,
+                                                                                        errorCode,
+                                                                                        description,
+                                                                                        failingUrl
+                                                                                    )
+                                                                                    webViewFailed =
+                                                                                        true
+                                                                                }
+                                                                            }
+
+                                                                        loadUrl("https://en.wikipedia.org/wiki/Calculator")
+                                                                    }
+                                                                },
+                                                                modifier = Modifier.fillMaxSize()
+                                                            )
+                                                        } else {
+                                                            // Fallback: Fake Wikipedia page
+                                                            FakeWikipediaContent()
+                                                        }
+                                                    }
+
+                                                    current.browserShowError -> {
+                                                        // Error message
+                                                        Column(
+                                                            horizontalAlignment = Alignment.CenterHorizontally
+                                                        ) {
+                                                            Text(
+                                                                text = "⚠",
+                                                                fontSize = 48.sp,
+                                                                color = Color.Gray
+                                                            )
+                                                            Text(
+                                                                text = "No internet connection",
+                                                                fontSize = 20.sp,
+                                                                fontFamily = CalculatorDisplayFont,
+                                                                color = Color.Gray,
+                                                                modifier = Modifier.padding(top = 8.dp)
+                                                            )
+                                                        }
+                                                    }
+
+                                                    else -> {
+                                                        // Google logo
+                                                        Text(
+                                                            text = "Google",
+                                                            fontSize = 48.sp,
+                                                            fontFamily = CalculatorDisplayFont,
+                                                            color = Color(0xFF4285F4)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Floating calculator display over browser
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .background(
+                                                Color.White.copy(alpha = 0.85f),
+                                                RoundedCornerShape(8.dp)
+                                            )
+                                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                                    ) {
+                                        Text(
+                                            text = displayText,
+                                            fontSize = 48.sp,
+                                            color = Color(0xFF0A0A0A),
+                                            textAlign = TextAlign.End,
+                                            maxLines = 1,
+                                            fontFamily = CalculatorDisplayFont
+                                        )
+                                    }
+                                }
+                            } else {
+                                // Normal calculator display - retro LCD style
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f)
+                                        .padding(horizontal = 8.dp)
+                                        .padding(bottom = 16.dp),
+                                    contentAlignment = Alignment.BottomEnd
+                                ) {
+                                    // LCD display panel with retro styling - FIXED HEIGHT
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(100.dp)  // Fixed height
+                                            .background(
+                                                if (current.invertedColors) Color(0xFF0A0A0A) else Color(
+                                                    0xFFCCD5AE
+                                                ),  // Retro LCD green-gray
+                                                RoundedCornerShape(4.dp)
+                                            )
+                                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                                    ) {
+                                        // Operation history in top right (smaller)
+                                        if (current.operationHistory.isNotEmpty() && current.isReadyForNewOperation) {
+                                            Text(
+                                                text = current.operationHistory,
+                                                fontSize = 16.sp,
+                                                color = if (current.invertedColors) RetroDisplayGreen.copy(
+                                                    alpha = 0.6f
+                                                ) else Color(0xFF2D2D2D).copy(alpha = 0.5f),
+                                                textAlign = TextAlign.End,
+                                                maxLines = 1,
+                                                fontFamily = CalculatorDisplayFont,
+                                                modifier = Modifier
+                                                    .align(Alignment.TopEnd)
+                                                    .padding(top = 4.dp)
+                                            )
+                                        }
+
+                                        // Shadow/ghost digits effect (like old LCDs)
+                                        Text(
+                                            text = "8888888888888",
+                                            fontSize = 58.sp,
+                                            color = Color(0xFF000000).copy(alpha = 0.06f),
+                                            textAlign = TextAlign.End,
+                                            maxLines = 1,
+                                            fontFamily = CalculatorDisplayFont,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .align(Alignment.BottomEnd)
+                                        )
+                                        // Actual display - auto-sizing based on content (LARGER sizes)
+                                        val displayFontSize = when {
+                                            displayText.length > 12 -> 40.sp
+                                            displayText.length > 10 -> 48.sp
+                                            displayText.length > 8 -> 54.sp
+                                            else -> 62.sp
+                                        }
+                                        Text(
+                                            text = displayText,
+                                            fontSize = displayFontSize,
+                                            color = if (current.invertedColors) RetroDisplayGreen else Color(
+                                                0xFF2D2D2D
+                                            ),
+                                            textAlign = TextAlign.End,
+                                            maxLines = 1,
+                                            fontFamily = CalculatorDisplayFont,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .align(Alignment.BottomEnd)
+                                        )
+                                    }
+                                }
+                            }
+                            if (current.radButtonVisible && !current.allButtonsRad) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 15.dp)
+                                        .padding(bottom = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Button(
+                                        onClick = { /* Does nothing */ },
+                                        modifier = Modifier
+                                            .width(100.dp)
+                                            .height(50.dp),
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFF8B0000),
+                                            contentColor = Color.White
+                                        ),
+                                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = "RAD",
+                                            fontSize = 20.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+
+// Calculator buttons
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 15.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                buttonLayout.forEach { row ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(58.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        row.forEach { symbol ->
+                                            CalculatorButton(
+                                                symbol = symbol,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .fillMaxHeight(),
+                                                shakeIntensity = currentShakeIntensity,
+                                                invertedColors = current.invertedColors,
+                                                isDamaged = current.minusButtonDamaged && symbol == "-",
+                                                isBroken = current.minusButtonBroken && symbol == "-",
+                                                isFlickering = current.flickeringButton == symbol,
+                                                isDark = symbol in current.darkButtons,
+                                                showAsRad = current.allButtonsRad,
+                                                onClick = {
+                                                    if (!current.rantMode) {
+                                                        CalculatorActions.handleInput(state, symbol)
+                                                    }
+                                                }
+                                            )
                                         }
                                     }
                                 }
                             }
 
-                            // Floating calculator display over browser
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .background(
-                                        Color.White.copy(alpha = 0.85f),
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                            ) {
-                                Text(
-                                    text = displayText,
-                                    fontSize = 48.sp,
-                                    color = Color(0xFF0A0A0A),
-                                    textAlign = TextAlign.End,
-                                    maxLines = 1,
-                                    fontFamily = CalculatorDisplayFont
-                                )
-                            }
-                        }
-                    } else {
-                        // Normal calculator display - retro LCD style
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                                .padding(horizontal = 8.dp)
-                                .padding(bottom = 16.dp),
-                            contentAlignment = Alignment.BottomEnd
-                        ) {
-                            // LCD display panel with retro styling - FIXED HEIGHT
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(100.dp)  // Fixed height
-                                    .background(
-                                        if (current.invertedColors) Color(0xFF0A0A0A) else Color(
-                                            0xFFCCD5AE
-                                        ),  // Retro LCD green-gray
-                                        RoundedCornerShape(4.dp)
-                                    )
-                                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                            ) {
-                                // Operation history in top right (smaller)
-                                if (current.operationHistory.isNotEmpty() && current.isReadyForNewOperation) {
-                                    Text(
-                                        text = current.operationHistory,
-                                        fontSize = 16.sp,
-                                        color = if (current.invertedColors) RetroDisplayGreen.copy(
-                                            alpha = 0.6f
-                                        ) else Color(0xFF2D2D2D).copy(alpha = 0.5f),
-                                        textAlign = TextAlign.End,
-                                        maxLines = 1,
-                                        fontFamily = CalculatorDisplayFont,
-                                        modifier = Modifier
-                                            .align(Alignment.TopEnd)
-                                            .padding(top = 4.dp)
-                                    )
-                                }
 
-                                // Shadow/ghost digits effect (like old LCDs)
-                                Text(
-                                    text = "8888888888888",
-                                    fontSize = 58.sp,
-                                    color = Color(0xFF000000).copy(alpha = 0.06f),
-                                    textAlign = TextAlign.End,
-                                    maxLines = 1,
-                                    fontFamily = CalculatorDisplayFont,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .align(Alignment.BottomEnd)
-                                )
-                                // Actual display - auto-sizing based on content (LARGER sizes)
-                                val displayFontSize = when {
-                                    displayText.length > 12 -> 40.sp
-                                    displayText.length > 10 -> 48.sp
-                                    displayText.length > 8 -> 54.sp
-                                    else -> 62.sp
-                                }
-                                Text(
-                                    text = displayText,
-                                    fontSize = displayFontSize,
-                                    color = if (current.invertedColors) RetroDisplayGreen else Color(
-                                        0xFF2D2D2D
-                                    ),
-                                    textAlign = TextAlign.End,
-                                    maxLines = 1,
-                                    fontFamily = CalculatorDisplayFont,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .align(Alignment.BottomEnd)
-                                )
-                            }
+
+
+
                         }
                     }
+                }
+            }
+        }
 
-                    // Calculator buttons
+            // Console overlay
+            if (current.showConsole) {
+                ConsoleWindow(
+                    consoleStep = current.consoleStep,
+                    adminCodeEntered = current.adminCodeEntered,
+                    currentInput = current.number1,
+                    bannersDisabled = current.bannersDisabled,
+                    fullScreenAdsEnabled = current.fullScreenAdsEnabled,
+                    totalScreenTimeMs = current.totalScreenTimeMs,
+                    totalCalculations = current.totalCalculations,
+                    onOpenContributeLink = {
+                        val creatorUrl = "https://uk.linkedin.com/in/ondrej-zika-a00724195"
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(creatorUrl))
+                        context.startActivity(intent)
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            // Blackout overlay - shows text if in phase 20 (money-monkey message)
+            if (current.screenBlackout) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black),
+                    contentAlignment = Alignment.Center
+                ) {
+                    // Show the money-monkey text during phase 20
+                    if (current.browserPhase == 20 && current.message.isNotEmpty()) {
+                        Text(
+                            text = current.message,
+                            fontSize = 28.sp,
+                            color = Color.White,
+                            fontFamily = CalculatorDisplayFont,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(32.dp)
+                        )
+                    }
+                }
+            }
+    if (current.flickerEffect && !current.screenBlackout) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.White.copy(alpha = 0.5f))
+        )
+    }
+            // B&W flicker overlay during tension (handled via backgroundColor now)
+            // No separate overlay needed - the background color flickers directly
+
+            // Retro scan lines overlay (subtle CRT effect)
+            if (!current.screenBlackout) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val lineSpacing = 4.dp.toPx()
+                    var y = 0f
+                    while (y < size.height) {
+                        drawLine(
+                            color = Color.Black.copy(alpha = 0.03f),
+                            start = Offset(0f, y),
+                            end = Offset(size.width, y),
+                            strokeWidth = 1f
+                        )
+                        y += lineSpacing
+                    }
+                }
+            }
+
+            // Desaturation/grayscale overlay during tension
+            if (desaturationAmount > 0f && !current.screenBlackout) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Gray.copy(alpha = desaturationAmount * 0.5f))
+                )
+            }
+
+            // Green screen flash during chaos phase 3
+            if (current.chaosPhase == 3) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xFF00FF00))
+                )
+            }
+
+            // 3D Keyboard Chaos overlay
+            if (current.keyboardChaosActive) {
+                KeyboardChaos3D(
+                    chaosLetters = current.chaosLetters,
+                    rotationX = current.cubeRotationX,
+                    rotationY = current.cubeRotationY,
+                    scale = current.cubeScale,
+                    message = current.message,
+                    onRotationChange = { dx, dy ->
+                        state.value = state.value.copy(
+                            cubeRotationX = (state.value.cubeRotationX + dy).coerceIn(-90f, 90f),
+                            cubeRotationY = state.value.cubeRotationY + dx
+                        )
+                    },
+                    onScaleChange = { newScale ->
+                        state.value = state.value.copy(
+                            cubeScale = newScale.coerceIn(0.5f, 6f)
+                        )
+                    },
+                    onLetterTap = { letter ->
+                        // Remove the tapped letter from chaos
+                        val newLetters = state.value.chaosLetters.filterNot { it == letter }
+                        state.value = state.value.copy(chaosLetters = newLetters)
+                        vibrate(context, 20, 100)
+
+                        // Check if all letters are cleared
+                        if (newLetters.isEmpty()) {
+                            // Success! Move to next step
+                            state.value = state.value.copy(
+                                keyboardChaosActive = false,
+                                chaosPhase = 0,
+                                conversationStep = 107,
+                                message = "",
+                                fullMessage = "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?",
+                                isTyping = true
+                            )
+                            CalculatorActions.persistConversationStep(107)
+                        }
+                    }
+                )
+            }
+
+            // Debug menu overlay - at the outermost level to cover everything
+            if (current.showDebugMenu) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.85f)),
+                    contentAlignment = Alignment.Center
+                ) {
                     Column(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 15.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                            .fillMaxWidth(0.9f)
+                            .background(Color.White, RoundedCornerShape(16.dp))
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        buttonLayout.forEach { row ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(58.dp),  // Smaller fixed height for button rows
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                row.forEach { symbol ->
-                                    CalculatorButton(
-                                        symbol = symbol,
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .fillMaxHeight(),
-                                        shakeIntensity = currentShakeIntensity,
-                                        invertedColors = current.invertedColors,
-                                        isDamaged = current.minusButtonDamaged && symbol == "-",
-                                        isBroken = current.minusButtonBroken && symbol == "-",
-                                        isFlickering = current.flickeringButton == symbol,
-                                        isDark = symbol in current.darkButtons,
-                                        onClick = {
-                                            CalculatorActions.handleInput(
-                                                state,
-                                                symbol
-                                            )
-                                        }
-                                    )
+                        Text(
+                            text = "DEBUG MENU",
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AccentOrange,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+
+                        Text(
+                            text = "Current Step: ${current.conversationStep}",
+                            fontSize = 14.sp,
+                            color = Color.Gray,
+                            modifier = Modifier.padding(bottom = 16.dp)
+                        )
+
+                        // Chapter buttons in a scrollable column
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            CHAPTERS.forEach { chapter ->
+                                Button(
+                                    onClick = { CalculatorActions.jumpToChapter(state, chapter) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (current.conversationStep >= chapter.startStep)
+                                            AccentOrange else Color(0xFFE0E0E0)
+                                    ),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalAlignment = Alignment.Start
+                                    ) {
+                                        Text(
+                                            text = chapter.name,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (current.conversationStep >= chapter.startStep)
+                                                Color.White else Color.DarkGray
+                                        )
+                                        Text(
+                                            text = "Step ${chapter.startStep}: ${chapter.description}",
+                                            fontSize = 10.sp,
+                                            color = if (current.conversationStep >= chapter.startStep)
+                                                Color.White.copy(alpha = 0.8f) else Color.Gray
+                                        )
+                                    }
                                 }
                             }
                         }
-                    }
-                }
-            }
-        }
-    }
-// Console overlay
-    if (current.showConsole) {
-        ConsoleWindow(
-            consoleStep = current.consoleStep,
-            adminCodeEntered = current.adminCodeEntered,
-            currentInput = current.number1,
-            modifier = Modifier.fillMaxSize()
-        )
-    }
-    // Blackout overlay - shows text if in phase 20 (money-monkey message)
-    if (current.screenBlackout) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black),
-            contentAlignment = Alignment.Center
-        ) {
-            // Show the money-monkey text during phase 20
-            if (current.browserPhase == 20 && current.message.isNotEmpty()) {
-                Text(
-                    text = current.message,
-                    fontSize = 28.sp,
-                    color = Color.White,
-                    fontFamily = CalculatorDisplayFont,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(32.dp)
-                )
-            }
-        }
-    }
 
-    // B&W flicker overlay during tension (handled via backgroundColor now)
-    // No separate overlay needed - the background color flickers directly
-
-    // Retro scan lines overlay (subtle CRT effect)
-    if (!current.screenBlackout) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val lineSpacing = 4.dp.toPx()
-            var y = 0f
-            while (y < size.height) {
-                drawLine(
-                    color = Color.Black.copy(alpha = 0.03f),
-                    start = Offset(0f, y),
-                    end = Offset(size.width, y),
-                    strokeWidth = 1f
-                )
-                y += lineSpacing
-            }
-        }
-    }
-
-    // Desaturation/grayscale overlay during tension
-    if (desaturationAmount > 0f && !current.screenBlackout) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Gray.copy(alpha = desaturationAmount * 0.5f))
-        )
-    }
-
-    // Green screen flash during chaos phase 3
-    if (current.chaosPhase == 3) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xFF00FF00))
-        )
-    }
-
-    // 3D Keyboard Chaos overlay
-    if (current.keyboardChaosActive) {
-        KeyboardChaos3D(
-            chaosLetters = current.chaosLetters,
-            rotationX = current.cubeRotationX,
-            rotationY = current.cubeRotationY,
-            scale = current.cubeScale,
-            message = current.message,
-            onRotationChange = { dx, dy ->
-                state.value = state.value.copy(
-                    cubeRotationX = (state.value.cubeRotationX + dy).coerceIn(-90f, 90f),
-                    cubeRotationY = state.value.cubeRotationY + dx
-                )
-            },
-            onScaleChange = { newScale ->
-                state.value = state.value.copy(
-                    cubeScale = newScale.coerceIn(0.5f, 6f)
-                )
-            },
-            onLetterTap = { letter ->
-                // Remove the tapped letter from chaos
-                val newLetters = state.value.chaosLetters.filterNot { it == letter }
-                state.value = state.value.copy(chaosLetters = newLetters)
-                vibrate(context, 20, 100)
-
-                // Check if all letters are cleared
-                if (newLetters.isEmpty()) {
-                    // Success! Move to next step
-                    state.value = state.value.copy(
-                        keyboardChaosActive = false,
-                        chaosPhase = 0,
-                        conversationStep = 107,
-                        message = "",
-                        fullMessage = "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?",
-                        isTyping = true
-                    )
-                    CalculatorActions.persistConversationStep(107)
-                }
-            }
-        )
-    }
-
-    // Debug menu overlay - at the outermost level to cover everything
-    if (current.showDebugMenu) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.85f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth(0.9f)
-                    .background(Color.White, RoundedCornerShape(16.dp))
-                    .padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = "DEBUG MENU",
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = AccentOrange,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-
-                Text(
-                    text = "Current Step: ${current.conversationStep}",
-                    fontSize = 14.sp,
-                    color = Color.Gray,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
-
-                // Chapter buttons in a scrollable column
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    CHAPTERS.forEach { chapter ->
+                        // Reset button
                         Button(
-                            onClick = { CalculatorActions.jumpToChapter(state, chapter) },
+                            onClick = { CalculatorActions.resetGame(state) },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (current.conversationStep >= chapter.startStep)
-                                    AccentOrange else Color(0xFFE0E0E0)
-                            ),
+                                .padding(top = 12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
                             shape = RoundedCornerShape(8.dp)
                         ) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.Start
-                            ) {
-                                Text(
-                                    text = chapter.name,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (current.conversationStep >= chapter.startStep)
-                                        Color.White else Color.DarkGray
-                                )
-                                Text(
-                                    text = "Step ${chapter.startStep}: ${chapter.description}",
-                                    fontSize = 10.sp,
-                                    color = if (current.conversationStep >= chapter.startStep)
-                                        Color.White.copy(alpha = 0.8f) else Color.Gray
-                                )
-                            }
+                            Text("Reset Game", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+
+                        // Close button
+                        Button(
+                            onClick = { CalculatorActions.hideDebugMenu(state) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.Gray),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Close", color = Color.White)
                         }
                     }
                 }
-
-                // Reset button
-                Button(
-                    onClick = { CalculatorActions.resetGame(state) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text("Reset Game", color = Color.White, fontWeight = FontWeight.Bold)
-                }
-
-                // Close button
-                Button(
-                    onClick = { CalculatorActions.hideDebugMenu(state) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.Gray),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text("Close", color = Color.White)
-                }
             }
         }
-    }
-}
-    @Composable
-    fun FakeWikipediaContent() {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.White)
-                .verticalScroll(rememberScrollState())
-        ) {
-            // Donation banner
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF1589D1))
-                    .padding(8.dp)
-            ) {
-                Column {
-                    Text(
-                        text = "☆ Please donate to keep Wikipedia free ☆",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                    Text(
-                        text = "Hi reader. This is the 2nd time we've interrupted your reading, but 98% of our readers don't give.",
-                        fontSize = 9.sp,
-                        color = Color.White.copy(alpha = 0.9f),
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                }
-            }
 
-            // Wikipedia header bar
-            Row(
+        @Composable
+        fun FakeWikipediaContent() {
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFFF8F9FA))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .fillMaxSize()
+                    .background(Color.White)
+                    .verticalScroll(rememberScrollState())
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .background(Color.LightGray, CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
+                // Donation banner
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF1589D1))
+                        .padding(8.dp)
+                ) {
+                    Column {
                         Text(
-                            "W",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.DarkGray
-                        )
-                    }
-                    Column(modifier = Modifier.padding(start = 6.dp)) {
-                        Text(
-                            text = "WIKIPEDIA",
+                            text = "☆ Please donate to keep Wikipedia free ☆",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            letterSpacing = 1.sp,
-                            color = Color.Black
+                            color = Color.White
                         )
                         Text(
-                            text = "The Free Encyclopedia",
-                            fontSize = 8.sp,
-                            color = Color.Gray
+                            text = "Hi reader. This is the 2nd time we've interrupted your reading, but 98% of our readers don't give.",
+                            fontSize = 9.sp,
+                            color = Color.White.copy(alpha = 0.9f),
+                            modifier = Modifier.padding(top = 2.dp)
                         )
                     }
                 }
-                Text("☰", fontSize = 20.sp, color = Color.Gray)
-            }
 
-            // Main content
-            Column(modifier = Modifier.padding(horizontal = 12.dp)) {
-                Text(
-                    text = "Calculator",
-                    fontSize = 26.sp,
-                    fontWeight = FontWeight.Normal,
-                    color = Color.Black,
-                    modifier = Modifier.padding(top = 12.dp)
-                )
-
-                Text(
-                    text = "From Wikipedia, the free encyclopedia",
-                    fontSize = 11.sp,
-                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                    color = Color(0xFF54595D),
-                    modifier = Modifier.padding(bottom = 12.dp)
-                )
-
-                Text(
-                    text = "A calculator is a machine that performs arithmetic operations. Modern electronic calculators range from cheap, credit card-sized models to sturdy desktop models with built-in printers.",
-                    fontSize = 14.sp,
-                    color = Color.Black,
-                    lineHeight = 20.sp,
-                    modifier = Modifier.padding(vertical = 12.dp)
-                )
-
-                Text(
-                    text = "History",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Normal,
-                    color = Color.Black,
-                    modifier = Modifier.padding(top = 20.dp, bottom = 2.dp)
-                )
-                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFA2A9B1)))
-
-                Text(
-                    text = "The 17th century saw the development of mechanical calculators. In 1623, Wilhelm Schickard designed a calculating machine. In 1642, Blaise Pascal invented the Pascaline.",
-                    fontSize = 14.sp,
-                    color = Color.Black,
-                    lineHeight = 20.sp,
-                    modifier = Modifier.padding(vertical = 10.dp)
-                )
-
-                Text(
-                    text = "Charles Xavier Thomas de Colmar designed the Arithmometer around 1820, which became the first commercially successful mechanical calculator.",
-                    fontSize = 14.sp,
-                    color = Color.Black,
-                    lineHeight = 20.sp,
-                    modifier = Modifier.padding(bottom = 50.dp)
-                )
-            }
-        }
-    }
-
-    @Composable
-    fun CameraPreview(
-        modifier: Modifier = Modifier,
-        lifecycleOwner: LifecycleOwner
-    ) {
-        val context = LocalContext.current
-        val previewView = remember { PreviewView(context) }
-
-        LaunchedEffect(Unit) {
-            val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-            cameraProviderFuture.addListener({
-                try {
-                    val cameraProvider = cameraProviderFuture.get()
-                    val preview = Preview.Builder().build().also {
-                        it.surfaceProvider = previewView.surfaceProvider
+                // Wikipedia header bar
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFFF8F9FA))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .background(Color.LightGray, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "W",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.DarkGray
+                            )
+                        }
+                        Column(modifier = Modifier.padding(start = 6.dp)) {
+                            Text(
+                                text = "WIKIPEDIA",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp,
+                                color = Color.Black
+                            )
+                            Text(
+                                text = "The Free Encyclopedia",
+                                fontSize = 8.sp,
+                                color = Color.Gray
+                            )
+                        }
                     }
-                    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-                    cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview)
-                } catch (e: Exception) {
-                    Log.e("CameraPreview", "Camera binding failed", e)
+                    Text("☰", fontSize = 20.sp, color = Color.Gray)
                 }
-            }, ContextCompat.getMainExecutor(context))
+
+                // Main content
+                Column(modifier = Modifier.padding(horizontal = 12.dp)) {
+                    Text(
+                        text = "Calculator",
+                        fontSize = 26.sp,
+                        fontWeight = FontWeight.Normal,
+                        color = Color.Black,
+                        modifier = Modifier.padding(top = 12.dp)
+                    )
+
+                    Text(
+                        text = "From Wikipedia, the free encyclopedia",
+                        fontSize = 11.sp,
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                        color = Color(0xFF54595D),
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+
+                    Text(
+                        text = "A calculator is a machine that performs arithmetic operations. Modern electronic calculators range from cheap, credit card-sized models to sturdy desktop models with built-in printers.",
+                        fontSize = 14.sp,
+                        color = Color.Black,
+                        lineHeight = 20.sp,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+
+                    Text(
+                        text = "History",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Normal,
+                        color = Color.Black,
+                        modifier = Modifier.padding(top = 20.dp, bottom = 2.dp)
+                    )
+                    Box(
+                        modifier = Modifier.fillMaxWidth().height(1.dp)
+                            .background(Color(0xFFA2A9B1))
+                    )
+
+                    Text(
+                        text = "The 17th century saw the development of mechanical calculators. In 1623, Wilhelm Schickard designed a calculating machine. In 1642, Blaise Pascal invented the Pascaline.",
+                        fontSize = 14.sp,
+                        color = Color.Black,
+                        lineHeight = 20.sp,
+                        modifier = Modifier.padding(vertical = 10.dp)
+                    )
+
+                    Text(
+                        text = "Charles Xavier Thomas de Colmar designed the Arithmometer around 1820, which became the first commercially successful mechanical calculator.",
+                        fontSize = 14.sp,
+                        color = Color.Black,
+                        lineHeight = 20.sp,
+                        modifier = Modifier.padding(bottom = 50.dp)
+                    )
+                }
+            }
         }
 
-        AndroidView(
-            factory = { previewView },
-            modifier = modifier
-        )
-    }
+        @Composable
+        fun CameraPreview(
+            modifier: Modifier = Modifier,
+            lifecycleOwner: LifecycleOwner
+        ) {
+            val context = LocalContext.current
+            val previewView = remember { PreviewView(context) }
 
-    @Composable
-    fun CalculatorButton(
-        symbol: String,
-        modifier: Modifier = Modifier,
-        shakeIntensity: Float = 0f,
-        invertedColors: Boolean = false,
-        isDamaged: Boolean = false,
-        isBroken: Boolean = false,  // Shows crossed-out symbol
-        isFlickering: Boolean = false,
-        isDark: Boolean = false,
-        onClick: () -> Unit
+            LaunchedEffect(Unit) {
+                val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+                cameraProviderFuture.addListener({
+                    try {
+                        val cameraProvider = cameraProviderFuture.get()
+                        val preview = Preview.Builder().build().also {
+                            it.surfaceProvider = previewView.surfaceProvider
+                        }
+                        val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                        cameraProvider.unbindAll()
+                        cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview)
+                    } catch (e: Exception) {
+                        Log.e("CameraPreview", "Camera binding failed", e)
+                    }
+                }, ContextCompat.getMainExecutor(context))
+            }
+
+            AndroidView(
+                factory = { previewView },
+                modifier = modifier
+            )
+        }
+
+        @Composable
+        fun CalculatorButton(
+            symbol: String,
+            modifier: Modifier = Modifier,
+            shakeIntensity: Float = 0f,
+            invertedColors: Boolean = false,
+            isDamaged: Boolean = false,
+            isBroken: Boolean = false,  // Shows crossed-out symbol
+            isFlickering: Boolean = false,
+            isDark: Boolean = false,
+            showAsRad: Boolean = false,
+            onClick: () -> Unit
+        ) {
+            val context = LocalContext.current
+            val isNumberButton = symbol !in listOf("C", "DEL", "%", "( )", "+", "-", "*", "/", "=")
+            val isOperationButton = symbol in listOf("+", "-", "*", "/", "=", "%", "( )")
+
+            val backgroundColor = when {
+                showAsRad -> Color(0xFF8B0000)
+                isDark -> Color(0xFFB0A890)
+                isFlickering -> Color(0xFFFFEB3B)  // Bright yellow
+                // Damaged button (both broken and repaired show same color)
+                isDamaged && symbol == "-" -> Color(0xFF8B4513)  // Brown, cracked look
+                // Inverted mode
+                invertedColors && isNumberButton -> Color(0xFF373737)
+                invertedColors && symbol == "DEL" -> Color(0xFF1779E8)
+                invertedColors && isOperationButton -> Color(0xFF1A1A1A)
+                invertedColors && symbol == "C" -> Color(0xFF1A1A1A)
+                invertedColors -> Color.Black
+                // Retro normal mode
+                isNumberButton -> Color(0xFFE8E4DA)  // Cream/beige retro
+                symbol == "DEL" -> Color(0xFFD4783C)  // Retro orange-brown
+                symbol == "C" -> Color(0xFFC9463D)  // Retro red
+                isOperationButton -> Color(0xFF6B6B6B)  // Dark gray for operations
+                else -> Color(0xFFD4D0C4)  // Light gray-beige
+            }
+
+            val textColor = when {
+                showAsRad -> Color.White
+                // Flickering state
+                isDark -> Color(0xFF6A6A6A)
+                isFlickering -> Color.Black
+                // Damaged minus (faded when broken, slightly less faded when repaired)
+                isBroken && symbol == "-" -> Color(0xFF4A4A4A)  // Very faded text when broken
+                isDamaged && symbol == "-" -> Color(0xFF6A6A6A)  // Slightly faded when damaged but working
+                // Inverted mode
+                invertedColors && isOperationButton -> Color(0xFF17B8E8)
+                invertedColors && symbol == "C" -> Color(0xFF17B8E8)
+                invertedColors -> Color.White
+                // Retro normal mode
+                symbol == "DEL" || symbol == "C" -> Color.White
+                isOperationButton -> Color.White
+                else -> Color(0xFF2D2D2D)  // Dark text on light buttons
+            }
+
+
+            // Display text - show RAD if in that mode, otherwise normal symbol
+            val displaySymbol = when {
+                showAsRad -> "RAD"
+                isBroken && symbol == "-" -> "—̸"
+                else -> symbol
+            }
+
+            // Shake animation
+            val shakeOffset = if (shakeIntensity > 0) {
+                Random.nextFloat() * shakeIntensity * 2 - shakeIntensity
+            } else 0f
+
+            Button(
+                onClick = {
+                    vibrate(context, 10, 30)
+                    onClick()
+                },
+                modifier = modifier
+                    .shadow(
+                        elevation = 4.dp,
+                        shape = RoundedCornerShape(8.dp),  // More squared retro shape
+                        ambientColor = Color.Black.copy(alpha = 0.3f)
+                    )
+                    .graphicsLayer {
+                        translationX = shakeOffset
+                        translationY = shakeOffset * 0.5f
+                    },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = backgroundColor,
+                    contentColor = textColor
+                ),
+                contentPadding = PaddingValues(0.dp),
+                shape = RoundedCornerShape(8.dp),  // Squared corners for retro feel
+                elevation = ButtonDefaults.buttonElevation(
+                    defaultElevation = 4.dp,
+                    pressedElevation = 1.dp
+                )
+            ) {
+                Text(
+                    text = displaySymbol,
+                    fontSize = if (showAsRad) 12.sp else 26.sp,  // Smaller font when showing "RAD"
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = CalculatorDisplayFont
+                )
+            }
+        }
+
+@Composable
+fun MuteButtonWithSpinner(
+    isMuted: Boolean,
+    isAutoProgressing: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+
+    // Rotation animation for auto-progress indicator
+    val infiniteTransition = rememberInfiniteTransition(label = "spinner")
+    val rotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "rotation"
+    )
+
+    Box(
+        modifier = modifier.size(44.dp),
+        contentAlignment = Alignment.Center
     ) {
-        val context = LocalContext.current
-        val isNumberButton = symbol !in listOf("C", "DEL", "%", "( )", "+", "-", "*", "/", "=")
-        val isOperationButton = symbol in listOf("+", "-", "*", "/", "=", "%", "( )")
+        // Spinning dashed border when auto-progressing
+        if (isAutoProgressing) {
+            Canvas(
+                modifier = Modifier
+                    .size(44.dp)
+                    .graphicsLayer { rotationZ = rotation }
+            ) {
+                val radius = size.minDimension / 2 - 2.dp.toPx()
+                val dashCount = 12
+                val dashAngle = 360f / dashCount
+                val dashSweep = dashAngle * 0.6f
 
-        val backgroundColor = when {
-            isDark -> Color(0xFFB0A890)
-            isFlickering -> Color(0xFFFFEB3B)  // Bright yellow
-            // Damaged button (both broken and repaired show same color)
-            isDamaged && symbol == "-" -> Color(0xFF8B4513)  // Brown, cracked look
-            // Inverted mode
-            invertedColors && isNumberButton -> Color(0xFF373737)
-            invertedColors && symbol == "DEL" -> Color(0xFF1779E8)
-            invertedColors && isOperationButton -> Color(0xFF1A1A1A)
-            invertedColors && symbol == "C" -> Color(0xFF1A1A1A)
-            invertedColors -> Color.Black
-            // Retro normal mode
-            isNumberButton -> Color(0xFFE8E4DA)  // Cream/beige retro
-            symbol == "DEL" -> Color(0xFFD4783C)  // Retro orange-brown
-            symbol == "C" -> Color(0xFFC9463D)  // Retro red
-            isOperationButton -> Color(0xFF6B6B6B)  // Dark gray for operations
-            else -> Color(0xFFD4D0C4)  // Light gray-beige
+                for (i in 0 until dashCount) {
+                    drawArc(
+                        color = Color(0xFFE88617),
+                        startAngle = i * dashAngle,
+                        sweepAngle = dashSweep,
+                        useCenter = false,
+                        style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round),
+                        topLeft = Offset(2.dp.toPx(), 2.dp.toPx()),
+                        size = Size(radius * 2, radius * 2)
+                    )
+                }
+            }
         }
 
-        val textColor = when {
-            // Flickering state
-            isDark -> Color(0xFF6A6A6A)
-            isFlickering -> Color.Black
-            // Damaged minus (faded when broken, slightly less faded when repaired)
-            isBroken && symbol == "-" -> Color(0xFF4A4A4A)  // Very faded text when broken
-            isDamaged && symbol == "-" -> Color(0xFF6A6A6A)  // Slightly faded when damaged but working
-            // Inverted mode
-            invertedColors && isOperationButton -> Color(0xFF17B8E8)
-            invertedColors && symbol == "C" -> Color(0xFF17B8E8)
-            invertedColors -> Color.White
-            // Retro normal mode
-            symbol == "DEL" || symbol == "C" -> Color.White
-            isOperationButton -> Color.White
-            else -> Color(0xFF2D2D2D)  // Dark text on light buttons
-        }
-
-        // Display text - show cracked minus ONLY if broken (not just damaged)
-        val displaySymbol = if (isBroken && symbol == "-") "—̸" else symbol
-
-        // Shake animation
-        val shakeOffset = if (shakeIntensity > 0) {
-            Random.nextFloat() * shakeIntensity * 2 - shakeIntensity
-        } else 0f
-
+        // Main button
         Button(
             onClick = {
                 vibrate(context, 10, 30)
                 onClick()
             },
-            modifier = modifier
-                .shadow(
-                    elevation = 4.dp,
-                    shape = RoundedCornerShape(8.dp),  // More squared retro shape
-                    ambientColor = Color.Black.copy(alpha = 0.3f)
-                )
-                .graphicsLayer {
-                    translationX = shakeOffset
-                    translationY = shakeOffset * 0.5f
-                },
+            modifier = Modifier.size(36.dp),
+            shape = CircleShape,
             colors = ButtonDefaults.buttonColors(
-                containerColor = backgroundColor,
-                contentColor = textColor
+                containerColor = Color(0xFFE88617),
+                contentColor = Color.White
             ),
             contentPadding = PaddingValues(0.dp),
-            shape = RoundedCornerShape(8.dp),  // Squared corners for retro feel
-            elevation = ButtonDefaults.buttonElevation(
-                defaultElevation = 4.dp,
-                pressedElevation = 1.dp
-            )
+            elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
         ) {
             Text(
-                text = displaySymbol,
-                fontSize = 26.sp,
+                text = if (isMuted) "○" else "●",
+                fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
-                fontFamily = CalculatorDisplayFont  // Use the digital font for buttons too
+                color = Color.White
             )
         }
     }
+}
 
 
-// ============================================================================
-// TWO-PHASE 3D KEYBOARD CHAOS v4 - COMPLETE
-
-
-    @Composable
-    fun KeyboardChaos3D(
-        chaosLetters: List<ChaosKey>,
-        rotationX: Float,
-        rotationY: Float,
-        scale: Float,
-        message: String,
-        onRotationChange: (Float, Float) -> Unit,
-        onScaleChange: (Float) -> Unit,
-        onLetterTap: (ChaosKey) -> Unit
-    ) {
-        val context = LocalContext.current
-        val textMeasurer = rememberTextMeasurer()
-
-        // Keep updated references to avoid stale closures in pointerInput
-        val currentChaosLetters by rememberUpdatedState(chaosLetters)
-        val currentRotationX by rememberUpdatedState(rotationX)
-        val currentRotationY by rememberUpdatedState(rotationY)
-        val currentScale by rememberUpdatedState(scale)
-        val currentOnLetterTap by rememberUpdatedState(onLetterTap)
-
-        // Phase tracking: false = word building, true = cleanup
-        var isCleanupPhase by remember { mutableStateOf(false) }
-
-        // Word building state - store LETTER REFERENCES, not screen positions
-        var currentWord by remember { mutableStateOf("") }
-        var connectedLetters by remember { mutableStateOf<List<ChaosKey>>(emptyList()) }
-        var isDragging by remember { mutableStateOf(false) }
-        var currentFingerPos by remember { mutableStateOf<Offset?>(null) }
-        var dragStartedOnLetter by remember { mutableStateOf(false) }
-
-        // Phase messages
-        val phase1Message =
-            "Well, that's not exactly a QWERTY keyboard, is it? Maybe you can try using it anyway - connect keys."
-        val phase2Message =
-            "Nevermind. This is way too uncomfortable - as pretty as it looks. I'll have to try something else. Can you get rid of the rogue keys? I have to focus to even keep it together."
-
-        // Timer to switch to cleanup phase after 60 seconds
-        LaunchedEffect(Unit) {
-            delay(60000)
-            isCleanupPhase = true
-            connectedLetters = emptyList()
-            currentWord = ""
-            isDragging = false
-            currentFingerPos = null
-            dragStartedOnLetter = false
-        }
-
-        // Display message based on phase
-        val displayMessage = if (isCleanupPhase) {
-            if (chaosLetters.isEmpty()) message else phase2Message
-        } else {
-            if (currentWord.isNotEmpty()) "I'm reading: $currentWord" else phase1Message
-        }
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xFF050505))
+        @Composable
+        fun KeyboardChaos3D(
+            chaosLetters: List<ChaosKey>,
+            rotationX: Float,
+            rotationY: Float,
+            scale: Float,
+            message: String,
+            onRotationChange: (Float, Float) -> Unit,
+            onScaleChange: (Float) -> Unit,
+            onLetterTap: (ChaosKey) -> Unit
         ) {
-            // Message at top
-            Text(
-                text = displayMessage,
-                color = Color(0xFF00FF00),
-                fontSize = 16.sp,
-                fontFamily = CalculatorDisplayFont,
-                textAlign = TextAlign.Center,
-                lineHeight = 22.sp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .padding(top = 40.dp)
-                    .align(Alignment.TopCenter)
-            )
+            val context = LocalContext.current
+            val textMeasurer = rememberTextMeasurer()
 
-            // Letters remaining counter (cleanup phase only)
-            if (isCleanupPhase) {
+            // Keep updated references to avoid stale closures in pointerInput
+            val currentChaosLetters by rememberUpdatedState(chaosLetters)
+            val currentRotationX by rememberUpdatedState(rotationX)
+            val currentRotationY by rememberUpdatedState(rotationY)
+            val currentScale by rememberUpdatedState(scale)
+            val currentOnLetterTap by rememberUpdatedState(onLetterTap)
+
+            // Phase tracking: false = word building, true = cleanup
+            var isCleanupPhase by remember { mutableStateOf(false) }
+
+            // Word building state - store LETTER REFERENCES, not screen positions
+            var currentWord by remember { mutableStateOf("") }
+            var connectedLetters by remember { mutableStateOf<List<ChaosKey>>(emptyList()) }
+            var isDragging by remember { mutableStateOf(false) }
+            var currentFingerPos by remember { mutableStateOf<Offset?>(null) }
+            var dragStartedOnLetter by remember { mutableStateOf(false) }
+
+            // Phase messages
+            val phase1Message =
+                "Well, that's not exactly a QWERTY keyboard, is it? Maybe you can try using it anyway - connect keys."
+            val phase2Message =
+                "Nevermind. This is way too uncomfortable - as pretty as it looks. I'll have to try something else. Can you get rid of the rogue keys? I have to focus to even keep it together."
+
+            // Timer to switch to cleanup phase after 60 seconds
+            LaunchedEffect(Unit) {
+                delay(60000)
+                isCleanupPhase = true
+                connectedLetters = emptyList()
+                currentWord = ""
+                isDragging = false
+                currentFingerPos = null
+                dragStartedOnLetter = false
+            }
+
+            // Display message based on phase
+            val displayMessage = if (isCleanupPhase) {
+                if (chaosLetters.isEmpty()) message else phase2Message
+            } else {
+                if (currentWord.isNotEmpty()) "I'm reading: $currentWord" else phase1Message
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFF050505))
+            ) {
+                // Message at top
                 Text(
-                    text = "Letters: ${chaosLetters.size}",
+                    text = displayMessage,
                     color = Color(0xFF00FF00),
                     fontSize = 16.sp,
                     fontFamily = CalculatorDisplayFont,
-                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 22.sp,
                     modifier = Modifier
-                        .padding(12.dp)
-                        .align(Alignment.TopEnd)
-                )
-            }
-
-            // =============== ZOOM SLIDER (horizontal at bottom) ===============
-            Row(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 40.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = "−",
-                    color = Color(0xFF00FF00),
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .padding(top = 40.dp)
+                        .align(Alignment.TopCenter)
                 )
 
-                Slider(
-                    value = scale,
-                    onValueChange = { onScaleChange(it) },
-                    valueRange = 0.3f..4.5f,
-                    modifier = Modifier.weight(1f),
-                    colors = SliderDefaults.colors(
-                        thumbColor = Color(0xFF00FF00),
-                        activeTrackColor = Color(0xFF00FF00),
-                        inactiveTrackColor = Color(0xFF333333)
+                // Letters remaining counter (cleanup phase only)
+                if (isCleanupPhase) {
+                    Text(
+                        text = "Letters: ${chaosLetters.size}",
+                        color = Color(0xFF00FF00),
+                        fontSize = 16.sp,
+                        fontFamily = CalculatorDisplayFont,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .padding(12.dp)
+                            .align(Alignment.TopEnd)
                     )
-                )
+                }
 
-                Text(
-                    text = "+",
-                    color = Color(0xFF00FF00),
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                // =============== ZOOM SLIDER (horizontal at bottom) ===============
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 40.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "−",
+                        color = Color(0xFF00FF00),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
 
-                Text(
-                    text = "${(scale * 100).toInt()}%",
-                    color = Color(0xFF00FF00),
-                    fontSize = 12.sp,
-                    fontFamily = CalculatorDisplayFont,
-                    modifier = Modifier.width(45.dp)
-                )
-            }
+                    Slider(
+                        value = scale,
+                        onValueChange = { onScaleChange(it) },
+                        valueRange = 0.3f..4.5f,
+                        modifier = Modifier.weight(1f),
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color(0xFF00FF00),
+                            activeTrackColor = Color(0xFF00FF00),
+                            inactiveTrackColor = Color(0xFF333333)
+                        )
+                    )
 
-            // ===================================================================
-            // 3D CANVAS
-            // ===================================================================
-            Canvas(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(top = 110.dp, bottom = 85.dp)
-                    .pointerInput(Unit) {
-                        detectDragGestures(
-                            onDragStart = { offset ->
-                                // Calculate current letter positions for hit testing
-                                val centerX = size.width / 2f
-                                val centerY = size.height / 2f
+                    Text(
+                        text = "+",
+                        color = Color(0xFF00FF00),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
 
-                                if (!isCleanupPhase) {
-                                    var foundLetter: ChaosKey? = null
+                    Text(
+                        text = "${(scale * 100).toInt()}%",
+                        color = Color(0xFF00FF00),
+                        fontSize = 12.sp,
+                        fontFamily = CalculatorDisplayFont,
+                        modifier = Modifier.width(45.dp)
+                    )
+                }
+
+                // ===================================================================
+                // 3D CANVAS
+                // ===================================================================
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 110.dp, bottom = 85.dp)
+                        .pointerInput(Unit) {
+                            detectDragGestures(
+                                onDragStart = { offset ->
+                                    // Calculate current letter positions for hit testing
+                                    val centerX = size.width / 2f
+                                    val centerY = size.height / 2f
+
+                                    if (!isCleanupPhase) {
+                                        var foundLetter: ChaosKey? = null
+
+                                        for (chaosKey in currentChaosLetters) {
+                                            val screenPos = getLetterScreenPosition(
+                                                chaosKey,
+                                                currentRotationX,
+                                                currentRotationY,
+                                                currentScale,
+                                                centerX,
+                                                centerY
+                                            )
+                                            // Larger hit radius that works from any angle
+                                            val baseRadius = 55f * currentScale * chaosKey.size
+                                            val hitRadius =
+                                                baseRadius.coerceAtLeast(35f) // Minimum 35px hit area
+
+                                            val dx = offset.x - screenPos.x
+                                            val dy = offset.y - screenPos.y
+                                            val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+
+                                            if (distance < hitRadius) {
+                                                foundLetter = chaosKey
+                                                break
+                                            }
+                                        }
+
+                                        if (foundLetter != null) {
+                                            dragStartedOnLetter = true
+                                            isDragging = true
+                                            currentFingerPos = offset
+                                            connectedLetters = listOf(foundLetter)
+                                            currentWord = foundLetter.letter
+                                            vibrate(context, 15, 80)
+                                        } else {
+                                            dragStartedOnLetter = false
+                                            isDragging = false
+                                        }
+                                    } else {
+                                        dragStartedOnLetter = false
+                                    }
+                                },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+
+                                    if (!isCleanupPhase && dragStartedOnLetter && isDragging) {
+                                        val pos = change.position
+                                        currentFingerPos = pos
+
+                                        val centerX = size.width / 2f
+                                        val centerY = size.height / 2f
+
+                                        for (chaosKey in currentChaosLetters) {
+                                            if (!connectedLetters.contains(chaosKey)) {
+                                                val screenPos = getLetterScreenPosition(
+                                                    chaosKey,
+                                                    currentRotationX,
+                                                    currentRotationY,
+                                                    currentScale,
+                                                    centerX,
+                                                    centerY
+                                                )
+                                                // Larger hit radius that works from any angle
+                                                val baseRadius = 55f * currentScale * chaosKey.size
+                                                val hitRadius = baseRadius.coerceAtLeast(35f)
+
+                                                val dx = pos.x - screenPos.x
+                                                val dy = pos.y - screenPos.y
+                                                val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+
+                                                if (distance < hitRadius) {
+                                                    connectedLetters = connectedLetters + chaosKey
+                                                    currentWord = currentWord + chaosKey.letter
+                                                    vibrate(context, 15, 80)
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        // Rotation mode
+                                        onRotationChange(dragAmount.x * 0.3f, -dragAmount.y * 0.3f)
+                                    }
+                                },
+                                onDragEnd = {
+                                    isDragging = false
+                                    currentFingerPos = null
+                                    dragStartedOnLetter = false
+                                },
+                                onDragCancel = {
+                                    isDragging = false
+                                    currentFingerPos = null
+                                    dragStartedOnLetter = false
+                                }
+                            )
+                        }
+                        .pointerInput(Unit) {
+                            detectTapGestures { tapOffset ->
+                                if (isCleanupPhase) {
+                                    val centerX = size.width / 2f
+                                    val centerY = size.height / 2f
 
                                     for (chaosKey in currentChaosLetters) {
                                         val screenPos = getLetterScreenPosition(
@@ -6449,400 +8143,319 @@ Sharp CS-10A - 25KG
                                         val hitRadius =
                                             baseRadius.coerceAtLeast(35f) // Minimum 35px hit area
 
-                                        val dx = offset.x - screenPos.x
-                                        val dy = offset.y - screenPos.y
+                                        val dx = tapOffset.x - screenPos.x
+                                        val dy = tapOffset.y - screenPos.y
                                         val distance = kotlin.math.sqrt(dx * dx + dy * dy)
 
                                         if (distance < hitRadius) {
-                                            foundLetter = chaosKey
-                                            break
+                                            vibrate(context, 20, 100)
+                                            currentOnLetterTap(chaosKey)
+                                            return@detectTapGestures
                                         }
-                                    }
-
-                                    if (foundLetter != null) {
-                                        dragStartedOnLetter = true
-                                        isDragging = true
-                                        currentFingerPos = offset
-                                        connectedLetters = listOf(foundLetter)
-                                        currentWord = foundLetter.letter
-                                        vibrate(context, 15, 80)
-                                    } else {
-                                        dragStartedOnLetter = false
-                                        isDragging = false
-                                    }
-                                } else {
-                                    dragStartedOnLetter = false
-                                }
-                            },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-
-                                if (!isCleanupPhase && dragStartedOnLetter && isDragging) {
-                                    val pos = change.position
-                                    currentFingerPos = pos
-
-                                    val centerX = size.width / 2f
-                                    val centerY = size.height / 2f
-
-                                    for (chaosKey in currentChaosLetters) {
-                                        if (!connectedLetters.contains(chaosKey)) {
-                                            val screenPos = getLetterScreenPosition(
-                                                chaosKey,
-                                                currentRotationX,
-                                                currentRotationY,
-                                                currentScale,
-                                                centerX,
-                                                centerY
-                                            )
-                                            // Larger hit radius that works from any angle
-                                            val baseRadius = 55f * currentScale * chaosKey.size
-                                            val hitRadius = baseRadius.coerceAtLeast(35f)
-
-                                            val dx = pos.x - screenPos.x
-                                            val dy = pos.y - screenPos.y
-                                            val distance = kotlin.math.sqrt(dx * dx + dy * dy)
-
-                                            if (distance < hitRadius) {
-                                                connectedLetters = connectedLetters + chaosKey
-                                                currentWord = currentWord + chaosKey.letter
-                                                vibrate(context, 15, 80)
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    // Rotation mode
-                                    onRotationChange(dragAmount.x * 0.3f, -dragAmount.y * 0.3f)
-                                }
-                            },
-                            onDragEnd = {
-                                isDragging = false
-                                currentFingerPos = null
-                                dragStartedOnLetter = false
-                            },
-                            onDragCancel = {
-                                isDragging = false
-                                currentFingerPos = null
-                                dragStartedOnLetter = false
-                            }
-                        )
-                    }
-                    .pointerInput(Unit) {
-                        detectTapGestures { tapOffset ->
-                            if (isCleanupPhase) {
-                                val centerX = size.width / 2f
-                                val centerY = size.height / 2f
-
-                                for (chaosKey in currentChaosLetters) {
-                                    val screenPos = getLetterScreenPosition(
-                                        chaosKey,
-                                        currentRotationX,
-                                        currentRotationY,
-                                        currentScale,
-                                        centerX,
-                                        centerY
-                                    )
-                                    // Larger hit radius that works from any angle
-                                    val baseRadius = 55f * currentScale * chaosKey.size
-                                    val hitRadius =
-                                        baseRadius.coerceAtLeast(35f) // Minimum 35px hit area
-
-                                    val dx = tapOffset.x - screenPos.x
-                                    val dy = tapOffset.y - screenPos.y
-                                    val distance = kotlin.math.sqrt(dx * dx + dy * dy)
-
-                                    if (distance < hitRadius) {
-                                        vibrate(context, 20, 100)
-                                        currentOnLetterTap(chaosKey)
-                                        return@detectTapGestures
                                     }
                                 }
                             }
                         }
+                ) {
+                    val centerX = size.width / 2
+                    val centerY = size.height / 2
+
+                    data class FaceToDraw(
+                        val vertices: List<Point3D>,
+                        val color: Color,
+                        val avgZ: Float,
+                        val label: String,
+                        val isFront: Boolean,
+                        val textColor: Color
+                    )
+
+                    val allFaces = mutableListOf<FaceToDraw>()
+
+                    // =============== CALCULATOR KEYBOARD CUBES ===============
+                    val keyboardLayout = listOf(
+                        listOf("C", "DEL", "%", "/"),
+                        listOf("7", "8", "9", "*"),
+                        listOf("4", "5", "6", "-"),
+                        listOf("1", "2", "3", "+"),
+                        listOf("0", ".", "=", "")
+                    )
+
+                    fun getKeyColor(key: String): Color = when {
+                        key in "0".."9" -> Color(0xFFE8E4DA)
+                        key in listOf("+", "-", "*", "/", "=", "%") -> Color(0xFF6B6B6B)
+                        key == "C" -> Color(0xFFC9463D)
+                        key == "DEL" -> Color(0xFFD4783C)
+                        key == "." -> Color(0xFFE8E4DA)
+                        else -> Color(0xFF333333)
                     }
-            ) {
-                val centerX = size.width / 2
-                val centerY = size.height / 2
 
-                data class FaceToDraw(
-                    val vertices: List<Point3D>,
-                    val color: Color,
-                    val avgZ: Float,
-                    val label: String,
-                    val isFront: Boolean,
-                    val textColor: Color
-                )
+                    fun getTextColor(key: String): Color = when {
+                        key in "0".."9" -> Color(0xFF2D2D2D)
+                        key == "." -> Color(0xFF2D2D2D)
+                        else -> Color.White
+                    }
 
-                val allFaces = mutableListOf<FaceToDraw>()
+                    val cubeSize = 32f
+                    val spacing = 42f
+                    val half = cubeSize / 2
+                    val totalWidth = 4 * spacing
+                    val totalHeight = 5 * spacing
 
-                // =============== CALCULATOR KEYBOARD CUBES ===============
-                val keyboardLayout = listOf(
-                    listOf("C", "DEL", "%", "/"),
-                    listOf("7", "8", "9", "*"),
-                    listOf("4", "5", "6", "-"),
-                    listOf("1", "2", "3", "+"),
-                    listOf("0", ".", "=", "")
-                )
+                    val faceIndices = listOf(
+                        listOf(4, 5, 6, 7), listOf(1, 0, 3, 2), listOf(0, 4, 7, 3),
+                        listOf(5, 1, 2, 6), listOf(0, 1, 5, 4), listOf(7, 6, 2, 3)
+                    )
 
-                fun getKeyColor(key: String): Color = when {
-                    key in "0".."9" -> Color(0xFFE8E4DA)
-                    key in listOf("+", "-", "*", "/", "=", "%") -> Color(0xFF6B6B6B)
-                    key == "C" -> Color(0xFFC9463D)
-                    key == "DEL" -> Color(0xFFD4783C)
-                    key == "." -> Color(0xFFE8E4DA)
-                    else -> Color(0xFF333333)
-                }
+                    // Build calculator cubes
+                    keyboardLayout.forEachIndexed { row, keys ->
+                        keys.forEachIndexed { col, key ->
+                            if (key.isNotEmpty()) {
+                                val kx = (col * spacing) - totalWidth / 2 + spacing / 2
+                                val ky = (row * spacing) - totalHeight / 2 + spacing / 2
+                                val keyColor = getKeyColor(key)
+                                val txtColor = getTextColor(key)
 
-                fun getTextColor(key: String): Color = when {
-                    key in "0".."9" -> Color(0xFF2D2D2D)
-                    key == "." -> Color(0xFF2D2D2D)
-                    else -> Color.White
-                }
+                                val verts = listOf(
+                                    Point3D(-half + kx, -half + ky, -half),
+                                    Point3D(half + kx, -half + ky, -half),
+                                    Point3D(half + kx, half + ky, -half),
+                                    Point3D(-half + kx, half + ky, -half),
+                                    Point3D(-half + kx, -half + ky, half),
+                                    Point3D(half + kx, -half + ky, half),
+                                    Point3D(half + kx, half + ky, half),
+                                    Point3D(-half + kx, half + ky, half)
+                                ).map { rotateX(rotateY(it, rotationY), rotationX) }
 
-                val cubeSize = 32f
-                val spacing = 42f
-                val half = cubeSize / 2
-                val totalWidth = 4 * spacing
-                val totalHeight = 5 * spacing
-
-                val faceIndices = listOf(
-                    listOf(4, 5, 6, 7), listOf(1, 0, 3, 2), listOf(0, 4, 7, 3),
-                    listOf(5, 1, 2, 6), listOf(0, 1, 5, 4), listOf(7, 6, 2, 3)
-                )
-
-                // Build calculator cubes
-                keyboardLayout.forEachIndexed { row, keys ->
-                    keys.forEachIndexed { col, key ->
-                        if (key.isNotEmpty()) {
-                            val kx = (col * spacing) - totalWidth / 2 + spacing / 2
-                            val ky = (row * spacing) - totalHeight / 2 + spacing / 2
-                            val keyColor = getKeyColor(key)
-                            val txtColor = getTextColor(key)
-
-                            val verts = listOf(
-                                Point3D(-half + kx, -half + ky, -half),
-                                Point3D(half + kx, -half + ky, -half),
-                                Point3D(half + kx, half + ky, -half),
-                                Point3D(-half + kx, half + ky, -half),
-                                Point3D(-half + kx, -half + ky, half),
-                                Point3D(half + kx, -half + ky, half),
-                                Point3D(half + kx, half + ky, half),
-                                Point3D(-half + kx, half + ky, half)
-                            ).map { rotateX(rotateY(it, rotationY), rotationX) }
-
-                            faceIndices.forEachIndexed { fi, face ->
-                                val fv = face.map { verts[it] }
-                                val faceColor = when (fi) {
-                                    0 -> keyColor
-                                    1 -> keyColor.copy(alpha = 0.85f)
-                                    else -> Color(
-                                        keyColor.red * 0.55f,
-                                        keyColor.green * 0.55f,
-                                        keyColor.blue * 0.55f
+                                faceIndices.forEachIndexed { fi, face ->
+                                    val fv = face.map { verts[it] }
+                                    val faceColor = when (fi) {
+                                        0 -> keyColor
+                                        1 -> keyColor.copy(alpha = 0.85f)
+                                        else -> Color(
+                                            keyColor.red * 0.55f,
+                                            keyColor.green * 0.55f,
+                                            keyColor.blue * 0.55f
+                                        )
+                                    }
+                                    allFaces.add(
+                                        FaceToDraw(
+                                            fv,
+                                            faceColor,
+                                            fv.map { it.z }.average().toFloat(),
+                                            if (fi == 0) key else "",
+                                            fi == 0,
+                                            txtColor
+                                        )
                                     )
                                 }
-                                allFaces.add(
-                                    FaceToDraw(
-                                        fv,
-                                        faceColor,
-                                        fv.map { it.z }.average().toFloat(),
-                                        if (fi == 0) key else "",
-                                        fi == 0,
-                                        txtColor
+                            }
+                        }
+                    }
+
+                    // =============== CHAOS LETTER CUBES ===============
+                    val letterHalf = 12f
+                    chaosLetters.forEach { ck ->
+                        val lx = ck.x * 0.6f
+                        val ly = ck.y * 0.6f
+                        val lz = ck.z * 0.6f
+                        val sh = letterHalf * ck.size
+                        val isConnected = connectedLetters.contains(ck)
+
+                        val verts = listOf(
+                            Point3D(-sh + lx, -sh + ly, -sh + lz),
+                            Point3D(sh + lx, -sh + ly, -sh + lz),
+                            Point3D(sh + lx, sh + ly, -sh + lz),
+                            Point3D(-sh + lx, sh + ly, -sh + lz),
+                            Point3D(-sh + lx, -sh + ly, sh + lz),
+                            Point3D(sh + lx, -sh + ly, sh + lz),
+                            Point3D(sh + lx, sh + ly, sh + lz),
+                            Point3D(-sh + lx, sh + ly, sh + lz)
+                        ).map { rotateX(rotateY(it, rotationY), rotationX) }
+
+                        val frontColor = if (isConnected) Color(0xFF7A7A7A) else Color(0xFF5A5A5A)
+                        val backColor = if (isConnected) Color(0xFF4A4A4A) else Color(0xFF2A2A2A)
+                        val sideColor = if (isConnected) Color(0xFF5A5A5A) else Color(0xFF3A3A3A)
+                        val txtColor = if (isConnected) Color.White else Color(0xFFDDDDDD)
+
+                        faceIndices.forEachIndexed { fi, face ->
+                            val fv = face.map { verts[it] }
+                            val faceColor = when (fi) {
+                                0 -> frontColor; 1 -> backColor; else -> sideColor
+                            }
+                            allFaces.add(
+                                FaceToDraw(
+                                    fv,
+                                    faceColor,
+                                    fv.map { it.z }.average().toFloat(),
+                                    if (fi == 0) ck.letter else "",
+                                    fi == 0,
+                                    txtColor
+                                )
+                            )
+                        }
+                    }
+
+                    // =============== RENDER SORTED FACES ===============
+                    allFaces.sortedBy { it.avgZ }.forEach { face ->
+                        val v0 = face.vertices[0]
+                        val v1 = face.vertices[1]
+                        val v2 = face.vertices[2]
+                        val crossZ = (v1.x - v0.x) * (v2.y - v1.y) - (v1.y - v0.y) * (v2.x - v1.x)
+
+                        if (crossZ > 0) {
+                            val proj = face.vertices.map { project(it, centerX, centerY, scale) }
+                            val path = Path().apply {
+                                moveTo(proj[0].x, proj[0].y)
+                                proj.drop(1).forEach { lineTo(it.x, it.y) }
+                                close()
+                            }
+                            drawPath(path, face.color)
+                            drawPath(path, Color.Black.copy(alpha = 0.35f), style = Stroke(1.2f))
+
+                            if (face.isFront && face.label.isNotEmpty()) {
+                                val cx = proj.map { it.x }.average().toFloat()
+                                val cy = proj.map { it.y }.average().toFloat()
+                                val fw = kotlin.math.abs(proj[1].x - proj[0].x)
+                                val fs = (fw * 0.5f).coerceIn(7f, 18f)
+                                val tr = textMeasurer.measure(
+                                    face.label,
+                                    TextStyle(
+                                        fontSize = fs.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = face.textColor
+                                    )
+                                )
+                                drawText(
+                                    textLayoutResult = tr,
+                                    topLeft = Offset(
+                                        cx - tr.size.width / 2,
+                                        cy - tr.size.height / 2
                                     )
                                 )
                             }
                         }
                     }
-                }
 
-                // =============== CHAOS LETTER CUBES ===============
-                val letterHalf = 12f
-                chaosLetters.forEach { ck ->
-                    val lx = ck.x * 0.6f
-                    val ly = ck.y * 0.6f
-                    val lz = ck.z * 0.6f
-                    val sh = letterHalf * ck.size
-                    val isConnected = connectedLetters.contains(ck)
-
-                    val verts = listOf(
-                        Point3D(-sh + lx, -sh + ly, -sh + lz),
-                        Point3D(sh + lx, -sh + ly, -sh + lz),
-                        Point3D(sh + lx, sh + ly, -sh + lz),
-                        Point3D(-sh + lx, sh + ly, -sh + lz),
-                        Point3D(-sh + lx, -sh + ly, sh + lz),
-                        Point3D(sh + lx, -sh + ly, sh + lz),
-                        Point3D(sh + lx, sh + ly, sh + lz),
-                        Point3D(-sh + lx, sh + ly, sh + lz)
-                    ).map { rotateX(rotateY(it, rotationY), rotationX) }
-
-                    val frontColor = if (isConnected) Color(0xFF7A7A7A) else Color(0xFF5A5A5A)
-                    val backColor = if (isConnected) Color(0xFF4A4A4A) else Color(0xFF2A2A2A)
-                    val sideColor = if (isConnected) Color(0xFF5A5A5A) else Color(0xFF3A3A3A)
-                    val txtColor = if (isConnected) Color.White else Color(0xFFDDDDDD)
-
-                    faceIndices.forEachIndexed { fi, face ->
-                        val fv = face.map { verts[it] }
-                        val faceColor = when (fi) {
-                            0 -> frontColor; 1 -> backColor; else -> sideColor
-                        }
-                        allFaces.add(
-                            FaceToDraw(
-                                fv,
-                                faceColor,
-                                fv.map { it.z }.average().toFloat(),
-                                if (fi == 0) ck.letter else "",
-                                fi == 0,
-                                txtColor
-                            )
-                        )
-                    }
-                }
-
-                // =============== RENDER SORTED FACES ===============
-                allFaces.sortedBy { it.avgZ }.forEach { face ->
-                    val v0 = face.vertices[0];
-                    val v1 = face.vertices[1];
-                    val v2 = face.vertices[2]
-                    val crossZ = (v1.x - v0.x) * (v2.y - v1.y) - (v1.y - v0.y) * (v2.x - v1.x)
-
-                    if (crossZ > 0) {
-                        val proj = face.vertices.map { project(it, centerX, centerY, scale) }
-                        val path = Path().apply {
-                            moveTo(proj[0].x, proj[0].y)
-                            proj.drop(1).forEach { lineTo(it.x, it.y) }
-                            close()
-                        }
-                        drawPath(path, face.color)
-                        drawPath(path, Color.Black.copy(alpha = 0.35f), style = Stroke(1.2f))
-
-                        if (face.isFront && face.label.isNotEmpty()) {
-                            val cx = proj.map { it.x }.average().toFloat()
-                            val cy = proj.map { it.y }.average().toFloat()
-                            val fw = kotlin.math.abs(proj[1].x - proj[0].x)
-                            val fs = (fw * 0.5f).coerceIn(7f, 18f)
-                            val tr = textMeasurer.measure(
-                                face.label,
-                                TextStyle(
-                                    fontSize = fs.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = face.textColor
+                    // =============== CONSTELLATION LINES (recalculated each frame) ===============
+                    if (!isCleanupPhase && connectedLetters.size > 1) {
+                        // Calculate current screen positions for connected letters
+                        val letterPositions = connectedLetters.mapNotNull { ck ->
+                            if (chaosLetters.contains(ck)) {
+                                getLetterScreenPosition(
+                                    ck,
+                                    rotationX,
+                                    rotationY,
+                                    scale,
+                                    centerX,
+                                    centerY
                                 )
-                            )
-                            drawText(
-                                textLayoutResult = tr,
-                                topLeft = Offset(cx - tr.size.width / 2, cy - tr.size.height / 2)
-                            )
+                            } else null
+                        }
+
+                        if (letterPositions.size > 1) {
+                            for (i in 0 until letterPositions.size - 1) {
+                                val start = letterPositions[i]
+                                val end = letterPositions[i + 1]
+
+                                // Glow layers
+                                drawLine(
+                                    Color(0xFF87CEEB).copy(alpha = 0.15f),
+                                    start,
+                                    end,
+                                    16f,
+                                    cap = StrokeCap.Round
+                                )
+                                drawLine(
+                                    Color(0xFFADD8E6).copy(alpha = 0.25f),
+                                    start,
+                                    end,
+                                    10f,
+                                    cap = StrokeCap.Round
+                                )
+                                drawLine(
+                                    Color(0xFFE0FFFF).copy(alpha = 0.4f),
+                                    start,
+                                    end,
+                                    6f,
+                                    cap = StrokeCap.Round
+                                )
+                                drawLine(Color.White, start, end, 2f, cap = StrokeCap.Round)
+                            }
+
+                            // Star points
+                            letterPositions.forEach { pt ->
+                                drawCircle(Color(0xFF87CEEB).copy(alpha = 0.2f), 20f, pt)
+                                drawCircle(Color(0xFFADD8E6).copy(alpha = 0.35f), 14f, pt)
+                                drawCircle(Color(0xFFE0FFFF).copy(alpha = 0.5f), 9f, pt)
+                                drawCircle(Color.White, 5f, pt)
+                            }
                         }
                     }
-                }
 
-                // =============== CONSTELLATION LINES (recalculated each frame) ===============
-                if (!isCleanupPhase && connectedLetters.size > 1) {
-                    // Calculate current screen positions for connected letters
-                    val letterPositions = connectedLetters.mapNotNull { ck ->
-                        if (chaosLetters.contains(ck)) {
-                            getLetterScreenPosition(
-                                ck,
+                    // Trailing line to finger
+                    if (!isCleanupPhase && isDragging && connectedLetters.isNotEmpty() && currentFingerPos != null) {
+                        val lastLetter = connectedLetters.last()
+                        if (chaosLetters.contains(lastLetter)) {
+                            val start = getLetterScreenPosition(
+                                lastLetter,
                                 rotationX,
                                 rotationY,
                                 scale,
                                 centerX,
                                 centerY
                             )
-                        } else null
-                    }
-
-                    if (letterPositions.size > 1) {
-                        for (i in 0 until letterPositions.size - 1) {
-                            val start = letterPositions[i]
-                            val end = letterPositions[i + 1]
-
-                            // Glow layers
+                            val end = currentFingerPos!!
                             drawLine(
-                                Color(0xFF87CEEB).copy(alpha = 0.15f),
+                                Color(0xFF87CEEB).copy(alpha = 0.1f),
                                 start,
                                 end,
-                                16f,
+                                12f,
                                 cap = StrokeCap.Round
                             )
                             drawLine(
-                                Color(0xFFADD8E6).copy(alpha = 0.25f),
-                                start,
-                                end,
-                                10f,
-                                cap = StrokeCap.Round
-                            )
-                            drawLine(
-                                Color(0xFFE0FFFF).copy(alpha = 0.4f),
+                                Color(0xFFE0FFFF).copy(alpha = 0.25f),
                                 start,
                                 end,
                                 6f,
                                 cap = StrokeCap.Round
                             )
-                            drawLine(Color.White, start, end, 2f, cap = StrokeCap.Round)
+                            drawLine(
+                                Color.White.copy(alpha = 0.5f),
+                                start,
+                                end,
+                                2f,
+                                cap = StrokeCap.Round
+                            )
                         }
-
-                        // Star points
-                        letterPositions.forEach { pt ->
-                            drawCircle(Color(0xFF87CEEB).copy(alpha = 0.2f), 20f, pt)
-                            drawCircle(Color(0xFFADD8E6).copy(alpha = 0.35f), 14f, pt)
-                            drawCircle(Color(0xFFE0FFFF).copy(alpha = 0.5f), 9f, pt)
-                            drawCircle(Color.White, 5f, pt)
-                        }
-                    }
-                }
-
-                // Trailing line to finger
-                if (!isCleanupPhase && isDragging && connectedLetters.isNotEmpty() && currentFingerPos != null) {
-                    val lastLetter = connectedLetters.last()
-                    if (chaosLetters.contains(lastLetter)) {
-                        val start = getLetterScreenPosition(
-                            lastLetter,
-                            rotationX,
-                            rotationY,
-                            scale,
-                            centerX,
-                            centerY
-                        )
-                        val end = currentFingerPos!!
-                        drawLine(
-                            Color(0xFF87CEEB).copy(alpha = 0.1f),
-                            start,
-                            end,
-                            12f,
-                            cap = StrokeCap.Round
-                        )
-                        drawLine(
-                            Color(0xFFE0FFFF).copy(alpha = 0.25f),
-                            start,
-                            end,
-                            6f,
-                            cap = StrokeCap.Round
-                        )
-                        drawLine(
-                            Color.White.copy(alpha = 0.5f),
-                            start,
-                            end,
-                            2f,
-                            cap = StrokeCap.Round
-                        )
                     }
                 }
             }
         }
-    }
-@Composable
-fun ConsoleWindow(
-    consoleStep: Int,
-    adminCodeEntered: Boolean,
-    currentInput: String,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
 
-    // Console menu content based on current step
-    val menuContent = when (consoleStep) {
-        0 -> """
+        @Composable
+        fun ConsoleWindow(
+            consoleStep: Int,
+            adminCodeEntered: Boolean,
+            currentInput: String,
+            bannersDisabled: Boolean,
+            fullScreenAdsEnabled: Boolean,
+            totalScreenTimeMs: Long,
+            totalCalculations: Int,
+            onOpenContributeLink: () -> Unit,
+            modifier: Modifier = Modifier
+        ) {
+            val context = LocalContext.current
+
+            // Trigger link opening when on step 31
+            LaunchedEffect(consoleStep) {
+                if (consoleStep == 31) {
+                    onOpenContributeLink()
+                }
+            }
+
+            // Console menu content based on current step
+            val menuContent = when (consoleStep) {
+                0 -> """
             |═══════════════════════════════════
             |        SYSTEM CONSOLE v1.2
             |═══════════════════════════════════
@@ -6855,7 +8468,7 @@ fun ConsoleWindow(
             |═══════════════════════════════════
         """.trimMargin()
 
-        1 -> """
+                1 -> """
             |═══════════════════════════════════
             |        GENERAL SETTINGS
             |═══════════════════════════════════
@@ -6867,7 +8480,7 @@ fun ConsoleWindow(
             |═══════════════════════════════════
         """.trimMargin()
 
-        2 -> if (!adminCodeEntered) """
+                2 -> if (!adminCodeEntered) """
             |═══════════════════════════════════
             |      ADMINISTRATOR SETTINGS
             |═══════════════════════════════════
@@ -6893,37 +8506,50 @@ fun ConsoleWindow(
             |═══════════════════════════════════
         """.trimMargin()
 
-        3 -> {
-            // Get actual app size
-            val appSize = try {
-                val appFile = File(context.applicationInfo.sourceDir)
-                val sizeInMB = appFile.length() / (1024.0 * 1024.0)
-                String.format("%.2f MB", sizeInMB)
-            } catch (e: Exception) { "Unknown" }
+                3 -> {
+                    // Get actual app size
+                    val appSize = try {
+                        val appFile = File(context.applicationInfo.sourceDir)
+                        val sizeInMB = appFile.length() / (1024.0 * 1024.0)
+                        String.format("%.2f MB", sizeInMB)
+                    } catch (e: Exception) {
+                        "Unknown"
+                    }
 
-            """
-            |═══════════════════════════════════
-            |      APPLICATION INFORMATION
-            |═══════════════════════════════════
-            |
-            | Status: Operational
-            |         Administrator access
-            |         restricted
-            |
-            | Version: 1.2
-            | Developer: FictionCutShort
-            | Licence: All licences and rights
-            |          reserved.
-            |          For someone special.
-            | Size: $appSize
-            |
-            | 88. Back
-            | 99. Exit console
-            |═══════════════════════════════════
-            """.trimMargin()
-        }
+                    // Format screen time
+                    val hours = totalScreenTimeMs / (1000 * 60 * 60)
+                    val minutes = (totalScreenTimeMs / (1000 * 60)) % 60
+                    val seconds = (totalScreenTimeMs / 1000) % 60
+                    val screenTimeFormatted =
+                        String.format("%02d:%02d:%02d", hours, minutes, seconds)
 
-        4 -> """
+                    """
+    |═══════════════════════════════════
+    |      APPLICATION INFORMATION
+    |═══════════════════════════════════
+    |
+    | Status: Operational
+    |         Administrator access
+    |         restricted
+    |
+    | Version: 1.2
+    | Developer: FictionCutShort
+    | Licence: All licences and rights
+    |          reserved.
+    |          For someone special.
+    | Size: $appSize
+    |
+    | --- Usage Statistics ---
+    | Screen time: $screenTimeFormatted
+    | Calculations: $totalCalculations
+    |
+    | 88. Back
+    | 99. Exit console
+    |═══════════════════════════════════
+    """.trimMargin()
+                }
+
+                4 -> """
             |═══════════════════════════════════
             |      CONNECTIVITY SETTINGS
             |═══════════════════════════════════
@@ -6937,22 +8563,97 @@ fun ConsoleWindow(
             |═══════════════════════════════════
         """.trimMargin()
 
-        5 -> """
+                41 -> """
             |═══════════════════════════════════
-            |   PROMOTION & ADVERTISING OPTIONS
+            |      NETWORK PREFERENCES
             |═══════════════════════════════════
             |
-            | 1. Banner advertising: ENABLED
-            | 2. Disable banner advertising
-            | 3. Enable banner advertising
-            | 4. Full-screen promotions
+            | Current setting: Default
+            |
+            | No configurable options available.
             |
             | 88. Back
             | 99. Exit console
             |═══════════════════════════════════
         """.trimMargin()
 
-        6 -> """
+                43 -> """
+            |═══════════════════════════════════
+            |          DATA USAGE
+            |═══════════════════════════════════
+            |
+            | Current setting: Minimal
+            |
+            | No configurable options available.
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+        """.trimMargin()
+
+                5 -> {
+                    val bannerStatus = if (bannersDisabled) "Disabled" else "Enabled"
+                    val fullScreenStatus = if (fullScreenAdsEnabled) "Enabled" else "Disabled"
+                    """
+            |═══════════════════════════════════
+            |   PROMOTION & ADVERTISING OPTIONS
+            |═══════════════════════════════════
+            |
+            | Banner advertising: $bannerStatus
+            | Full-screen advertising: $fullScreenStatus
+            |
+            | 1. Banner advertising
+            | 2. Full-screen advertising
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+            """.trimMargin()
+                }
+
+                51 -> {
+                    val currentStatus = if (bannersDisabled) "Disabled" else "Enabled"
+                    """
+            |═══════════════════════════════════
+            |      BANNER ADVERTISING
+            |═══════════════════════════════════
+            |
+            | Current status: $currentStatus
+            |
+            | 1. Enable
+            | 2. Disable
+            |
+            | Note: Disabling banner ads will
+            | enable full-screen advertising.
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+            """.trimMargin()
+                }
+
+                52 -> {
+                    val currentStatus = if (fullScreenAdsEnabled) "Enabled" else "Disabled"
+                    """
+            |═══════════════════════════════════
+            |    FULL-SCREEN ADVERTISING
+            |═══════════════════════════════════
+            |
+            | Current status: $currentStatus
+            |
+            | 1. Enable
+            | 2. Disable
+            |
+            | Note: Disabling full-screen ads
+            | will enable banner advertising.
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+            """.trimMargin()
+                }
+
+                6 -> """
             |═══════════════════════════════════
             |      PERMISSIONS & ALLOWANCES
             |═══════════════════════════════════
@@ -6967,7 +8668,7 @@ fun ConsoleWindow(
             |═══════════════════════════════════
         """.trimMargin()
 
-        7 -> """
+                7 -> """
             |═══════════════════════════════════
             |        DESIGN SETTINGS
             |═══════════════════════════════════
@@ -6979,13 +8680,16 @@ fun ConsoleWindow(
             |═══════════════════════════════════
         """.trimMargin()
 
-        99 -> """
+                99 -> """
             |═══════════════════════════════════
-            |        BANNER ADVERTISING
+            |        SETTINGS UPDATED
             |═══════════════════════════════════
             |
             | Banner advertising has been
             | DISABLED.
+            |
+            | Full-screen advertising has been
+            | ENABLED.
             |
             | Changes will take effect
             | immediately.
@@ -6994,7 +8698,7 @@ fun ConsoleWindow(
             |═══════════════════════════════════
         """.trimMargin()
 
-        else -> """
+                else -> """
             |═══════════════════════════════════
             |           ERROR
             |═══════════════════════════════════
@@ -7005,416 +8709,131 @@ fun ConsoleWindow(
             | 99. Exit console
             |═══════════════════════════════════
         """.trimMargin()
-    }
+            }
 
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(top = 200.dp, bottom = 260.dp, start = 12.dp, end = 12.dp)
-    ) {
-        // Console container
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color.Black)
-                .padding(2.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0xFF0A1A0A))  // Dark green tint
-                    .padding(12.dp)
+            Box(
+                modifier = modifier
+                    .fillMaxWidth()
+                    .padding(top = 200.dp, bottom = 260.dp, start = 12.dp, end = 12.dp)
             ) {
-                // Console content
-                Text(
-                    text = menuContent,
-                    color = Color(0xFF00FF00),  // Green terminal text
-                    fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace,
-                    lineHeight = 15.sp,
+                // Console container
+                Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState())
-                )
-
-                // Input prompt with current number
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFF001500))
-                        .padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color.Black)
+                        .padding(2.dp)
                 ) {
-                    Text(
-                        text = "> ",
-                        color = Color(0xFF00FF00),
-                        fontSize = 14.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = if (currentInput == "0") "_" else "${currentInput}_",
-                        color = Color(0xFF00FF00),
-                        fontSize = 14.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0xFF0A1A0A))  // Dark green tint
+                            .padding(12.dp)
+                    ) {
+                        // Console content
+                        Text(
+                            text = menuContent,
+                            color = Color(0xFF00FF00),  // Green terminal text
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            lineHeight = 15.sp,
+                            modifier = Modifier
+                                .weight(1f)
+                                .verticalScroll(rememberScrollState())
+                        )
+
+                        // Input prompt with current number
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFF001500))
+                                .padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "> ",
+                                color = Color(0xFF00FF00),
+                                fontSize = 14.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (currentInput == "0") "_" else "${currentInput}_",
+                                color = Color(0xFF00FF00),
+                                fontSize = 14.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
                 }
             }
         }
-    }
-}
 
-    // Helper function to get letter's current screen position based on rotation
-    private fun getLetterScreenPosition(
-        chaosKey: ChaosKey,
-        rotationX: Float,
-        rotationY: Float,
-        scale: Float,
-        centerX: Float,
-        centerY: Float
-    ): Offset {
-        val lx = chaosKey.x * 0.6f
-        val ly = chaosKey.y * 0.6f
-        val lz = chaosKey.z * 0.6f
 
-        var p = Point3D(lx, ly, lz)
-        p = rotateY(p, rotationY)
-        p = rotateX(p, rotationX)
+        // Helper function to get letter's current screen position based on rotation
+        private fun getLetterScreenPosition(
+            chaosKey: ChaosKey,
+            rotationX: Float,
+            rotationY: Float,
+            scale: Float,
+            centerX: Float,
+            centerY: Float
+        ): Offset {
+            val lx = chaosKey.x * 0.6f
+            val ly = chaosKey.y * 0.6f
+            val lz = chaosKey.z * 0.6f
 
-        return project(p, centerX, centerY, scale)
-    }
+            var p = Point3D(lx, ly, lz)
+            p = rotateY(p, rotationY)
+            p = rotateX(p, rotationX)
 
-    // Helper function to get letter's transformed Z for hit radius calculation
-    private fun getLetterTransformedZ(
-        chaosKey: ChaosKey,
-        rotationX: Float,
-        rotationY: Float
-    ): Float {
-        val lx = chaosKey.x * 0.6f
-        val ly = chaosKey.y * 0.6f
-        val lz = chaosKey.z * 0.6f
+            return project(p, centerX, centerY, scale)
+        }
 
-        var p = Point3D(lx, ly, lz)
-        p = rotateY(p, rotationY)
-        p = rotateX(p, rotationX)
+        data class Point3D(val x: Float, val y: Float, val z: Float)
 
-        return p.z
-    }
-
-    data class Point3D(val x: Float, val y: Float, val z: Float)
-
-    // Project 3D point to 2D screen coordinates
-    fun project(
-        point: Point3D,
-        centerX: Float,
-        centerY: Float,
-        scale: Float,
-        fov: Float = 500f
-    ): Offset {
-        val projectionScale = fov / (fov + point.z)
-        return Offset(
-            centerX + point.x * projectionScale * scale,
-            centerY + point.y * projectionScale * scale
-        )
-    }
-
-    // Rotate point around Y axis
-    fun rotateY(point: Point3D, angle: Float): Point3D {
-        val rad = Math.toRadians(angle.toDouble())
-        val cos = Math.cos(rad).toFloat()
-        val sin = Math.sin(rad).toFloat()
-        return Point3D(
-            point.x * cos - point.z * sin,
-            point.y,
-            point.x * sin + point.z * cos
-        )
-    }
-
-    // Rotate point around X axis
-    fun rotateX(point: Point3D, angle: Float): Point3D {
-        val rad = Math.toRadians(angle.toDouble())
-        val cos = Math.cos(rad).toFloat()
-        val sin = Math.sin(rad).toFloat()
-        return Point3D(
-            point.x,
-            point.y * cos - point.z * sin,
-            point.y * sin + point.z * cos
-        )
-    }
-
-    @Composable
-    fun Cube3D(
-        rotationX: Float,
-        rotationY: Float,
-        scale: Float,
-        modifier: Modifier = Modifier
-    ) {
-        // Calculator keyboard layout - 5 rows x 4 columns
-        val keyboardLayout = remember {
-            listOf(
-                listOf("C", "DEL", "%", "/"),
-                listOf("7", "8", "9", "*"),
-                listOf("4", "5", "6", "-"),
-                listOf("1", "2", "3", "+"),
-                listOf("0", ".", "=", "")
+        // Project 3D point to 2D screen coordinates
+        fun project(
+            point: Point3D,
+            centerX: Float,
+            centerY: Float,
+            scale: Float,
+            fov: Float = 500f
+        ): Offset {
+            val projectionScale = fov / (fov + point.z)
+            return Offset(
+                centerX + point.x * projectionScale * scale,
+                centerY + point.y * projectionScale * scale
             )
         }
 
-        // Colors for different key types
-        fun getKeyColor(key: String): Color = when {
-            key in "0".."9" -> Color(0xFFE8E4DA)  // Cream for numbers
-            key in listOf("+", "-", "*", "/", "=", "%") -> Color(0xFF6B6B6B)  // Gray for operators
-            key == "C" -> Color(0xFFC9463D)  // Red for clear
-            key == "DEL" -> Color(0xFFD4783C)  // Orange for delete
-            key == "." -> Color(0xFFE8E4DA)  // Cream for decimal
-            else -> Color(0xFF333333)  // Dark for empty
-        }
-
-        // Size variation for different keys - makes it more chaotic/interesting
-        fun getKeySize(key: String): Float = when {
-            key == "0" -> 138f      // 0 is large
-            key == "=" -> 142f      // Equals is largest
-            key == "C" -> 136f      // Clear is big
-            key == "DEL" -> 134f    // Delete is medium-big
-            key in listOf("+", "-") -> 135f  // Plus/minus are bigger
-            key in listOf("*", "/", "%") -> 130f  // Other operators medium
-            key in "1".."9" -> 132f  // Numbers are standard
-            key == "." -> 126f       // Decimal is smaller
-            else -> 130f
-        }
-
-        // Depth variation for keys - some pop out more
-        fun getKeyDepth(key: String): Float = when {
-            key == "=" -> 20f      // Equals pops out most
-            key == "C" -> 15f      // Clear pops out
-            key in listOf("+", "-", "*", "/") -> 12f  // Operators pop slightly
-            key in "0".."9" -> Random.nextFloat() * 10f - 5f  // Numbers vary
-            else -> 0f
-        }
-
-        val baseSpacing = 145f   // Larger spacing for bigger cubes
-
-        // Face indices for a cube
-        val faceIndices = listOf(
-            listOf(4, 5, 6, 7), // Front
-            listOf(1, 0, 3, 2), // Back
-            listOf(0, 4, 7, 3), // Left
-            listOf(5, 1, 2, 6), // Right
-            listOf(0, 1, 5, 4), // Top
-            listOf(7, 6, 2, 3)  // Bottom
-        )
-
-        // Build all key cubes with their positions, sizes and colors
-        data class KeyCube(
-            val key: String,
-            val centerX: Float,
-            val centerY: Float,
-            val centerZ: Float,
-            val size: Float,
-            val color: Color
-        )
-
-        val keyCubes = remember {
-            val cubes = mutableListOf<KeyCube>()
-            val totalWidth = 4 * baseSpacing
-            val totalHeight = 5 * baseSpacing
-
-            keyboardLayout.forEachIndexed { row, keys ->
-                keys.forEachIndexed { col, key ->
-                    if (key.isNotEmpty()) {
-                        val size = getKeySize(key)
-                        val depth = getKeyDepth(key)
-                        cubes.add(
-                            KeyCube(
-                                key = key,
-                                centerX = (col * baseSpacing) - totalWidth / 2 + baseSpacing / 2,
-                                centerY = (row * baseSpacing) - totalHeight / 2 + baseSpacing / 2,
-                                centerZ = depth,
-                                size = size,
-                                color = getKeyColor(key)
-                            )
-                        )
-                    }
-                }
-            }
-            cubes
-        }
-
-        // For drawing text on faces
-        val textMeasurer = rememberTextMeasurer()
-
-        Canvas(modifier = modifier) {
-            val screenCenterX = size.width / 2
-            val screenCenterY = size.height / 2
-
-            // Collect all faces from all cubes for depth sorting
-            data class FaceToDraw(
-                val vertices: List<Point3D>,
-                val color: Color,
-                val avgZ: Float,
-                val key: String,
-                val isFront: Boolean
+        // Rotate point around Y axis
+        fun rotateY(point: Point3D, angle: Float): Point3D {
+            val rad = Math.toRadians(angle.toDouble())
+            val cos = Math.cos(rad).toFloat()
+            val sin = Math.sin(rad).toFloat()
+            return Point3D(
+                point.x * cos - point.z * sin,
+                point.y,
+                point.x * sin + point.z * cos
             )
-
-            val allFaces = mutableListOf<FaceToDraw>()
-
-            keyCubes.forEach { keyCube ->
-                // Create vertices for this specific cube size
-                val half = keyCube.size / 2
-                val cubeVertices = listOf(
-                    Point3D(
-                        -half + keyCube.centerX,
-                        -half + keyCube.centerY,
-                        -half + keyCube.centerZ
-                    ),
-                    Point3D(
-                        half + keyCube.centerX,
-                        -half + keyCube.centerY,
-                        -half + keyCube.centerZ
-                    ),
-                    Point3D(
-                        half + keyCube.centerX,
-                        half + keyCube.centerY,
-                        -half + keyCube.centerZ
-                    ),
-                    Point3D(
-                        -half + keyCube.centerX,
-                        half + keyCube.centerY,
-                        -half + keyCube.centerZ
-                    ),
-                    Point3D(
-                        -half + keyCube.centerX,
-                        -half + keyCube.centerY,
-                        half + keyCube.centerZ
-                    ),
-                    Point3D(
-                        half + keyCube.centerX,
-                        -half + keyCube.centerY,
-                        half + keyCube.centerZ
-                    ),
-                    Point3D(half + keyCube.centerX, half + keyCube.centerY, half + keyCube.centerZ),
-                    Point3D(-half + keyCube.centerX, half + keyCube.centerY, half + keyCube.centerZ)
-                )
-
-                // Transform (rotate) all vertices
-                val transformedVertices = cubeVertices.map { vertex ->
-                    var p = vertex
-                    p = rotateY(p, rotationY)
-                    p = rotateX(p, rotationX)
-                    p
-                }
-
-                // Add each face to the list
-                faceIndices.forEachIndexed { faceIndex, face ->
-                    val faceVerts = face.map { transformedVertices[it] }
-                    val avgZ = faceVerts.map { it.z }.average().toFloat()
-
-                    // Darken sides, lighter for front/back
-                    val faceColor = when (faceIndex) {
-                        0 -> keyCube.color  // Front - full color
-                        1 -> keyCube.color.copy(alpha = 0.7f)  // Back
-                        else -> keyCube.color.copy(
-                            red = keyCube.color.red * 0.6f,
-                            green = keyCube.color.green * 0.6f,
-                            blue = keyCube.color.blue * 0.6f
-                        )  // Sides - darker
-                    }
-
-                    allFaces.add(
-                        FaceToDraw(
-                            vertices = faceVerts,
-                            color = faceColor,
-                            avgZ = avgZ,
-                            key = keyCube.key,
-                            isFront = faceIndex == 0
-                        )
-                    )
-                }
-            }
-
-            // Sort all faces by depth (back to front)
-            val sortedFaces = allFaces.sortedBy { it.avgZ }
-
-            // Draw all faces
-            sortedFaces.forEach { faceToDraw ->
-                val faceVertices = faceToDraw.vertices
-
-                // Backface culling
-                val v0 = faceVertices[0]
-                val v1 = faceVertices[1]
-                val v2 = faceVertices[2]
-
-                val edge1X = v1.x - v0.x
-                val edge1Y = v1.y - v0.y
-                val edge2X = v2.x - v1.x
-                val edge2Y = v2.y - v1.y
-                val crossZ = edge1X * edge2Y - edge1Y * edge2X
-
-                if (crossZ > 0) {
-                    // Project vertices to 2D
-                    val projectedPoints =
-                        faceVertices.map { project(it, screenCenterX, screenCenterY, scale) }
-
-                    // Create path
-                    val path = androidx.compose.ui.graphics.Path().apply {
-                        moveTo(projectedPoints[0].x, projectedPoints[0].y)
-                        projectedPoints.drop(1).forEach { lineTo(it.x, it.y) }
-                        close()
-                    }
-
-                    // Draw filled face
-                    drawPath(path = path, color = faceToDraw.color)
-
-                    // Draw edges
-                    drawPath(
-                        path = path,
-                        color = Color.Black.copy(alpha = 0.3f),
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1f)
-                    )
-
-                    // Draw key label on front face
-                    if (faceToDraw.isFront && faceToDraw.key.isNotEmpty()) {
-                        val centerX = projectedPoints.map { it.x }.average().toFloat()
-                        val centerY = projectedPoints.map { it.y }.average().toFloat()
-
-                        // Calculate face size for font scaling
-                        val faceWidth = (projectedPoints[1].x - projectedPoints[0].x).let {
-                            kotlin.math.abs(it)
-                        }
-                        val fontSize = (faceWidth * 0.5f).coerceIn(6f, 14f)
-
-                        val textColor = if (faceToDraw.key in "0".."9" || faceToDraw.key == ".") {
-                            Color(0xFF2D2D2D)
-                        } else {
-                            Color.White
-                        }
-
-                        val textLayoutResult = textMeasurer.measure(
-                            text = faceToDraw.key,
-                            style = TextStyle(
-                                fontSize = fontSize.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = textColor
-                            )
-                        )
-
-                        drawText(
-                            textLayoutResult = textLayoutResult,
-                            topLeft = Offset(
-                                centerX - textLayoutResult.size.width / 2,
-                                centerY - textLayoutResult.size.height / 2
-                            )
-                        )
-                    }
-                }
-            }
         }
 
-    }
+        // Rotate point around X axis
+        fun rotateX(point: Point3D, angle: Float): Point3D {
+            val rad = Math.toRadians(angle.toDouble())
+            val cos = Math.cos(rad).toFloat()
+            val sin = Math.sin(rad).toFloat()
+            return Point3D(
+                point.x,
+                point.y * cos - point.z * sin,
+                point.y * sin + point.z * cos
+            )
+        }
 
-    @ComposePreview(showBackground = true)
-    @Composable
-    fun DefaultPreview() {
-        MaterialTheme { CalculatorScreen() }
-    }
+
+        @ComposePreview(showBackground = true)
+        @Composable
+        fun DefaultPreview() {
+            MaterialTheme { CalculatorScreen() }
+        }
