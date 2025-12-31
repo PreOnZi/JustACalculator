@@ -1,4 +1,4 @@
-package com.example.justacalculator
+package com.fictioncutshort.justacalculator
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background

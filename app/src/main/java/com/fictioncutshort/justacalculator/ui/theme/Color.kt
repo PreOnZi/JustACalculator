@@ -1,4 +1,4 @@
-package com.example.justacalculator.ui.theme
+package com.fictioncutshort.justacalculator.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

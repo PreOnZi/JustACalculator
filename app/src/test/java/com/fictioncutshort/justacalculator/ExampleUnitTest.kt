@@ -1,4 +1,4 @@
-package com.example.justacalculator
+package com.fictioncutshort.justacalculator
 
 import org.junit.Test
 

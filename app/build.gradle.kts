@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.justacalculator"
+    namespace = "com.fictioncutshort.justacalculator"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.justacalculator"
+        applicationId = "com.fictioncutshort.justacalculator"
         minSdk = 24
         targetSdk = 36
         versionCode = 1

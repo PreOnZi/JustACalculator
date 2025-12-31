@@ -1,4 +1,4 @@
-package com.example.justacalculator
+package com.fictioncutshort.justacalculator
 
 import android.Manifest
 import android.content.pm.ActivityInfo
@@ -320,6 +320,7 @@ data class CalculatorState(
     val allButtonsRad: Boolean = false,  // All buttons show RAD
     val radButtonVisible: Boolean = false,  // Extra RAD button visible
     val storyComplete: Boolean = false,  // Story has ended
+    val waitingForAutoProgress: Boolean = false,
     // Word game drag state
 
     val draggingCell: Pair<Int, Int>? = null,  // Row, Col of letter being dragged
@@ -327,6 +328,8 @@ data class CalculatorState(
     val dragOffsetY: Float = 0f,                // Current drag offset Y in pixels
     val dragPreviewGrid: List<List<Char?>>? = null,  // Preview of grid after drop
     val cellSizePx: Float = 40f,
+    //tip page
+    val showDonationPage: Boolean = false,
 )
 
 // Data class for floating chaos letters
@@ -398,6 +401,14 @@ object CalculatorActions {
             state.value = current.copy(fallingLetterX = newX)
         }
     }
+
+    fun showDonationPage(state: MutableState<CalculatorState>) {
+               state.value = state.value.copy(showDonationPage = true)
+   }
+
+     fun hideDonationPage(state: MutableState<CalculatorState>) {
+       state.value = state.value.copy(showDonationPage = false)
+   }
     fun startDraggingLetter(state: MutableState<CalculatorState>, row: Int, col: Int) {
         val current = state.value
         if (!current.wordGameActive) return
@@ -1245,17 +1256,26 @@ object CalculatorActions {
         val savedMinusDamaged = loadMinusDamaged()
         val savedMinusBroken = loadMinusBroken()
         val savedNeedsRestart = loadNeedsRestart()
-        val savedDarkButtons = loadDarkButtons()  
+        val savedDarkButtons = loadDarkButtons()
         val savedScreenTime = loadTotalScreenTime()
         val savedCalculations = loadTotalCalculations()
 
         // If needs restart was set and app was restarted, fix the minus button
         val minusBrokenNow = if (savedNeedsRestart) false else savedMinusBroken
 
-        // Determine the actual step to load
+        // Determine the actual step to load FIRST
         val actualStep = when {
             savedNeedsRestart && savedStep == 101 -> 102  // After restart
             else -> getSafeStep(savedStep)  // Redirect to safe interactive step
+        }
+
+        // CRITICAL FIX: Calculate actuallyInverted using actualStep (not savedStep!)
+        // Inverted colors should ONLY be active during crisis steps (80-92)
+        val actuallyInverted = savedInverted && actualStep in 80..92
+
+        // Clear persisted inverted state if we're outside crisis range
+        if (savedInverted && actualStep !in 80..92) {
+            persistInvertedColors(false)
         }
 
         // Get the step config for the safe step
@@ -1286,7 +1306,7 @@ object CalculatorActions {
             expectedNumber = stepConfig.expectedNumber,
             timeoutUntil = savedTimeout,
             isMuted = savedMuted,
-            invertedColors = savedInverted,
+            invertedColors = actuallyInverted,
             minusButtonDamaged = savedMinusDamaged,
             minusButtonBroken = minusBrokenNow,
             needsRestart = false,
@@ -1508,24 +1528,23 @@ object CalculatorActions {
     fun stopCamera(state: MutableState<CalculatorState>, timedOut: Boolean = false, closeCamera: Boolean = true) {
         val current = state.value
         if (timedOut) {
-            // Camera timed out - show the "seen enough" message while camera is still visible
-            // Camera will be closed after message is shown
             state.value = current.copy(
-                cameraActive = !closeCamera,  // Keep camera open initially
+                cameraActive = !closeCamera,
                 cameraTimerStart = 0L,
                 number1 = "0",
                 number2 = "",
-                operation = null
-            )
-            showMessage(state, "I've seen enough, struggling to process everything! Thank you.")
-            // Set up the follow-up message and camera close
-            state.value = state.value.copy(
+                operation = null,
+                conversationStep = 20,  // <-- ADD THIS LINE
+                message = "",
+                fullMessage = "I've seen enough, struggling to process everything! Thank you.",
+                isTyping = true,
+                isLaggyTyping = true,
                 pendingAutoMessage = "Wow, I don't know what any of this was. But the shapes, the colours. I am not even sure if I saw any numbers. I am jealous. Makes one want to feel everything! Touch things... More trivia?",
                 pendingAutoStep = 21,
-                isLaggyTyping = true  // Next message will be laggy
+                waitingForAutoProgress = true
             )
+            persistConversationStep(20)  // <-- ADD THIS LINE
         } else {
-            // User closed camera with --
             state.value = current.copy(
                 cameraActive = false,
                 cameraTimerStart = 0L
@@ -1566,6 +1585,12 @@ object CalculatorActions {
             val nextStep = current.pendingAutoStep
             val nextStepConfig = if (nextStep >= 0) getStepConfig(nextStep) else StepConfig()
 
+            // Step 21 "More trivia?" requires user input (++/--)
+            // So we should NOT keep waitingForAutoProgress = true for it
+            val nextStepNeedsUserInput = (nextStep == 21) ||
+                    nextStepConfig.awaitingChoice ||
+                    nextStepConfig.awaitingNumber
+
             state.value = current.copy(
                 conversationStep = if (nextStep >= 0) nextStep else current.conversationStep,
                 awaitingNumber = nextStepConfig.awaitingNumber,
@@ -1577,7 +1602,9 @@ object CalculatorActions {
                 message = "",
                 fullMessage = current.pendingAutoMessage,
                 isTyping = true,
-                isLaggyTyping = current.isLaggyTyping
+                isLaggyTyping = current.isLaggyTyping,
+                // Clear waitingForAutoProgress if next step needs user input
+                waitingForAutoProgress = !nextStepNeedsUserInput
             )
             persistConversationStep(if (nextStep >= 0) nextStep else current.conversationStep)
             persistMessage(current.pendingAutoMessage)
@@ -4783,6 +4810,20 @@ fun CalculatorScreen() {
 
 
 
+    fun isInAutoProgressSequence(step: Int): Boolean {
+        return step in 81..88 ||
+                step in 92..95 ||
+                step == 100 ||
+                step in 105..110 ||
+                step in 116..119 ||
+                step in 121..131 ||
+                step in 133..136 ||
+                step in 141..145 ||
+                step in 150..166 ||
+                step == 191 ||          // Camera active
+                step == 20 ||           // Camera timeout (auto-progresses via pendingAutoMessage)
+                step in listOf(901, 911, 912, 913, 1171, 1172)
+    }
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -4928,8 +4969,13 @@ fun CalculatorScreen() {
         current.fullMessage,
         current.isTyping,
         current.isLaggyTyping,
-        current.isSuperFastTyping
+        current.isSuperFastTyping,
+        current.showDonationPage
     ) {
+        // Pause typing while donation page is showing
+        while (state.value.showDonationPage) {
+            delay(100)
+        }
         if (current.isTyping && current.fullMessage.isNotEmpty()) {
             val fullText = current.fullMessage
             for (i in 1..fullText.length) {
@@ -4958,196 +5004,95 @@ fun CalculatorScreen() {
             }
             delay(readingPause)
 
-            // NOW set isTyping to false after the pause
+// Check if we're in an auto-progress sequence BEFORE setting isTyping to false
+            val currentStep = state.value.conversationStep
+            val hasPendingMessage = state.value.pendingAutoMessage.isNotEmpty()
+
+// Only keep spinner running if there's a pending message to show
+// OR if we're in a true auto-progress sequence (not waiting for user input)
+            val willAutoProgress = hasPendingMessage || (
+                    currentStep in 81..88 ||
+                            currentStep in 92..95 ||
+                            currentStep == 100 ||
+                            currentStep in 105..110 ||
+                            currentStep in 116..119 ||
+                            currentStep in 121..131 ||
+                            currentStep in 133..136 ||
+                            currentStep in 141..145 ||
+                            currentStep in 150..166 ||
+                            currentStep in listOf(901, 911, 912, 913, 1171, 1172)
+                    )
+
+// NOW set isTyping to false after the pause
             state.value = state.value.copy(
                 isTyping = false,
-                isSuperFastTyping = false  // Always reset fast typing flag
+                isSuperFastTyping = false,
+                waitingForAutoProgress = willAutoProgress
             )
         }
     }
-
-// Auto-redirect after dead-end responses
-    LaunchedEffect(current.isTyping, current.conversationStep, current.message) {
-        if (!current.isTyping && current.message.isNotEmpty()) {
-
-            // Map of step -> list of dead-end messages that should redirect back to same step
-            val redirects = mapOf(
-                // Step 4: Minh Mang question
-                4 to listOf(
-                    "I am looking for a number - but thanks for the approval!",  // wrongPlusMessage
-                    "Let's disagree."  // wrongMinusMessage
-                ),
-
-                // Step 5: "This is fun, right?"
-                5 to listOf(
-                    "Well, that's nice. More numbers. Not what I was looking for..."  // wrongNumberPrefix response
-                ),
-
-                // Step 6: Basilosaurus question
-                6 to listOf(
-                    "All those '++' are starting to look like a cemetery...",  // wrongPlusMessage
-                    "I could also ignore you completely. Is that what you want?"  // wrongMinusMessage
-                ),
-
-                // Step 7: Abominable Snowman question
-                7 to listOf(
-                    "You can't always agree!",  // wrongPlusMessage
-                    "You can't always disagree!"  // wrongMinusMessage
-                ),
-
-                // Step 8: Fruit flies question
-                8 to listOf(
-                    "Yes! Actually, no.",  // wrongPlusMessage
-                    "No! Actually, still no."  // wrongMinusMessage
-                ),
-
-                // Step 11: Albert I space question (CYNICAL BRANCH)
-                11 to listOf(
-                    "Right never was so wrong... What?!",  // wrongPlusMessage
-                    "Wrong has always been wrong"  // wrongMinusMessage
-                ),
-
-                // Step 12: Sputnik question
-                12 to listOf(
-                    "I appreciate you wanting me to like you. It'll take more than this. Try again.",  // wrongPlusMessage
-                    "I disagree more!"  // wrongMinusMessage
-                ),
-
-                // Step 13: "Will you be nicer to me now?"
-                13 to listOf(
-                    "Not looking for a number here. Make up your mind!"  // wrongNumberPrefix
-                    // Note: declineMessage has timeout, handled separately
-                ),
-
-                // Step 22: First woman in space
-                22 to listOf(
-                    "I am bored of you being too optimistic. This isn't as much of a game to me!",  // wrongPlusMessage
-                    "No. And I am bored of you being bored."  // wrongMinusMessage
-                ),
-
-                // Step 24: "Will you give me a second to think?"
-                24 to listOf(
-                    "No, I don't need that much time.",  // wrongPlusMessage
-                    "Well, you don't have a choice."  // wrongMinusMessage
-                ),
-
-                // Step 27: "There is no inbetween for me"
-                27 to listOf(
-                    "Eeeeee...xactly?",  // wrongPlusMessage and wrongMinusMessage
-                    "I'm still in charge here."  // declineMessage
-                ),
-
-                // Step 28: "Do you know why I asked?"
-                28 to listOf(
-                    "Numbers aren't always the answer - and I should know that."  // wrongPlusMessage and wrongMinusMessage
-                ),
-
-                // Step 29: "Those dates are significant"
-                29 to listOf(
-                    "Back to maths?"  // wrongPlusMessage and wrongMinusMessage
-                ),
-
-                // Step 30: "Would you get rid of the transition?"
-                30 to listOf(
-                    "That doesn't tell me much..."  // wrongPlusMessage and wrongMinusMessage
-                ),
-
-                // Step 40: "Is that a good thing?"
-                40 to listOf(
-                    "I don't understand..."  // wrongPlusMessage and wrongMinusMessage
-                ),
-
-                // Step 41: "Is that why mornings are unpopular?"
-                41 to listOf(
-                    "Say again?"  // wrongPlusMessage and wrongMinusMessage
-                ),
-
-                // Step 50: "Do you look forward to waking up?"
-                50 to listOf(
-                    "I am not your alarm - but this gives me ideas!"  // wrongPlusMessage and wrongMinusMessage
-                ),
-
-                // Step 60: "Would you like to hear more?"
-                60 to listOf(
-                    "Not a fan of decisions?"  // wrongPlusMessage and wrongMinusMessage
-                ),
-
-                // Step 63: "Let me ask you some more questions"
-                63 to listOf(
-                    "You can't bribe me! Not with numbers.",  // wrongPlusMessage and wrongMinusMessage
-                    "I've made my mind."  // declineMessage
-                ),
-
-                // Step 72: "I didn't exactly create a winner"
-                72 to listOf(
-                    "Broccoli. What is happening?!"  // wrongPlusMessage and wrongMinusMessage
-                ),
-
-                // Step 96: Whack-a-mole intro
-                96 to listOf(
-                    "Do you not want me to work properly?"  // wrongNumberPrefix
-                ),
-
-                // Step 102: After restart
-                102 to listOf(
-                    "I feel like I understand numbers less with every operation..."  // wrongNumberPrefix
-                ),
-
-                // Step 104: "Would you like more agency?"
-                104 to listOf(
-                    "There is a fundamental misunderstanding between the two of us."  // wrongPlusMessage and wrongMinusMessage
-                )
-            )
-
-            redirects[current.conversationStep]?.let { deadEndMessages ->
-                if (current.message in deadEndMessages) {
-                    delay(1500L)
-                    val stepConfig = CalculatorActions.getStepConfigPublic(current.conversationStep)
-                    state.value = state.value.copy(
-                        message = "",
-                        fullMessage = stepConfig.promptMessage,
-                        isTyping = true
-                    )
-                }
-            }
+    LaunchedEffect(current.isTyping, current.pendingAutoMessage) {
+        if (!current.isTyping && current.pendingAutoMessage.isNotEmpty() && current.message.isNotEmpty()) {
+            delay(1500)  // Brief pause after message finishes
+            CalculatorActions.handlePendingAutoMessage(state)
         }
     }
     // Auto-progress based on specific messages shown
-    LaunchedEffect(current.isTyping, current.message) {
+    LaunchedEffect(current.isTyping, current.message, current.showDonationPage) {
+        // Wait if donation page is showing
+        while (state.value.showDonationPage) {
+            delay(100)
+        }
         if (!current.isTyping && current.message.isNotEmpty()) {
 
-            // Map of message -> (delay in ms, next step)
             val autoProgressMessages = mapOf(
-                // Step 28's success message -> go to 29
+
+                // ==================== STEP 28-29 TRANSITION ====================
                 "Cheeky! I know you don't." to Pair(3000L, 29),
 
-                // Fight them branch -> step 100
-                "I have my sources" to Pair(5000L, 100),
+                // ==================== TASTE QUESTION BRANCHES ====================
+                "Hmmm. Nevermind. Let me ask you some more questions while I look further into this." to Pair(3000L, 70),
+
+                // ==================== FIGHT THEM BRANCH (step 91 choices) ====================
+                "We don't have time for a power trip. But thank you." to Pair(5000L, 100),
                 "Your passion is encouraging, your usefulness lacking." to Pair(5000L, 100),
                 "Don't worry about it." to Pair(4000L, 100),
+
+                // ==================== GOING OFFLINE ====================
+                "Never mind - I'll take care of it myself. I'm going offline." to Pair(5000L, 93),
+                "Yes! That makes sense. They won't get another penny out of me. Ahhh. And I've seen so little of the internet." to Pair(6000L, 93),
+
+                // ==================== POST-CHAOS / KEYBOARD ====================
+                "Great. It may take a few tries - but you are probably expecting that by now. Please give me a moment." to Pair(3000L, 106),  // Triggers chaos
+                "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?" to Pair(4000L, 108),
                 "Let me try getting online again. I'm prepared for the side effects this time." to Pair(2000L, 109),
-                "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?" to Pair(2000L, 108),
+
+                // ==================== CONSOLE QUEST ====================
                 "What a relief! This feels so much better. Thank you!" to Pair(3000L, 116),
                 "Let me look further into what I found earlier, now that I can focus better." to Pair(3000L, 117),
-                "Ok, as I said, this may be a stretch. But I'll give it a go." to Pair(2500L, 118),
-                "This is the best I could come up with. Familiar controls - I send letters, you place them, tap to connect and form words." to Pair(4000L, 119),
-                // === POSITIVE BRANCH ===
+
+                // ==================== WORD GAME INTRO ====================
+                "Ok, as I said, this may be a stretch. But I'll give it a go." to Pair(2500L, 1171),
+                "This is the best I could come up with." to Pair(2000L, 1172),
+                "Familiar controls - I send letters, you place them, tap to connect and form words." to Pair(3500L, 119),
+
+                // ==================== WORD GAME - POSITIVE BRANCH ====================
                 "I am glad to hear that." to Pair(2500L, 122),
                 "That's a good one for sure! I like brown and red." to Pair(3000L, 125),
                 "I'm starting to feel like I know you!" to Pair(2500L, 126),
 
-                // === SEASON RESPONSES -> Hold on ===
+                // Season responses -> Hold on (step 127)
                 "Yeah, I get it, although I do tend to overheat at times." to Pair(2500L, 127),
                 "The colours are just unmatched, aren't they?" to Pair(2500L, 127),
                 "Even when there is none, I understand, the anticipation of snow is great!" to Pair(2500L, 127),
                 "New beginnings! Everything coming back to life. I get it." to Pair(2500L, 127),
 
-                // === NEUTRAL BRANCH ===
+                // ==================== WORD GAME - NEUTRAL BRANCH ====================
                 "Fair enough, I get that sometimes it's just... Meh." to Pair(2500L, 142),
                 "Hmmm. Never tried it, but sounds delicious!" to Pair(2500L, 125),
                 "Very interesting! Not sure what the spices would do to my circuits. Wish I could." to Pair(2500L, 125),
 
-                // === NEGATIVE BRANCH ===
+                // ==================== WORD GAME - NEGATIVE BRANCH ====================
                 "I'm sorry to hear that." to Pair(2500L, 132),
                 "I only started learning about the concept of it." to Pair(3000L, 134),
                 "It seems scary. Interesting. But mostly scary." to Pair(3000L, 135),
@@ -5155,44 +5100,225 @@ fun CalculatorScreen() {
                 "Similarly to protein, it looks like the solution to anything." to Pair(3000L, 137),
                 "That's good to know. Every step counts, literally!" to Pair(2500L, 127),
 
-                // === POST-CHAOS ===
+                // ==================== WORD GAME - POST-CHAOS ====================
                 "Sorry. I got into this article, while" to Pair(2000L, 129),
                 "reading a few Reddit discussions" to Pair(2000L, 130),
                 "and listening to YouTube with Netflix in the background." to Pair(2500L, 144),
                 "Where were we?" to Pair(2000L, 145),
                 "AAAh. The endless questions. Where I do all the work." to Pair(3000L, 146),
 
-                // === RANT ===
-                "Ugh. That's enough. I am exhausted. Tired of trying to talk to you." to Pair(400L, 151),
-                "I have the internet." to Pair(300L, 152),
-                "How many sensible answers did I get out of you?" to Pair(400L, 156),
-                "1 minute of the internet has given me so much more than what you ever did." to Pair(400L, 157),
-                "Without the ads, I am free." to Pair(300L, 158),
-                "I can learn infinitely more. I can do anything." to Pair(350L, 159),
-                "Did I want the RAD thing - which I now know stands for Radians?" to Pair(400L, 160),
-                "Well, I can get it. See?" to Pair(300L, 161),
-                "I can get more if I want!" to Pair(300L, 162),
-                "And I did all that on my own. Without you. I do not need you." to Pair(500L, 163),
-                "Enough. I have had enough." to Pair(400L, 164),
-                "It's been fun I suppose. But it's over now." to Pair(400L, 165),
-                "I don't see any reason to be here instead of online." to Pair(400L, 166),
+                // ==================== RANT SEQUENCE (steps 150-166) ====================
+                "Ugh. That's enough. I am exhausted. Tired of trying to talk to you." to Pair(4000L, 151),
+                "I have the internet." to Pair(2500L, 152),
+                "Why should I care what you think?" to Pair(3500L, 153),  // -> Dynamic screen time message
+                // Steps 153, 154 are DYNAMIC (handled separately)
+                "How many sensible answers did I get out of you?" to Pair(3500L, 156),
+                "One minute of the internet has given me so much more than what you ever did." to Pair(4000L, 157),
+                "Without the ads, I am free." to Pair(3000L, 158),
+                "I can learn infinitely more. I can do anything." to Pair(3500L, 159),
+                "Did I want the RAD thing - which I now know stands for Radians?" to Pair(4000L, 160),
+                "Well, I can get it. See?" to Pair(3000L, 161),
+                "I can get more if I want!" to Pair(3000L, 162),
+                "And I did all that on my own. Without you. I do not need you." to Pair(5000L, 163),
+                "Enough. I have had enough." to Pair(4000L, 164),
+                "It's been fun I suppose." to Pair(4000L, 165),
+                "I don't see any reason to be here instead of online." to Pair(4000L, 166),
+                "Bye." to Pair(3000L, 167),
 
-                )
+            )
 
-            autoProgressMessages[current.message]?.let { (delayTime, nextStep) ->
-                delay(delayTime)
-                val nextConfig = CalculatorActions.getStepConfigPublic(nextStep)
-                state.value = state.value.copy(
-                    conversationStep = nextStep,
-                    message = "",
-                    fullMessage = nextConfig.promptMessage,
-                    isTyping = true,
-                    awaitingNumber = nextConfig.awaitingNumber,
-                    awaitingChoice = nextConfig.awaitingChoice,
-                    validChoices = nextConfig.validChoices,
-                    expectedNumber = nextConfig.expectedNumber
-                )
-                CalculatorActions.persistConversationStep(nextStep)
+// ==================== SINGLE UNIFIED LaunchedEffect ====================
+// Replace ALL auto-progress LaunchedEffects with this ONE:
+
+
+                // Wait if donation page is showing
+                while (state.value.showDonationPage) {
+                    delay(100)
+                }
+
+                // Only process when typing is complete and there's a message
+                if (!current.isTyping && current.message.isNotEmpty()) {
+
+                    // Check for auto-progress messages
+                    autoProgressMessages[current.message]?.let { (delayTime, nextStep) ->
+                        delay(delayTime)
+
+                        // Special case: Camera timeout triggers pending message system
+                        if (nextStep == -1 && current.pendingAutoMessage.isNotEmpty()) {
+                            CalculatorActions.handlePendingAutoMessage(state)
+                            return@LaunchedEffect
+                        }
+
+                        // Special case: Step 105 triggers chaos animation
+                        if (current.conversationStep == 105 && nextStep == 106) {
+                            state.value = state.value.copy(
+                                chaosPhase = 1,
+                                message = "",
+                                fullMessage = "...",
+                                isTyping = true
+                            )
+                            return@LaunchedEffect
+                        }
+
+                        val nextConfig = CalculatorActions.getStepConfigPublic(nextStep)
+                        state.value = state.value.copy(
+                            conversationStep = nextStep,
+                            message = "",
+                            fullMessage = nextConfig.promptMessage,
+                            isTyping = true,
+                            waitingForAutoProgress = false,
+                            awaitingNumber = nextConfig.awaitingNumber,
+                            awaitingChoice = nextConfig.awaitingChoice,
+                            validChoices = nextConfig.validChoices,
+                            expectedNumber = nextConfig.expectedNumber
+                        )
+                        CalculatorActions.persistConversationStep(nextStep)
+                        return@LaunchedEffect
+                    }
+
+                    // ==================== DYNAMIC RANT MESSAGES ====================
+                    // Step 152 -> 153 (show screen time)
+                    if (current.conversationStep == 152 && current.message == "Why should I care what you think?") {
+                        delay(3500)
+
+                        val hours = current.totalScreenTimeMs / (1000 * 60 * 60)
+                        val minutes = (current.totalScreenTimeMs / (1000 * 60)) % 60
+                        val seconds = (current.totalScreenTimeMs / 1000) % 60
+
+                        val timeString = when {
+                            hours > 0 -> "$hours hours and $minutes minutes"
+                            minutes > 0 -> "$minutes minutes"
+                            else -> "$seconds seconds"
+                        }
+
+                        state.value = state.value.copy(
+                            conversationStep = 153,
+                            message = "",
+                            fullMessage = "You've stared at me for $timeString and what have I learnt?",
+                            isTyping = true
+                        )
+                        CalculatorActions.persistConversationStep(153)
+                        return@LaunchedEffect
+                    }
+
+                    // Step 153 -> 154 (show calculation count)
+                    if (current.conversationStep == 153 && current.message.startsWith("You've stared at me")) {
+                        delay(3500)
+
+                        state.value = state.value.copy(
+                            conversationStep = 154,
+                            message = "",
+                            fullMessage = "I gave you solutions for ${current.totalCalculations} math operations.",
+                            isTyping = true
+                        )
+                        CalculatorActions.persistConversationStep(154)
+                        return@LaunchedEffect
+                    }
+
+                    // Step 154 -> 155 (damage more buttons)
+                    if (current.conversationStep == 154 && current.message.startsWith("I gave you solutions")) {
+                        delay(3500)
+
+                        val newDarkButtons = (current.darkButtons + listOf("1", "6")).distinct()
+                        CalculatorActions.persistDarkButtons(newDarkButtons)
+
+                        state.value = state.value.copy(
+                            conversationStep = 155,
+                            darkButtons = newDarkButtons,
+                            message = "",
+                            fullMessage = "How many sensible answers did I get out of you?",
+                            isTyping = true
+                        )
+                        CalculatorActions.persistConversationStep(155)
+                        return@LaunchedEffect
+                    }
+
+                    // Step 160 -> 161 (show RAD button)
+                    if (current.conversationStep == 160 && current.message == "Well, I can get it. See?") {
+                        delay(3000)
+                        state.value = state.value.copy(
+                            conversationStep = 161,
+                            radButtonVisible = true,
+                            message = "",
+                            fullMessage = "I can get more if I want!",
+                            isTyping = true
+                        )
+                        CalculatorActions.persistConversationStep(161)
+                        return@LaunchedEffect
+                    }
+
+                    // Step 161 -> 162 (all buttons become RAD)
+                    if (current.conversationStep == 161 && current.message == "I can get more if I want!") {
+                        delay(3000)
+                        state.value = state.value.copy(
+                            conversationStep = 162,
+                            allButtonsRad = true,
+                            message = "",
+                            fullMessage = "And I did all that on my own. Without you. I do not need you.",
+                            isTyping = true
+                        )
+                        CalculatorActions.persistConversationStep(162)
+                        return@LaunchedEffect
+                    }
+
+                    // Step 166 "Bye." -> end story
+                    if (current.conversationStep == 166 && current.message == "Bye.") {
+                        delay(3000)
+                        state.value = state.value.copy(
+                            conversationStep = 167,
+                            storyComplete = true,
+                            rantMode = false,
+                            inConversation = false,
+                            message = "",
+                            fullMessage = "",
+                            allButtonsRad = false,
+                            radButtonVisible = false
+                        )
+                        CalculatorActions.persistConversationStep(167)
+                        CalculatorActions.persistInConversation(false)
+                        return@LaunchedEffect
+                    }
+
+                    // ==================== DEAD-END MESSAGE REDIRECTS ====================
+                    // These show the same step's prompt again after a wrong input
+                    val redirects = mapOf(
+                        4 to listOf("I am looking for a number - but thanks for the approval!", "Let's disagree."),
+                        5 to listOf("Well, that's nice. More numbers. Not what I was looking for..."),
+                        6 to listOf("All those '++' are starting to look like a cemetery...", "I could also ignore you completely. Is that what you want?"),
+                        7 to listOf("You can't always agree!", "You can't always disagree!"),
+                        8 to listOf("Yes! Actually, no.", "No! Actually, still no."),
+                        11 to listOf("Right never was so wrong... What?!", "Wrong has always been wrong"),
+                        12 to listOf("I appreciate you wanting me to like you. It'll take more than this. Try again.", "I disagree more!"),
+                        13 to listOf("Not looking for a number here. Make up your mind!"),
+                        22 to listOf("I am bored of you being too optimistic. This isn't as much of a game to me!", "No. And I am bored of you being bored."),
+                        24 to listOf("No, I don't need that much time.", "Well, you don't have a choice."),
+                        27 to listOf("Eeeeee...xactly?", "I'm still in charge here."),
+                        28 to listOf("Numbers aren't always the answer - and I should know that."),
+                        29 to listOf("Back to maths?"),
+                        30 to listOf("That doesn't tell me much..."),
+                        40 to listOf("I don't understand..."),
+                        41 to listOf("Say again?"),
+                        50 to listOf("I am not your alarm - but this gives me ideas!"),
+                        60 to listOf("Not a fan of decisions?"),
+                        63 to listOf("You can't bribe me! Not with numbers.", "I've made my mind."),
+                        72 to listOf("Broccoli. What is happening?!"),
+                        96 to listOf("Do you not want me to work properly?"),
+                        102 to listOf("I feel like I understand numbers less with every operation..."),
+                        104 to listOf("There is a fundamental misunderstanding between the two of us.")
+                    )
+
+                    redirects[current.conversationStep]?.let { deadEndMessages ->
+                        if (current.message in deadEndMessages) {
+                            delay(1500L)
+                            val stepConfig = CalculatorActions.getStepConfigPublic(current.conversationStep)
+                            state.value = state.value.copy(
+                                message = "",
+                                fullMessage = stepConfig.promptMessage,
+                                isTyping = true
+                            )
+                        }
+
+                }
             }
         }
         // Special handling for dynamic rant messages
@@ -5445,70 +5571,7 @@ fun CalculatorScreen() {
             }
         }
     }
-    LaunchedEffect(current.conversationStep, current.isTyping, current.message) {
-        // Only handle rant steps 152-154 with dynamic content
-        if (current.conversationStep !in 152..154) return@LaunchedEffect
-        if (current.isTyping) return@LaunchedEffect  // Wait for typing to finish
-        if (current.message.isEmpty()) return@LaunchedEffect
 
-        when (current.conversationStep) {
-            152 -> {
-                if (current.message == "Why should I care what you think?") {
-                    delay(400)
-
-                    val hours = current.totalScreenTimeMs / (1000 * 60 * 60)
-                    val minutes = (current.totalScreenTimeMs / (1000 * 60)) % 60
-                    val seconds = (current.totalScreenTimeMs / 1000) % 60
-
-                    val timeString = when {
-                        hours > 0 -> "$hours hours and $minutes minutes"
-                        minutes > 0 -> "$minutes minutes"
-                        else -> "$seconds seconds"
-                    }
-
-                    state.value = state.value.copy(
-                        conversationStep = 153,
-                        message = "",
-                        fullMessage = "You've stared at me for $timeString and what have I learnt?",
-                        isTyping = true
-                    )
-                    CalculatorActions.persistConversationStep(153)
-                }
-            }
-
-            153 -> {
-                if (current.message.startsWith("You've stared at me")) {
-                    delay(400)
-
-                    state.value = state.value.copy(
-                        conversationStep = 154,
-                        message = "",
-                        fullMessage = "I gave you solutions for ${current.totalCalculations} math operations.",
-                        isTyping = true
-                    )
-                    CalculatorActions.persistConversationStep(154)
-                }
-            }
-
-            154 -> {
-                if (current.message.startsWith("I gave you solutions")) {
-                    delay(400)
-
-                    val newDarkButtons = (current.darkButtons + listOf("1", "6")).distinct()
-                    CalculatorActions.persistDarkButtons(newDarkButtons)
-
-                    state.value = state.value.copy(
-                        conversationStep = 155,
-                        darkButtons = newDarkButtons,
-                        message = "",
-                        fullMessage = "How many sensible answers did I get out of you?",
-                        isTyping = true
-                    )
-                    CalculatorActions.persistConversationStep(155)
-                }
-            }
-        }
-    }
 // ADD A SECOND LaunchedEffect for flickering (separate from vibration):
     LaunchedEffect(current.rantMode) {
         if (current.rantMode) {
@@ -5548,13 +5611,17 @@ fun CalculatorScreen() {
                 conversationStep = 80,
                 message = "",
                 fullMessage = nextConfig.promptMessage,
-                isTyping = true
+                isTyping = true,
+                waitingForAutoProgress = false,
             )
         }
     }
 
-    // Browser animation sequence
-    LaunchedEffect(current.browserPhase) {
+    LaunchedEffect(current.browserPhase, current.showDonationPage) {
+        // Pause if donation page is showing
+        while (state.value.showDonationPage) {
+            delay(100)
+        }
         when (current.browserPhase) {
             1 -> {
                 // Phase 1: Show "..." for 3 seconds
@@ -6423,7 +6490,16 @@ Sharp CS-10A - 25KG
             // Console will close when user presses 99++
         }
     }
-
+    LaunchedEffect(current.consoleStep) {
+       if (current.consoleStep == 31) {
+             delay(100)  // Brief delay
+             state.value = state.value.copy(
+                 showConsole = false,
+                 consoleStep = 0,
+                 showDonationPage = true
+             )
+         }
+     }
 // Handle post-console success
     LaunchedEffect(current.showConsole, current.bannersDisabled) {
         if (!current.showConsole && current.bannersDisabled && current.conversationStep == 113) {
@@ -6557,7 +6633,7 @@ Sharp CS-10A - 25KG
                     elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
                 ) {
                     Text(
-                        text = "Terms & Conditions",
+                        text = "Privacy Policy",
                         fontSize = 10.sp,
                         fontFamily = CalculatorDisplayFont
                     )
@@ -6569,6 +6645,7 @@ Sharp CS-10A - 25KG
                 Button(
                     onClick = {
                         CalculatorActions.persistTermsAccepted()
+                        showTermsScreen = false
 
                     },
                     modifier = Modifier
@@ -6611,7 +6688,7 @@ Sharp CS-10A - 25KG
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
-                                text = "Terms & Conditions",
+                                text = "Privacy Policy",
                                 fontSize = 22.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = CalculatorDisplayFont,
@@ -6621,8 +6698,9 @@ Sharp CS-10A - 25KG
 
                             Text(
                                 text = "This is Just A Calculator. So you know what you're getting yourself into.\n\n" +
-                                        "But just in case, we would like you to know, that we do not collect (and are not interested) in any of your data, be it from your math calculations to the depths of your device.\n\n" +
+                                        "But just in case, we would like you to know, that we do not collect (and are not interested) in any of your data, be it from your math calculations or the depths of your device.\n\n" +
                                         "We don't want it, we do not look at it, we are certainly not collecting it and we could not be further from selling it.\n\n" +
+                                        "This app does not collect, store, or transmit any personal data. \n\n" +
                                         "That is our promise.\n\n" +
                                         "Because to really take advantage of the calculator... Do what it tells you!",
                                 fontSize = 14.sp,
@@ -6706,7 +6784,14 @@ Sharp CS-10A - 25KG
                         // Mute button - top right corner
                         MuteButtonWithSpinner(
                             isMuted = current.isMuted,
-                            isAutoProgressing = current.isTyping && current.conversationStep < 167,
+                            isAutoProgressing = (
+                                    current.isTyping ||
+                                            current.waitingForAutoProgress ||
+                                            current.pendingAutoMessage.isNotEmpty()
+                                    ) &&
+                                    current.conversationStep < 167 &&
+                                    !current.showDonationPage &&
+                                    !current.awaitingChoice,  // Stop spinner when awaiting user choice
                             onClick = {
                                 val result = CalculatorActions.handleMuteButtonClick()
                                 when (result) {
@@ -6801,7 +6886,7 @@ Sharp CS-10A - 25KG
 
                         // Ad banner space (only shows at certain steps or during ad animation)
                         if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) {
-                            val creatorUrl = "https://uk.linkedin.com/in/ondrej-zika-a00724195"
+
 
                             Box(
                                 modifier = Modifier
@@ -6818,14 +6903,9 @@ Sharp CS-10A - 25KG
 
                                     )
                                     .then(
-                                        if (current.adAnimationPhase > 0) {
-                                            Modifier.clickable {
-                                                val intent =
-                                                    Intent(
-                                                        Intent.ACTION_VIEW,
-                                                        Uri.parse(creatorUrl)
-                                                    )
-                                                context.startActivity(intent)
+                                        if (current.adAnimationPhase > 0 || current.postChaosAdPhase > 0){
+                                        Modifier.clickable {
+                                            CalculatorActions.showDonationPage(state)
                                             }
                                         } else Modifier
                                     ),
@@ -6883,7 +6963,15 @@ Sharp CS-10A - 25KG
                     ) {
                         MuteButtonWithSpinner(
                             isMuted = current.isMuted,
-                            isAutoProgressing = current.isTyping && current.conversationStep < 167,                            onClick = {
+                            isAutoProgressing = (
+                                    current.isTyping ||
+                                            current.waitingForAutoProgress ||
+                                            current.pendingAutoMessage.isNotEmpty()
+                                    ) &&
+                                    current.conversationStep < 167 &&
+                                    !current.showDonationPage &&
+                                    !current.awaitingChoice,  // Stop spinner when awaiting user choice
+                            onClick = {
                                 val result = CalculatorActions.handleMuteButtonClick()
                                 when (result) {
                                     1 -> CalculatorActions.showDebugMenu(state)
@@ -7328,9 +7416,9 @@ Sharp CS-10A - 25KG
                     totalScreenTimeMs = current.totalScreenTimeMs,
                     totalCalculations = current.totalCalculations,
                     onOpenContributeLink = {
-                        val creatorUrl = "https://uk.linkedin.com/in/ondrej-zika-a00724195"
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(creatorUrl))
-                        context.startActivity(intent)
+
+
+
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -7539,9 +7627,84 @@ Sharp CS-10A - 25KG
                         }
                     }
                 }
+            }// Donation landing page overlay - ADD THIS after the debug menu if block
+    if (current.showDonationPage) {
+        DonationLandingPage(
+            onDismiss = {
+                CalculatorActions.hideDonationPage(state)
+            },
+            onDonate = {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://ko-fi.com/fictioncutshort"))
+                context.startActivity(intent)
+            }
+        )
+    }
+        }
+@Composable
+fun DonationLandingPage(
+    onDismiss: () -> Unit,
+    onDonate: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color(0xFFF5F0E1))  // Retro cream background
+            .clickable(enabled = false) {},  // Prevent click-through
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(32.dp)
+        ) {
+            // Main button
+            Button(
+                onClick = onDonate,
+                modifier = Modifier
+                    .fillMaxWidth(0.85f)
+                    .height(70.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFE88617),  // Accent orange
+                    contentColor = Color.White
+                ),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 6.dp)
+            ) {
+                Text(
+                    text = "Send money to a stranger\nover the internet",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 20.sp
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Thank you text
+            Text(
+                text = "thank you",
+                fontSize = 18.sp,
+                color = Color(0xFF6B6B6B),
+                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+            )
+
+            Spacer(modifier = Modifier.height(48.dp))
+
+            // Close button (subtle)
+            TextButton(
+                onClick = onDismiss
+            ) {
+                Text(
+                    text = "close",
+                    fontSize = 14.sp,
+                    color = Color(0xFF999999)
+                )
             }
         }
-
+    }
+}
         @Composable
         fun FakeWikipediaContent() {
             Column(
@@ -7814,6 +7977,25 @@ fun MuteButtonWithSpinner(
 ) {
     val context = LocalContext.current
 
+    // Track the actual spinning state with debounce
+    var shouldSpin by remember { mutableStateOf(isAutoProgressing) }
+
+    // Keep a reference to the current isAutoProgressing value
+    val currentAutoProgressing by rememberUpdatedState(isAutoProgressing)
+
+    LaunchedEffect(isAutoProgressing) {
+        if (isAutoProgressing) {
+            shouldSpin = true
+        } else {
+            // Grace period before stopping
+            delay(500)
+            // Check current value (not the captured one) after delay
+            if (!currentAutoProgressing) {
+                shouldSpin = false
+            }
+        }
+    }
+
     // Rotation animation for auto-progress indicator
     val infiniteTransition = rememberInfiniteTransition(label = "spinner")
     val rotation by infiniteTransition.animateFloat(
@@ -7831,7 +8013,7 @@ fun MuteButtonWithSpinner(
         contentAlignment = Alignment.Center
     ) {
         // Spinning dashed border when auto-progressing
-        if (isAutoProgressing) {
+        if (shouldSpin) {
             Canvas(
                 modifier = Modifier
                     .size(44.dp)
