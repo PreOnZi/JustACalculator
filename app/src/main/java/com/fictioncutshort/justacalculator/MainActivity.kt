@@ -6756,7 +6756,9 @@ Sharp CS-10A - 25KG
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(32.dp)
+                            .windowInsetsTopHeight(
+                                WindowInsets.safeDrawing
+                            )
                             .background(
                                 if (current.invertedColors) Color(0xFF1A1A1A) else Color(0xFF4A3728)
                             )
@@ -6876,7 +6878,9 @@ Sharp CS-10A - 25KG
                     Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(32.dp)
+                                .windowInsetsTopHeight(
+                                    WindowInsets.safeDrawing
+                                )
                                 .background(
                                     if (current.invertedColors) Color(0xFF1A1A1A) else Color(
                                         0xFF4A3728
@@ -6953,13 +6957,13 @@ Sharp CS-10A - 25KG
                         }
                     }
 
-
+                    val topWindowInset = WindowInsets.safeDrawing.asPaddingValues().calculateTopPadding();
                     // Main calculator content
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(horizontal = 15.dp)
-                            .padding(top = if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) 82.dp else 32.dp)
+                            .padding(top = if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) topWindowInset.plus(50.dp) else topWindowInset)
                     ) {
                         MuteButtonWithSpinner(
                             isMuted = current.isMuted,
