@@ -6869,7 +6869,6 @@ Sharp CS-10A - 25KG
                         fallingY = current.fallingLetterY,
                         selectedCells = current.selectedCells,
                         isSelecting = current.isSelectingWord,
-                        formedWords = current.formedWords,
                         isPaused = current.wordGamePaused,
                         draggingCell = current.draggingCell,
                         dragOffsetX = current.dragOffsetX,
