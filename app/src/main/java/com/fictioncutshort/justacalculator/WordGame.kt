@@ -116,7 +116,7 @@ object WordCategories {
         "summer", "autumn", "fall", "winter", "spring", "all", "none"
     )
 
-
+    val invalidSeasonResponses = setOf("all", "none")
 
     // === CUISINES ===
     // Non-spicy cuisines
@@ -201,9 +201,14 @@ object WordCategories {
     fun isValidColor(word: String): Boolean = word.lowercase() in validColors
     fun isNonColor(word: String): Boolean = word.lowercase() in nonColorResponses
     fun isValidSeason(word: String): Boolean = word.lowercase() in validSeasons
+    fun isInvalidSeason(word: String): Boolean = word.lowercase() in invalidSeasonResponses
     fun isSpicyCuisine(word: String): Boolean = word.lowercase() in spicyCuisines
     fun isNonSpicyCuisine(word: String): Boolean = word.lowercase() in nonSpicyCuisines
+    fun isValidCuisine(word: String): Boolean = isSpicyCuisine(word) || isNonSpicyCuisine(word)
+    fun isInvalidCuisine(word: String): Boolean = word.lowercase() in invalidCuisineResponses
+    fun isDeathResponse(word: String): Boolean = word.lowercase() in deathResponses
     fun isWalkFrequency(word: String): Boolean = word.lowercase() in walkFrequencies
+    fun isMathsOpinion(word: String): Boolean = word.lowercase() in mathsOpinions
 }
 
 // Letter generator with weighted distribution for word formation
@@ -219,6 +224,22 @@ object LetterGenerator {
 
     private val weightedLetters: List<Char> by lazy {
         letterWeights.flatMap { (letter, weight) -> List(weight) { letter } }
+    }
+
+    // Generate letters that help form common response words
+    fun generateHelpfulLetters(): List<Char> {
+        val helpfulSequence = listOf(
+            'I', 'A', 'M', 'W', 'E', 'L', 'L',
+            'I', 'A', 'M', 'G', 'O', 'O', 'D',
+            'I', 'A', 'M', 'F', 'I', 'N', 'E',
+            'O', 'K', 'A', 'Y',
+            'G', 'O', 'O', 'D', 'G', 'R', 'E', 'A', 'T',
+            'B', 'A', 'D', 'S', 'A', 'D', 'N', 'O', 'T',
+            'T', 'I', 'R', 'E', 'D', 'H', 'A', 'P', 'P', 'Y',
+            'Y', 'E', 'S', 'N', 'O',
+            'A', 'E', 'I', 'O', 'U', 'L', 'N', 'S', 'T', 'R'
+        )
+        return helpfulSequence.shuffled()
     }
 
     fun getRandomLetter(): Char = weightedLetters.random()
@@ -241,7 +262,11 @@ object LetterGenerator {
     }
 }
 
-
+// Game grid cell
+data class GridCell(
+    val letter: Char? = null,
+    val isSelected: Boolean = false
+)
 
 @Composable
 fun WordGameScreen(
@@ -251,6 +276,7 @@ fun WordGameScreen(
     fallingY: Int,
     selectedCells: List<Pair<Int, Int>>,
     isSelecting: Boolean,
+    formedWords: List<String>,
     isPaused: Boolean,
     draggingCell: Pair<Int, Int>? = null,
     dragOffsetX: Float = 0f,
@@ -291,6 +317,7 @@ fun WordGameScreen(
             ) {
                 cellSizeDp = minOf(this.maxWidth / 8, this.maxHeight / 12)
                 val cellSizePx = with(density) { cellSizeDp.toPx() }
+                cellSizePxState = cellSizePx
 
                 // Use preview grid when dragging, otherwise use actual grid
                 val displayGrid = previewGrid ?: gameGrid
@@ -625,10 +652,41 @@ fun removeLettersAndShift(
     return newGrid.map { it.toList() }
 }
 
+fun isGameOver(grid: List<List<Char?>>): Boolean {
+    return grid[0].any { it != null }
+}
 
+fun findLandingRow(grid: List<List<Char?>>, col: Int, currentRow: Int): Int {
+    var landingRow = currentRow
+    for (row in currentRow + 1 until 12) {
+        if (grid[row][col] != null) {
+            break
+        }
+        landingRow = row
+    }
+    return landingRow
+}
 
 fun placeLetter(grid: List<List<Char?>>, row: Int, col: Int, letter: Char): List<List<Char?>> {
     val newGrid = grid.map { it.toMutableList() }.toMutableList()
     newGrid[row][col] = letter
+    return newGrid.map { it.toList() }
+}
+
+fun applyGravityToGrid(grid: List<List<Char?>>): List<List<Char?>> {
+    val newGrid = MutableList(12) { MutableList<Char?>(8) { null } }
+
+    for (col in 0..7) {
+        val letters = mutableListOf<Char>()
+        for (row in 11 downTo 0) {
+            grid.getOrNull(row)?.getOrNull(col)?.let { letters.add(it) }
+        }
+        var placeRow = 11
+        for (letter in letters) {
+            newGrid[placeRow][col] = letter
+            placeRow--
+        }
+    }
+
     return newGrid.map { it.toList() }
 }
