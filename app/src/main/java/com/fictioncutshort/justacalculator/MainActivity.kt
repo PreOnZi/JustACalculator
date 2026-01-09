@@ -89,12 +89,9 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.geometry.Size
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.ui.platform.LocalDensity
+
 
 
 // Vibration helper function
@@ -158,7 +155,7 @@ fun scheduleNotification(context: Context, delayMs: Long = 5000) {
         } else {
             alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
         }
-    } catch (e: Exception) {
+    } catch ( _: Exception) {
         // Fallback to Handler if AlarmManager fails
         Handler(Looper.getMainLooper()).postDelayed({
             sendReadyNotification(context)
@@ -500,7 +497,7 @@ object CalculatorActions {
 
     fun endDraggingLetter(state: MutableState<CalculatorState>) {
         val current = state.value
-        val dragging = current.draggingCell ?: return
+
 
         // Apply the preview grid as the new grid
         val newGrid = current.dragPreviewGrid ?: current.wordGameGrid
@@ -526,9 +523,7 @@ object CalculatorActions {
         )
     }
 
-    fun setCellSizePx(state: MutableState<CalculatorState>, size: Float) {
-        state.value = state.value.copy(cellSizePx = size)
-    }
+
 
     // Helper: Calculate preview grid with iPhone-style swapping
     private fun calculatePreviewGrid(
@@ -561,29 +556,6 @@ object CalculatorActions {
         return applyGravityToGrid(newGrid.map { it.toList() })
     }
 
-    // Helper: Find nearest empty cell to target
-    private fun findNearestEmptyCell(
-        grid: List<List<Char?>>,
-        targetRow: Int,
-        targetCol: Int,
-        excludeRow: Int,
-        excludeCol: Int
-    ): Pair<Int, Int>? {
-        // Search in expanding radius
-        for (radius in 1..5) {
-            for (dr in -radius..radius) {
-                for (dc in -radius..radius) {
-                    if (kotlin.math.abs(dr) != radius && kotlin.math.abs(dc) != radius) continue
-                    val r = (targetRow + dr).coerceIn(0, 11)
-                    val c = (targetCol + dc).coerceIn(0, 7)
-                    if (grid[r][c] == null || (r == excludeRow && c == excludeCol)) {
-                        return Pair(r, c)
-                    }
-                }
-            }
-        }
-        return null
-    }
 
     // Helper: Apply gravity to make letters fall down
     private fun applyGravityToGrid(grid: List<List<Char?>>): List<List<Char?>> {
@@ -658,7 +630,7 @@ object CalculatorActions {
             current.wordGameGrid,
             landingY,
             current.fallingLetterX,
-            current.fallingLetter!!
+            current.fallingLetter
         )
 
         state.value = current.copy(
@@ -672,8 +644,6 @@ object CalculatorActions {
     fun selectWordGameCell(state: MutableState<CalculatorState>, row: Int, col: Int) {
         val current = state.value
         if (!current.wordGameActive) return
-
-        val letter = current.wordGameGrid[row][col] ?: return
 
         val cellPair = Pair(row, col)
 
@@ -751,7 +721,7 @@ object CalculatorActions {
 
         val words = current.formedWords
         val lastWord = words.lastOrNull()?.lowercase() ?: ""
-        val allWordsLower = words.map { it.lowercase() }
+
 
         // Helper to create state with cleared grid (for question transitions)
         fun clearedGridState(
@@ -1282,12 +1252,6 @@ object CalculatorActions {
             step in 81..88 -> 80
             step == 92 -> 89
             step == 100 -> 89
-            step == 901 -> 89
-            step in 911..913 -> 89
-            step in 95..98 -> 96
-            step in 971..981 -> 99
-            step in 991..101 -> 982
-            step == 191 -> 19
             else -> INTERACTIVE_STEPS.filter { it <= step }.maxOrNull() ?: 0
         }
     }
@@ -1720,7 +1684,7 @@ object CalculatorActions {
         }
 
         // Check if console code is entered - works ANYTIME (secret cheat code)
-        if (!current.showConsole && !current.isMuted && action == "+") {
+        if (!current.isMuted && action == "+") {
             val now = System.currentTimeMillis()
             if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
                 val enteredNumber = current.number1.trimEnd('.')
@@ -1752,7 +1716,7 @@ object CalculatorActions {
         }
 
         // Step 112 specific handling - console code entry
-        if (current.conversationStep == 112 && !current.showConsole) {
+        if (current.conversationStep == 112 ) {
             val now = System.currentTimeMillis()
 
             if (action == "+") {
@@ -1820,7 +1784,7 @@ object CalculatorActions {
 
 
 // Check if console code is entered - works ANYTIME (secret cheat code)
-        if (!current.showConsole && !current.isMuted && action == "+") {
+        if (!current.isMuted && action == "+") {
             val now = System.currentTimeMillis()
             if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
                 val enteredNumber = current.number1.trimEnd('.')
@@ -2500,14 +2464,6 @@ object CalculatorActions {
         persistMessage(message)
     }
 
-    fun updateTypingMessage(state: MutableState<CalculatorState>, displayedText: String, isComplete: Boolean) {
-        val current = state.value
-        state.value = current.copy(
-            message = displayedText,
-            isTyping = !isComplete,
-            isLaggyTyping = if (isComplete) false else current.isLaggyTyping
-        )
-    }
 
     private fun handleNumberConfirmation(state: MutableState<CalculatorState>) {
         val current = state.value
@@ -3901,7 +3857,6 @@ object CalculatorActions {
             return when {
                 currentStep >= 112 -> 112  // Console code entry
                 currentStep >= 111 -> 111  // Downloads permission
-                currentStep >= 107 -> 107  // Post-chaos
                 else -> 107
             }
         }
@@ -4829,8 +4784,6 @@ FictionCutShort
 }
 @Composable
 fun CalculatorScreen() {
-    var sessionStartTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
-
 
 
     val context = LocalContext.current
@@ -4844,7 +4797,6 @@ fun CalculatorScreen() {
     LaunchedEffect(Unit) {
         while (true) {
             delay(1000)  // Update every second
-            val elapsed = System.currentTimeMillis() - sessionStartTime
             val newTotal = state.value.totalScreenTimeMs + 1000
             state.value = state.value.copy(totalScreenTimeMs = newTotal)
             // Persist every 10 seconds to avoid too many writes
@@ -4881,22 +4833,6 @@ fun CalculatorScreen() {
         )
     }
 
-
-
-    fun isInAutoProgressSequence(step: Int): Boolean {
-        return step in 81..88 ||
-                step in 92..95 ||
-                step == 100 ||
-                step in 105..110 ||
-                step in 116..119 ||
-                step in 121..131 ||
-                step in 133..136 ||
-                step in 141..145 ||
-                step in 150..166 ||
-                step == 191 ||          // Camera active
-                step == 20 ||           // Camera timeout (auto-progresses via pendingAutoMessage)
-                step in listOf(901, 911, 912, 913, 1171, 1172)
-    }
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -5062,7 +4998,7 @@ fun CalculatorScreen() {
                 delay(baseDelay + randomExtra)
                 vibrate(context, 15, 80)
                 state.value = state.value.copy(
-                    message = fullText.substring(0, i),
+                    message = fullText.substring(i),
                     isLaggyTyping = if (i == fullText.length) false else state.value.isLaggyTyping
                 )
             }
@@ -5246,7 +5182,7 @@ fun CalculatorScreen() {
                 }
 
                 // Only process when typing is complete and there's a message
-                if (!current.isTyping && current.message.isNotEmpty()) {
+                if (current.message.isNotEmpty()) {
 
                     // Check for auto-progress messages
                     autoProgressMessages[current.message]?.let { (delayTime, nextStep) ->
@@ -5307,7 +5243,6 @@ fun CalculatorScreen() {
                     // Step 163 -> 164 (after time-based message)
                     // We can't match exact message since it's dynamic, so match by step
                     if (current.conversationStep == 163 &&
-                        !current.isTyping &&
                         current.message.isNotEmpty() &&
                         !current.message.startsWith("It's been fun")) {  // Make sure we're not at step 164's message
                         delay(5000)
@@ -5573,7 +5508,7 @@ fun CalculatorScreen() {
                                 curr.wordGameGrid,
                                 landingY,
                                 curr.fallingLetterX,
-                                curr.fallingLetter!!
+                                curr.fallingLetter
                             )
                             state.value = curr.copy(
                                 wordGameGrid = newGrid,
@@ -5652,8 +5587,8 @@ fun CalculatorScreen() {
         if (current.rantMode) {
             // Vibration loop - runs independently
             while (state.value.rantMode) {
-                vibrate(context, 30, kotlin.random.Random.nextInt(30, 150))
-                delay(kotlin.random.Random.nextLong(100, 300))
+                vibrate(context, 30, Random.nextInt(30, 150))
+                delay(Random.nextLong(100, 300))
             }
         }
     }
@@ -5664,12 +5599,12 @@ fun CalculatorScreen() {
             // Flicker loop - runs independently from vibration
             while (state.value.rantMode) {
                 // Random delay before next flicker (not synced with vibration)
-                delay(kotlin.random.Random.nextLong(200, 800))
+                delay(Random.nextLong(200, 800))
 
                 // 40% chance to flicker each cycle
-                if (kotlin.random.Random.nextFloat() < 0.4f) {
+                if (Random.nextFloat() < 0.4f) {
                     state.value = state.value.copy(flickerEffect = true)
-                    delay(kotlin.random.Random.nextLong(40, 100))
+                    delay(Random.nextLong(40, 100))
                     state.value = state.value.copy(flickerEffect = false)
                 }
             }
@@ -5729,7 +5664,7 @@ fun CalculatorScreen() {
                 val searchText = "calculator history"
                 for (i in 1..searchText.length) {
                     delay(80)  // Typing speed
-                    state.value = state.value.copy(browserSearchText = searchText.substring(0, i))
+                    state.value = state.value.copy(browserSearchText = searchText.substring(i))
                 }
                 delay(500)  // Brief pause after typing
                 // Phase 3: Show "searching" state
@@ -6743,7 +6678,6 @@ Sharp CS-10A - 25KG
                 Button(
                     onClick = {
                         CalculatorActions.persistTermsAccepted()
-                        showTermsScreen = false
 
                     },
                     modifier = Modifier
@@ -7957,7 +7891,7 @@ fun DonationLandingPage(
                         val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
                         cameraProvider.unbindAll()
                         cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview)
-                    } catch (e: Exception) {
+                    } catch (e:Exception) {
                         Log.e("CameraPreview", "Camera binding failed", e)
                     }
                 }, ContextCompat.getMainExecutor(context))
@@ -8798,7 +8732,7 @@ fun MuteButtonWithSpinner(
                         val appFile = File(context.applicationInfo.sourceDir)
                         val sizeInMB = appFile.length() / (1024.0 * 1024.0)
                         String.format("%.2f MB", sizeInMB)
-                    } catch (e: Exception) {
+                    } catch ( _: Exception) {
                         "Unknown"
                     }
 
@@ -9105,8 +9039,8 @@ fun MuteButtonWithSpinner(
         // Rotate point around Y axis
         fun rotateY(point: Point3D, angle: Float): Point3D {
             val rad = Math.toRadians(angle.toDouble())
-            val cos = Math.cos(rad).toFloat()
-            val sin = Math.sin(rad).toFloat()
+            val cos = kotlin.math.cos(rad).toFloat()
+            val sin = kotlin.math.sin(rad).toFloat()
             return Point3D(
                 point.x * cos - point.z * sin,
                 point.y,
@@ -9117,8 +9051,8 @@ fun MuteButtonWithSpinner(
         // Rotate point around X axis
         fun rotateX(point: Point3D, angle: Float): Point3D {
             val rad = Math.toRadians(angle.toDouble())
-            val cos = Math.cos(rad).toFloat()
-            val sin = Math.sin(rad).toFloat()
+            val cos = kotlin.math.cos(rad).toFloat()
+            val sin = kotlin.math.sin(rad).toFloat()
             return Point3D(
                 point.x,
                 point.y * cos - point.z * sin,
