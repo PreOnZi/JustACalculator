@@ -10,7 +10,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -91,6 +90,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.core.net.toUri
 
 
 
@@ -1468,11 +1468,11 @@ object CalculatorActions {
         val shouldStartWordGame = chapter.startStep in 117..149
         val shouldStartRant = chapter.startStep >= 150 && chapter.startStep < 167
         // Set browser phase appropriately
-        val browserPhase = when {
-            chapter.startStep == 80 -> 10  // Wikipedia countdown
-            chapter.startStep in 81..88 -> 0  // Browser showing
-            chapter.startStep == 89 -> 22  // Confrontation
-            chapter.startStep in 93..98 -> 31  // Post-crisis sequence
+        val browserPhase = when (chapter.startStep){
+            80 -> 10  // Wikipedia countdown
+            in 81..88 -> 0  // Browser showing
+            89 -> 22  // Confrontation
+            in 93..98 -> 31  // Post-crisis sequence
             else -> 0
         }
 
@@ -6977,7 +6977,7 @@ Sharp CS-10A - 25KG
 
                                     current.adAnimationPhase == 2 -> {
                                         Text(
-                                            text = "💰 EARN ${'$'}500/DAY FROM HOME! 💰",
+                                            text = "💰 EARN \"\"\$500\"\"/DAY FROM HOME! 💰",
                                             fontSize = 14.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = Color.White
@@ -7672,9 +7672,10 @@ Sharp CS-10A - 25KG
                 CalculatorActions.hideDonationPage(state)
             },
             onDonate = {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://ko-fi.com/fictioncutshort"))
+                val intent = Intent(Intent.ACTION_VIEW, "https://ko-fi.com/fictioncutshort".toUri())
                 context.startActivity(intent)
             }
+
         )
     }
         }
@@ -8400,12 +8401,12 @@ fun MuteButtonWithSpinner(
                         listOf("0", ".", "=", "")
                     )
 
-                    fun getKeyColor(key: String): Color = when {
-                        key in "0".."9" -> Color(0xFFE8E4DA)
-                        key in listOf("+", "-", "*", "/", "=", "%") -> Color(0xFF6B6B6B)
-                        key == "C" -> Color(0xFFC9463D)
-                        key == "DEL" -> Color(0xFFD4783C)
-                        key == "." -> Color(0xFFE8E4DA)
+                    fun getKeyColor(key: String): Color = when (key){
+                        in "0".."9" -> Color(0xFFE8E4DA)
+                        in listOf("+", "-", "*", "/", "=", "%") -> Color(0xFF6B6B6B)
+                        "C" -> Color(0xFFC9463D)
+                        "DEL" -> Color(0xFFD4783C)
+                         "." -> Color(0xFFE8E4DA)
                         else -> Color(0xFF333333)
                     }
 
