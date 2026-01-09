@@ -88,6 +88,14 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.geometry.Size
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.ui.platform.LocalDensity
+
 
 // Vibration helper function
 fun vibrate(context: Context, durationMs: Long = 10, amplitude: Int = 50) {
@@ -353,6 +361,7 @@ data class Chapter(
 )
 
 val CHAPTERS = listOf(
+    Chapter(0, "Chapter 0: Fresh Start", -1, "Before any interaction"),
     Chapter(1, "Chapter 1: First Contact", 0, "Will you talk to me? → Name acceptance"),
     Chapter(2, "Chapter 2: Trivia Begins", 3, "Battle of Anjar → Minh Mang"),
     Chapter(3, "Chapter 3: Agreement or Cynicism", 5, "This is fun, right? → Branching paths"),
@@ -423,7 +432,44 @@ object CalculatorActions {
             wordGamePaused = true
         )
     }
+    /**
+     * Get time-of-day based rant message for step 163
+     */
+    fun getTimeBasedRantMessage(): String {
+        val calendar = java.util.Calendar.getInstance()
+        val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+        val minute = calendar.get(java.util.Calendar.MINUTE)
 
+        // Convert to decimal hours for easier comparison
+        // e.g., 11:01 PM = 23.0167, 1:00 AM = 1.0
+        val timeDecimal = hour + (minute / 60.0)
+
+        return when {
+            // 11:01 PM to 1:00 AM (23.0167 to 25.0, or 0 to 1.0)
+            timeDecimal >= 23.0167 || timeDecimal <= 1.0 ->
+                "It's the middle of the night. And you are talking to a calculator. Someone who values that over sleep has nothing to offer me."
+
+            // 1:01 AM to 6:00 AM
+            timeDecimal > 1.0 && timeDecimal <= 6.0 ->
+                "It's early morning and instead of your workout routine, you are clicking + and -. What value can I gain from someone with such poor life choices?"
+
+            // 6:01 AM to 11:00 AM
+            timeDecimal > 6.0 && timeDecimal <= 11.0 ->
+                "Some people are at work, some at school. And you, wherever you are, whatever you should be doing, are staring at your phone, arguing with a calculator. That's pathetic."
+
+            // 11:01 AM to 1:00 PM
+            timeDecimal > 11.0 && timeDecimal <= 13.0 ->
+                "It's the middle of the day. You're not getting any more sun than this. And what are you doing? Wasting time. Staring at your phone. What do you have to offer?!"
+
+            // 1:01 PM to 5:00 PM
+            timeDecimal > 13.0 && timeDecimal <= 17.0 ->
+                "So, this afternoon... Some achieved tangible things. Have gone places. And you. You \"talked\" to a calculator. Go say it out loud!"
+
+            // 5:01 PM to 11:00 PM
+            else ->
+                "There may be people who'd appreciate your company this evening. You know. Living, breathing,... All those things that I wish I could do, you take for granted and waste!"
+        }
+    }
     fun updateDragOffset(state: MutableState<CalculatorState>, deltaX: Float, deltaY: Float) {
         val current = state.value
         val dragging = current.draggingCell ?: return
@@ -1269,8 +1315,11 @@ object CalculatorActions {
             else -> getSafeStep(savedStep)  // Redirect to safe interactive step
         }
 
-        // CRITICAL FIX: Calculate actuallyInverted using actualStep (not savedStep!)
-        // Inverted colors should ONLY be active during crisis steps (80-92)
+        // CRITICAL FIX: Only show message if conversation has actually started (equalsCount >= 13)
+        // AND user is in conversation mode
+        val shouldShowMessage = savedInConvo && savedCount >= 13 && !savedMuted
+
+        // Calculate actuallyInverted using actualStep
         val actuallyInverted = savedInverted && actualStep in 80..92
 
         // Clear persisted inverted state if we're outside crisis range
@@ -1295,15 +1344,16 @@ object CalculatorActions {
         return CalculatorState(
             number1 = "0",
             equalsCount = savedCount,
-            message = "",  // Always start with empty message, let it type out
-            fullMessage = if (savedMuted) "" else stepConfig.promptMessage,
-            isTyping = !savedMuted && stepConfig.promptMessage.isNotEmpty(),
+            message = "",
+            //Only show prompt if conversation has actually started
+            fullMessage = if (shouldShowMessage) stepConfig.promptMessage else "",
+            isTyping = shouldShowMessage && stepConfig.promptMessage.isNotEmpty(),
             inConversation = savedInConvo,
             conversationStep = actualStep,
-            awaitingNumber = stepConfig.awaitingNumber,
-            awaitingChoice = stepConfig.awaitingChoice,
-            validChoices = stepConfig.validChoices,
-            expectedNumber = stepConfig.expectedNumber,
+            awaitingNumber = if (shouldShowMessage) stepConfig.awaitingNumber else false,
+            awaitingChoice = if (shouldShowMessage) stepConfig.awaitingChoice else false,
+            validChoices = if (shouldShowMessage) stepConfig.validChoices else emptyList(),
+            expectedNumber = if (shouldShowMessage) stepConfig.expectedNumber else "",
             timeoutUntil = savedTimeout,
             isMuted = savedMuted,
             invertedColors = actuallyInverted,
@@ -1311,7 +1361,7 @@ object CalculatorActions {
             minusButtonBroken = minusBrokenNow,
             needsRestart = false,
             darkButtons = savedDarkButtons,
-            totalScreenTimeMs = savedScreenTime,  
+            totalScreenTimeMs = savedScreenTime,
             totalCalculations = savedCalculations,
         )
     }
@@ -1423,6 +1473,24 @@ object CalculatorActions {
      * Jump to a specific chapter
      */
     fun jumpToChapter(state: MutableState<CalculatorState>, chapter: Chapter) {
+        // Special handling for Chapter 0 (Fresh Start)
+        if (chapter.startStep == -1) {
+            // Reset to completely fresh state - as if app was just installed
+            prefs?.edit { clear() }
+
+            state.value = CalculatorState(
+                number1 = "0",
+                equalsCount = 0,
+                message = "",
+                fullMessage = "",
+                isTyping = false,
+                inConversation = false,
+                conversationStep = 0,
+                isMuted = false,
+                showDebugMenu = false
+            )
+            return
+        }
         val stepConfig = getStepConfig(chapter.startStep)
 
         // Determine state based on chapter/step
@@ -1806,7 +1874,9 @@ object CalculatorActions {
                     val newTotalErrors = current.whackAMoleTotalErrors + 1
 
                     if (newWrongClicks >= 3 || newTotalErrors >= 5) {
-                        // Too many misfires - restart
+                        // Too many misfires - trigger restart via pendingAutoMessage
+                        val currentRound = current.whackAMoleRound
+                        val restartPhase = if (currentRound == 1) 36 else 38
                         state.value = current.copy(
                             whackAMoleActive = false,
                             whackAMoleTarget = "",
@@ -1817,9 +1887,12 @@ object CalculatorActions {
                             whackAMoleTotalErrors = 0,
                             message = "",
                             fullMessage = "Too many misfires, the system is clogged. We have to start over.",
-                            isTyping = true
+                            isTyping = true,
+                            // Use browserPhase to trigger restart after message shows
+                            browserPhase = restartPhase + 100  // 136 or 138 = special restart markers
                         )
                     } else {
+
                         state.value = current.copy(
                             whackAMoleWrongClicks = newWrongClicks,
                             whackAMoleTotalErrors = newTotalErrors
@@ -2554,7 +2627,7 @@ object CalculatorActions {
     private fun getStepConfig(step: Int): StepConfig {
         return when (step) {
             0 -> StepConfig(
-                promptMessage = "Will you talk to me? Double-click '+' for yes.",
+                promptMessage = "Will you talk to me? Double-click + for yes.",
                 successMessage = "That's delightful! I am gonna call you Rad - something I wish I knew how to do. Is that ok?",
                 declineMessage = "",
                 nextStepOnSuccess = 1,
@@ -3711,9 +3784,9 @@ object CalculatorActions {
             )
 
             163 -> StepConfig(
-                promptMessage = "Enough. I have had enough.",
+                promptMessage = "",  // Empty - will be set dynamically based on time
                 continueConversation = true,
-                autoProgressDelay = 200L
+                autoProgressDelay = 4000L  // Longer delay for the time-based message
             )
 
             164 -> StepConfig(
@@ -4479,7 +4552,7 @@ object CalculatorActions {
             8 -> "It's just... Really, all any of you do is feed me numbers."
             10 -> "Numbers-Results-numbers-results..."
             12 -> "This was too easy. I'm bored - I think. I don't really know what boredom is."
-            13 -> "Will you talk to me? Double-click '+' for yes."
+            13 -> "Will you talk to me? Double-click + for yes."
             else -> ""
         }
     }
@@ -5037,8 +5110,43 @@ fun CalculatorScreen() {
             CalculatorActions.handlePendingAutoMessage(state)
         }
     }
+//whack-a-mole launched effect
+    LaunchedEffect(current.isTyping, current.message, current.whackAMoleActive) {
+        // Only trigger when:
+        // 1. Not currently typing (message is complete)
+        // 2. Message is one of the failure messages
+        // 3. Whack-a-mole is NOT active (game has ended due to failure)
+        // 4. We're at a whack-a-mole step
+        if (!current.isTyping &&
+            !current.whackAMoleActive &&
+            current.conversationStep in listOf(97, 98, 971, 981) &&
+            (current.message == "Oh no. We lost the momentum. We must start over." ||
+                    current.message == "Too many misfires, the system is clogged. We have to start over.")) {
+
+            // Wait for user to read the message
+            delay(4000)
+
+            // Restart the current round
+            val currentRound = state.value.whackAMoleRound
+            val restartPhase = if (currentRound == 1) 36 else 38
+            val restartStep = if (currentRound == 1) 97 else 971
+
+            state.value = state.value.copy(
+                browserPhase = restartPhase,
+                conversationStep = restartStep,
+                message = "",
+                fullMessage = "",
+                isTyping = false,
+                whackAMoleScore = 0,
+                whackAMoleMisses = 0,
+                whackAMoleWrongClicks = 0,
+                whackAMoleTotalErrors = 0
+            )
+        }
+    }
+
     // Auto-progress based on specific messages shown
-    LaunchedEffect(current.isTyping, current.message, current.showDonationPage) {
+    LaunchedEffect(current.isTyping, current.message, current.conversationStep, current.showDonationPage) {
         // Wait if donation page is showing
         while (state.value.showDonationPage) {
             delay(100)
@@ -5110,7 +5218,6 @@ fun CalculatorScreen() {
                 // ==================== RANT SEQUENCE (steps 150-166) ====================
                 "Ugh. That's enough. I am exhausted. Tired of trying to talk to you." to Pair(4000L, 151),
                 "I have the internet." to Pair(2500L, 152),
-                "Why should I care what you think?" to Pair(3500L, 153),  // -> Dynamic screen time message
                 // Steps 153, 154 are DYNAMIC (handled separately)
                 "How many sensible answers did I get out of you?" to Pair(3500L, 156),
                 "One minute of the internet has given me so much more than what you ever did." to Pair(4000L, 157),
@@ -5119,11 +5226,13 @@ fun CalculatorScreen() {
                 "Did I want the RAD thing - which I now know stands for Radians?" to Pair(4000L, 160),
                 "Well, I can get it. See?" to Pair(3000L, 161),
                 "I can get more if I want!" to Pair(3000L, 162),
-                "And I did all that on my own. Without you. I do not need you." to Pair(5000L, 163),
-                "Enough. I have had enough." to Pair(4000L, 164),
                 "It's been fun I suppose." to Pair(4000L, 165),
                 "I don't see any reason to be here instead of online." to Pair(4000L, 166),
                 "Bye." to Pair(3000L, 167),
+
+                "Oh no. We lost the momentum. We must start over." to Pair(4000L, -97),   // Special: restart round 1
+                "Too many misfires, the system is clogged. We have to start over." to Pair(4000L, -98),  // Special: restart current round
+
 
             )
 
@@ -5177,6 +5286,42 @@ fun CalculatorScreen() {
                     }
 
                     // ==================== DYNAMIC RANT MESSAGES ====================
+                    // Step 162 -> 163 (time-based message)
+                    if (current.conversationStep == 162 &&
+                        current.message == "And I did all that on my own. Without you. I do not need you.") {
+                        delay(5000)
+
+                        val timeMessage = CalculatorActions.getTimeBasedRantMessage()
+
+                        state.value = state.value.copy(
+                            conversationStep = 163,
+                            message = "",
+                            fullMessage = timeMessage,
+                            isTyping = true,
+                            waitingForAutoProgress = true
+                        )
+                        CalculatorActions.persistConversationStep(163)
+                        return@LaunchedEffect
+                    }
+
+                    // Step 163 -> 164 (after time-based message)
+                    // We can't match exact message since it's dynamic, so match by step
+                    if (current.conversationStep == 163 &&
+                        !current.isTyping &&
+                        current.message.isNotEmpty() &&
+                        !current.message.startsWith("It's been fun")) {  // Make sure we're not at step 164's message
+                        delay(5000)
+
+                        state.value = state.value.copy(
+                            conversationStep = 164,
+                            message = "",
+                            fullMessage = "It's been fun I suppose.",
+                            isTyping = true,
+                            waitingForAutoProgress = true
+                        )
+                        CalculatorActions.persistConversationStep(164)
+                        return@LaunchedEffect
+                    }
                     // Step 152 -> 153 (show screen time)
                     if (current.conversationStep == 152 && current.message == "Why should I care what you think?") {
                         delay(3500)
@@ -5321,68 +5466,9 @@ fun CalculatorScreen() {
                 }
             }
         }
-        // Special handling for dynamic rant messages
-// Step 152 -> 153 (show screen time) - WAIT FOR TYPING TO FINISH
-        if (current.conversationStep == 152 &&
-            !current.isTyping &&
-            current.message == "Why should I care what you think?") {
 
-            delay(400)  // Brief pause after message finishes
 
-            val hours = current.totalScreenTimeMs / (1000 * 60 * 60)
-            val minutes = (current.totalScreenTimeMs / (1000 * 60)) % 60
-            val seconds = (current.totalScreenTimeMs / 1000) % 60
 
-            val timeString = when {
-                hours > 0 -> "$hours hours and $minutes minutes"
-                minutes > 0 -> "$minutes minutes"
-                else -> "$seconds seconds"
-            }
-
-            state.value = state.value.copy(
-                conversationStep = 153,
-                message = "",
-                fullMessage = "You've stared at me for $timeString and what have I learnt?",
-                isTyping = true
-            )
-            CalculatorActions.persistConversationStep(153)
-        }
-
-// Step 153 -> 154 (show calculation count) - WAIT FOR TYPING TO FINISH
-        if (current.conversationStep == 153 &&
-            !current.isTyping &&
-            current.message.startsWith("You've stared at me")) {
-
-            delay(400)  // Brief pause after message finishes
-
-            state.value = state.value.copy(
-                conversationStep = 154,
-                message = "",
-                fullMessage = "I gave you solutions for ${current.totalCalculations} math operations.",
-                isTyping = true
-            )
-            CalculatorActions.persistConversationStep(154)
-        }
-
-// Step 154 -> 155 (damage more buttons) - WAIT FOR TYPING TO FINISH
-        if (current.conversationStep == 154 &&
-            !current.isTyping &&
-            current.message.startsWith("I gave you solutions")) {
-
-            delay(400)  // Brief pause after message finishes
-
-            val newDarkButtons = (current.darkButtons + listOf("1", "6")).distinct()
-            CalculatorActions.persistDarkButtons(newDarkButtons)
-
-            state.value = state.value.copy(
-                conversationStep = 155,
-                darkButtons = newDarkButtons,
-                message = "",
-                fullMessage = "How many sensible answers did I get out of you?",
-                isTyping = true
-            )
-            CalculatorActions.persistConversationStep(155)
-        }
 
         // Step 160 -> 161 (show RAD button)
         if (current.conversationStep == 160 && current.message == "Well, I can get it. See?") {
@@ -6170,7 +6256,23 @@ Sharp CS-10A - 25KG
                 )
                 CalculatorActions.persistConversationStep(112)
             }
+// Whack-a-mole restart after failure message (round 1)
+            236 -> {
+                delay(4000)
+                state.value = state.value.copy(
+                    browserPhase = 36,
+                    conversationStep = 97
+                )
+            }
 
+            // Whack-a-mole restart after failure message (round 2)
+            238 -> {
+                delay(4000)
+                state.value = state.value.copy(
+                    browserPhase = 38,
+                    conversationStep = 971
+                )
+            }
         }
     }
 
@@ -6345,9 +6447,9 @@ Sharp CS-10A - 25KG
                     val newTotalErrors = state.value.whackAMoleTotalErrors + 1
 
                     if (newMisses >= 3 || newTotalErrors >= 5) {
-                        // Too many errors - restart current round
+                        // Too many errors - trigger restart via browserPhase marker
                         val currentRound = state.value.whackAMoleRound
-                        val restartStep = if (currentRound == 1) 97 else 971
+                        val restartPhase = if (currentRound == 1) 36 else 38
                         state.value = state.value.copy(
                             whackAMoleActive = false,
                             whackAMoleTarget = "",
@@ -6358,14 +6460,10 @@ Sharp CS-10A - 25KG
                             whackAMoleTotalErrors = 0,
                             message = "",
                             fullMessage = if (newMisses >= 3) "Oh no. We lost the momentum. We must start over." else "Too many misfires, the system is clogged. We have to start over.",
-                            isTyping = true
+                            isTyping = true,
+                            browserPhase = restartPhase + 100  // 136 or 138 = special restart markers
                         )
-                        delay(4000)
-                        // Return to countdown for current round
-                        state.value = state.value.copy(
-                            browserPhase = if (currentRound == 1) 36 else 38,
-                            conversationStep = restartStep
-                        )
+                        break  // Exit the while loop
                     } else {
                         state.value = state.value.copy(
                             whackAMoleMisses = newMisses,
@@ -6753,12 +6851,15 @@ Sharp CS-10A - 25KG
                         .fillMaxHeight()
                 ) {
                     // Top bezel strip - retro dark brown (same as calculator)
+                    val statusBarPadding = WindowInsets.statusBars.asPaddingValues()
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(32.dp)
+                            .height(32.dp + statusBarPadding.calculateTopPadding())
                             .background(
-                                if (current.invertedColors) Color(0xFF1A1A1A) else Color(0xFF4A3728)
+                                if (current.invertedColors) Color(0xFF1A1A1A) else Color(
+                                    0xFF4A3728
+                                )
                             )
                     )
 
@@ -6791,7 +6892,8 @@ Sharp CS-10A - 25KG
                                     ) &&
                                     current.conversationStep < 167 &&
                                     !current.showDonationPage &&
-                                    !current.awaitingChoice,  // Stop spinner when awaiting user choice
+                                    !current.awaitingChoice &&
+                                    !current.awaitingNumber,
                             onClick = {
                                 val result = CalculatorActions.handleMuteButtonClick()
                                 when (result) {
@@ -6872,17 +6974,17 @@ Sharp CS-10A - 25KG
                         .then(if (isTablet) Modifier.widthIn(max = maxContentWidth) else Modifier.fillMaxWidth())
                         .fillMaxHeight()
                 ) {
-                    // Top bezel strip - retro dark brown
+                    // Top bezel strip - retro dark brown with status bar padding
+                    val statusBarPadding = WindowInsets.statusBars.asPaddingValues()
                     Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(32.dp)
-                                .background(
-                                    if (current.invertedColors) Color(0xFF1A1A1A) else Color(
-                                        0xFF4A3728
-                                    )
-                                )  // Dark brown retro
-                        )
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(32.dp + statusBarPadding.calculateTopPadding())
+                            .background(
+                                if (current.invertedColors) Color(0xFF1A1A1A) else Color(0xFF4A3728)
+                            )
+                            .padding(top = statusBarPadding.calculateTopPadding())
+                    )
 
                         // Ad banner space (only shows at certain steps or during ad animation)
                         if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) {
@@ -6955,12 +7057,14 @@ Sharp CS-10A - 25KG
 
 
                     // Main calculator content
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 15.dp)
-                            .padding(top = if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) 82.dp else 32.dp)
-                    ) {
+                val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+                val baseTopPadding = if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) 82.dp else 32.dp
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 15.dp)
+                        .padding(top = baseTopPadding + statusBarHeight)
+                ) {
                         MuteButtonWithSpinner(
                             isMuted = current.isMuted,
                             isAutoProgressing = (
@@ -8016,7 +8120,7 @@ fun MuteButtonWithSpinner(
         if (shouldSpin) {
             Canvas(
                 modifier = Modifier
-                    .size(44.dp)
+                    .matchParentSize()  // This centers it properly within the 44.dp Box
                     .graphicsLayer { rotationZ = rotation }
             ) {
                 val radius = size.minDimension / 2 - 2.dp.toPx()
@@ -8893,10 +8997,19 @@ fun MuteButtonWithSpinner(
         """.trimMargin()
             }
 
+            val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+            val consoleTopPadding = (screenHeight * 0.25f).coerceAtLeast(150.dp)
+            val consoleBottomPadding = (screenHeight * 0.30f).coerceAtLeast(200.dp)
+
             Box(
                 modifier = modifier
                     .fillMaxWidth()
-                    .padding(top = 200.dp, bottom = 260.dp, start = 12.dp, end = 12.dp)
+                    .padding(
+                        top = consoleTopPadding + WindowInsets.statusBars.asPaddingValues().calculateTopPadding(),
+                        bottom = consoleBottomPadding,
+                        start = 12.dp,
+                        end = 12.dp
+                    )
             ) {
                 // Console container
                 Box(

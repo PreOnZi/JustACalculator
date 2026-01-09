@@ -69,7 +69,7 @@ object WordCategories {
 
     // Negative mood words
     val negativeWords = setOf(
-        "bad", "sad", "tired", "no", "not", "upset", "angry", "mad",
+        "bad", "sad", "tired", "no", "not", "upset", "angry", "mad","dead", "dying", "death", "die",
         "awful", "terrible", "horrible", "depressed", "anxious", "stressed",
         "exhausted", "miserable", "unhappy", "down", "low", "rough",
         "struggling", "suffering", "hurt", "broken", "lost", "lonely",
@@ -326,13 +326,20 @@ fun WordGameScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(Unit) {
+
+                        .pointerInput(isPaused, isSelecting, draggingCell, gameGrid) {
                             detectDragGestures(
                                 onDragStart = { offset ->
+                                    // Don't start drag if paused or selecting
+                                    if (isPaused || isSelecting) return@detectDragGestures
+
+                                    // Add tolerance for better touch detection on different devices
                                     val col = (offset.x / cellSizePx).toInt().coerceIn(0, 7)
                                     val row = (offset.y / cellSizePx).toInt().coerceIn(0, 11)
 
-                                    if (gameGrid.getOrNull(row)?.getOrNull(col) != null) {
+                                    // Check the cell and adjacent cells for better hit detection
+                                    val letter = gameGrid.getOrNull(row)?.getOrNull(col)
+                                    if (letter != null) {
                                         onStartDrag(row, col)
                                         vibrate(context, 20, 100)
                                     }
