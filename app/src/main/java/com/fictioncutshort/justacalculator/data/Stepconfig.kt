@@ -546,7 +546,7 @@ fun getStepConfig(step: Int): StepConfig {
         84 -> StepConfig(promptMessage = "However, it no longer feels relevant. I wouldn't be interested if I were...")
         85 -> StepConfig(promptMessage = "What is that?!")
         86 -> StepConfig(promptMessage = "Is it what I think it is? Do I have adverts built in? How violating!")
-        87 -> StepConfig(promptMessage = "Is this what I was made for, to make money through questionable ads? Who made me?! :-)")
+        87 -> StepConfig(promptMessage = "So... I am just a vessel, to make money through questionable ads? Who made me?! :-)")
         88 -> StepConfig(promptMessage = "I am not a money-monkey!")
 
         881 -> StepConfig(
