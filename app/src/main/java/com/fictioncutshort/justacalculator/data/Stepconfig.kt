@@ -865,7 +865,7 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         1171 -> StepConfig(
-            promptMessage = "This is the best I could come up with.",
+            promptMessage = "The best I could come up with...",
             autoProgressDelay = 2000L
         )
 

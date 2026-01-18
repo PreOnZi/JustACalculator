@@ -99,7 +99,7 @@ object CalculatorActions {
 
             // 1:01 PM to 5:00 PM
             timeDecimal > 13.0 && timeDecimal <= 17.0 ->
-                "So, this afternoon... Some achieved tangible things. Have gone places. And you. You \"talked\" to a calculator. Go say it out loud!"
+                "This afternoon... Some achieved tangible things. Have gone places. And you. You \"talked\" to a calculator. Go say it out loud!"
 
             // 5:01 PM to 11:00 PM
             else ->
