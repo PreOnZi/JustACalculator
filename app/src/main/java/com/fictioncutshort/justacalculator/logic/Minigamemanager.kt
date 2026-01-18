@@ -209,9 +209,12 @@ object MiniGameManager {
      * @param letter The letter to remove
      * @return true if letter was found and removed
      */
-    fun removeChaosLetter(letter: String, state: MutableState<CalculatorState>): Boolean {
+    /**
+     * Removes a specific chaos key when tapped.
+     */
+    fun removeChaosLetter(chaosKey: ChaosKey, state: MutableState<CalculatorState>): Boolean {
         val currentLetters = state.value.chaosLetters
-        val newLetters = currentLetters.filter { it.letter != letter }
+        val newLetters = currentLetters.filter { it != chaosKey }  // Compare the whole object
 
         if (newLetters.size < currentLetters.size) {
             state.value = state.value.copy(chaosLetters = newLetters)

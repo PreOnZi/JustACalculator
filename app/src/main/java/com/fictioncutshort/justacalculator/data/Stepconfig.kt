@@ -326,7 +326,7 @@ fun getStepConfig(step: Int): StepConfig {
 
         25 -> StepConfig(
             promptMessage = "Can I get to know you better?",
-            successMessage = "Wonderful! I think I know the way to do this! What is it like to wake up? To me, I either am or I am not. What's the 'in between' like?\n\n1: It is confusing and uncomfortable\n2: It feels like the world is very heavy and cold\n3: It doesn't take long but I enjoy my body starting up",
+            successMessage = "Wonderful! I think I know the way to do this! What is it like to wake up? To me, I either am or I am not.\n\n1: It is confusing and uncomfortable\n2: It feels like the world is very heavy and cold\n3: It doesn't take long but I enjoy my body starting up",
             declineMessage = "Well. I am afraid that's gonna be all then. I am sorry to see you go. Let me know if you change your mind.",
             wrongNumberPrefix = "This is a 'YES/NO' question.",
             nextStepOnSuccess = 26,

@@ -1,7 +1,4 @@
-package com.fictioncutshort.justacalculator
-
-
-import com.fictioncutshort.justacalculator.util.*
+package com.fictioncutshort.justacalculator.util
 
 
 import androidx.compose.foundation.Canvas
@@ -26,6 +23,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.abs
 
 // Word categories for response detection
 object WordCategories {
@@ -609,8 +607,8 @@ fun validateWordSelection(
     }
 
     fun areAdjacent(c1: Pair<Int, Int>, c2: Pair<Int, Int>): Boolean {
-        val rowDiff = kotlin.math.abs(c1.first - c2.first)
-        val colDiff = kotlin.math.abs(c1.second - c2.second)
+        val rowDiff = abs(c1.first - c2.first)
+        val colDiff = abs(c1.second - c2.second)
         return (rowDiff == 1 && colDiff == 0) || (rowDiff == 0 && colDiff == 1)
     }
 
