@@ -89,6 +89,11 @@ import com.fictioncutshort.justacalculator.util.createSecretFile
 import com.fictioncutshort.justacalculator.util.scheduleNotification
 import com.fictioncutshort.justacalculator.util.vibrate
 import androidx.compose.ui.tooling.preview.Preview as ComposePreview
+import com.fictioncutshort.justacalculator.ui.components.ScrambleGameOverlay
+import com.fictioncutshort.justacalculator.logic.ScrambleGameController
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.launch
+import com.fictioncutshort.justacalculator.ui.components.PausedCalculatorOverlay
 
 
 class MainActivity : ComponentActivity() {
@@ -199,7 +204,10 @@ fun CalculatorScreen() {
     LaunchedEffect(current.conversationStep, current.isTyping) {
         EffectsController.startWordGameAtStep1172(state)
     }
-
+// ========== SCRAMBLE GAME ==========
+    LaunchedEffect(current.scramblePhase, current.scrambleGameActive) {
+        EffectsController.runScrambleGamePhases(state)
+    }
     // ========== CAMERA ==========
     LaunchedEffect(current.cameraActive, current.cameraTimerStart) {
         EffectsController.monitorCameraTimeout(state)
@@ -221,7 +229,7 @@ fun CalculatorScreen() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             } else {
-                scheduleNotification(context, 5000)
+                scheduleNotification(context, 30000)  // 30 seconds instead of 5
                 state.value = state.value.copy(conversationStep = 101, needsRestart = true)
                 CalculatorActions.persistNeedsRestart(true)
                 CalculatorActions.persistConversationStep(101)
@@ -254,8 +262,10 @@ fun CalculatorScreen() {
     }
 
     // ========== COUNTDOWN & VIBRATION ==========
-    LaunchedEffect(current.countdownTimer) {
-        EffectsController.runCountdownTimer(state)
+    LaunchedEffect(current.conversationStep, current.countdownTimer, current.screenBlackout) {
+        if (current.conversationStep == 89 && current.countdownTimer > 0 && !current.screenBlackout) {
+            EffectsController.runCountdownTimer(state)
+        }
     }
     LaunchedEffect(current.vibrationIntensity) {
         EffectsController.runVibrationEffect(state, context)
@@ -560,13 +570,11 @@ fun CalculatorScreen() {
                             isMuted = current.isMuted,
                             isAutoProgressing = (
                                     current.isTyping ||
-                                            current.waitingForAutoProgress ||
-                                            current.pendingAutoMessage.isNotEmpty()
+                                            (current.waitingForAutoProgress && !current.awaitingChoice && !current.awaitingNumber)
                                     ) &&
                                     current.conversationStep < 167 &&
-                                    !current.showDonationPage &&
-                                    !current.awaitingChoice &&
-                                    !current.awaitingNumber,
+                                    !current.showDonationPage,
+
                             onClick = {
                                 val result = CalculatorActions.handleMuteButtonClick()
                                 when (result) {
@@ -1181,8 +1189,31 @@ fun CalculatorScreen() {
                 }
             }
         }
+    if (current.isMuted && current.inConversation) {
+        PausedCalculatorOverlay(
+            display = current.pausedCalcDisplay,
+            expression = current.pausedCalcExpression,
+            justCalculated = current.pausedCalcJustCalculated,
+            darkButtons = current.darkButtons,
+            minusButtonDamaged = current.minusButtonDamaged,
+            isTablet = isTablet,
+            maxContentWidth = maxContentWidth,
+            buttonLayout = buttonLayout,
+            onMuteClick = {
+                val result = CalculatorActions.handleMuteButtonClick()
+                when (result) {
+                    1 -> CalculatorActions.showDebugMenu(state)
+                    2 -> CalculatorActions.resetGame(state)
+                    else -> CalculatorActions.toggleConversation(state)
+                }
+            },
+            onButtonClick = { symbol ->
+                CalculatorActions.handlePausedCalculatorInput(state, symbol)
+            }
+        )
+    }
 
-            // Console overlay
+    // Console overlay
             if (current.showConsole) {
                 ConsoleWindow(
                     consoleStep = current.consoleStep,
@@ -1200,27 +1231,47 @@ fun CalculatorScreen() {
                     modifier = Modifier.fillMaxSize()
                 )
             }
-            // Blackout overlay - shows text if in phase 20 (money-monkey message)
-            if (current.screenBlackout) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black),
-                    contentAlignment = Alignment.Center
-                ) {
-                    // Show the money-monkey text during phase 20
-                    if (current.browserPhase == 20 && current.message.isNotEmpty()) {
-                        Text(
-                            text = current.message,
-                            fontSize = 28.sp,
-                            color = Color.White,
-                            fontFamily = CalculatorDisplayFont,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(32.dp)
-                        )
-                    }
-                }
+    // Blackout overlay
+    if (current.screenBlackout && !current.scrambleGameActive) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            // Show message during blackout (money-monkey OR timeout message)
+            if (current.message.isNotEmpty()) {
+                Text(
+                    text = current.message,
+                    fontSize = 28.sp,
+                    color = Color.White,
+                    fontFamily = CalculatorDisplayFont,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(32.dp)
+                )
             }
+        }
+    }
+// Scramble game overlay
+    if (current.scrambleGameActive) {
+        ScrambleGameOverlay(
+            phase = current.scramblePhase,
+            message = current.message,
+            letters = current.scrambleLetters,
+            slots = current.scrambleSlots,
+            selectedLetterId = current.scrambleSelectedLetterId,
+            punishmentUntil = current.scramblePunishmentUntil,
+            onLetterTap = { letterId ->
+                ScrambleGameController.onLetterTap(state, letterId)
+            },
+            onSlotTap = { slotIndex ->
+                ScrambleGameController.onSlotTap(state, slotIndex)
+            },
+            onBackToDecisions = {
+                ScrambleGameController.returnToDecisions(state)
+            }
+        )
+    }
     if (current.flickerEffect && !current.screenBlackout) {
         Box(
             modifier = Modifier
@@ -1265,7 +1316,13 @@ fun CalculatorScreen() {
                         .background(Color(0xFF00FF00))
                 )
             }
-
+// Clear flicker effect when entering crisis steps
+    LaunchedEffect(current.conversationStep) {
+        val crisisSteps = listOf(89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 901, 911, 912, 913)
+        if (current.conversationStep in crisisSteps && current.flickerEffect) {
+            state.value = state.value.copy(flickerEffect = false)
+        }
+    }
     if (current.keyboardChaosActive) {
         KeyboardChaos3DView(
             chaosLetters = current.chaosLetters,

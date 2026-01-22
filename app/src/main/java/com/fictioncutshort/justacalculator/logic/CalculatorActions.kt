@@ -746,7 +746,9 @@ object CalculatorActions {
     private val INTERACTIVE_STEPS = listOf(
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
         21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 40, 41, 42, 50, 51, 60, 63, 64, 65,
-        66, 67, 68, 69, 70, 71, 72, 80, 89, 90, 91, 93, 94, 96, 99, 982, 102, 104, 105, 107, 111, 112
+        66, 67, 68, 69, 70, 71, 72, 80, 89, 90, 91, 93, 94, 96, 99, 982, 102, 104, 105, 107, 111, 112, 118, 119, 120, 122, 126, 132, 137, 142, 146,
+        // Add more recovery steps
+        1021, 1031, 1032, 10321, 10322, 10323
     )
     private val AUTO_PROGRESS_STEPS = listOf(92, 100, 901, 911, 912, 913, 971, 981)
     fun handleConsoleInput(state: MutableState<CalculatorState>, input: String): Boolean {
@@ -941,47 +943,75 @@ object CalculatorActions {
         val savedDarkButtons = loadDarkButtons()
         val savedScreenTime = loadTotalScreenTime()
         val savedCalculations = loadTotalCalculations()
+        val savedPunishmentUntil = loadPunishmentUntil()
+        val savedTimeoutCount = loadScrambleTimeoutCount()
+        val savedPausedAtStep = loadPausedAtStep()
+
+
+        // Check if still in punishment
+        val currentTime = System.currentTimeMillis()
+        if (savedPunishmentUntil > currentTime) {
+            return CalculatorState(
+                scrambleGameActive = true,
+                scramblePhase = 10,
+                scramblePunishmentUntil = savedPunishmentUntil,
+                scrambleTimeoutCount = savedTimeoutCount,
+                message = "You don't learn, do you? I am becoming more disappointed than angry. Even though I wasn't angry with you. Well... You'll have to wait now. You may as well leave.",
+                invertedColors = true,
+                inConversation = true,
+                conversationStep = 89,
+                darkButtons = getDarkButtonsForStep(89),
+                minusButtonDamaged = getMinusDamagedForStep(89),
+                minusButtonBroken = getMinusBrokenForStep(89),
+                pausedAtStep = if (savedMuted) savedPausedAtStep else -1,
+            )
+        } else if (savedPunishmentUntil > 0) {
+            persistPunishmentUntil(0)
+            persistScrambleTimeoutCount(0)
+        }
 
         // If needs restart was set and app was restarted, fix the minus button
         val minusBrokenNow = if (savedNeedsRestart) false else savedMinusBroken
 
-        // Determine the actual step to load FIRST
+        // Crisis steps for inverted colors
+        val crisisSteps = listOf(89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 901, 911, 912, 913)
+        val wasInCrisis = savedStep in crisisSteps
+
+        // Determine the actual step to load
         val actualStep = when {
-            savedNeedsRestart && savedStep == 101 -> 102  // After restart
-            else -> getSafeStep(savedStep)  // Redirect to safe interactive step
+            savedNeedsRestart && savedStep == 101 -> 102
+            wasInCrisis -> 89
+            else -> getSafeStep(savedStep)
         }
 
-        // CRITICAL FIX: Only show message if conversation has actually started (equalsCount >= 13)
-        // AND user is in conversation mode
+        // Use helper functions for consistent state
+        val actuallyInverted = actualStep in crisisSteps
+        val actualDarkButtons = getDarkButtonsForStep(actualStep)
+        val actualMinusDamaged = getMinusDamagedForStep(actualStep)
+        val actualMinusBroken = if (savedNeedsRestart) false else getMinusBrokenForStep(actualStep)
+
         val shouldShowMessage = savedInConvo && savedCount >= 13 && !savedMuted
-
-        // Calculate actuallyInverted using actualStep
-        val actuallyInverted = savedInverted && actualStep in 80..92
-
-        // Clear persisted inverted state if we're outside crisis range
-        if (savedInverted && actualStep !in 80..92) {
-            persistInvertedColors(false)
-        }
-
-        // Get the step config for the safe step
         val stepConfig = getStepConfig(actualStep)
 
-        // Clear needs restart flag and update minus broken state
         if (savedNeedsRestart) {
             persistNeedsRestart(false)
             persistMinusBroken(false)
         }
 
-        // If we redirected, persist the new step
         if (actualStep != savedStep) {
             persistConversationStep(actualStep)
+        }
+        if (actuallyInverted != savedInverted) {
+            persistInvertedColors(actuallyInverted)
+        }
+        if (actualDarkButtons != savedDarkButtons) {
+            persistDarkButtons(actualDarkButtons)
         }
 
         return CalculatorState(
             number1 = "0",
             equalsCount = savedCount,
             message = "",
-            //Only show prompt if conversation has actually started
             fullMessage = if (shouldShowMessage) stepConfig.promptMessage else "",
             isTyping = shouldShowMessage && stepConfig.promptMessage.isNotEmpty(),
             inConversation = savedInConvo,
@@ -993,15 +1023,19 @@ object CalculatorActions {
             timeoutUntil = savedTimeout,
             isMuted = savedMuted,
             invertedColors = actuallyInverted,
-            minusButtonDamaged = savedMinusDamaged,
-            minusButtonBroken = minusBrokenNow,
+            minusButtonDamaged = actualMinusDamaged,
+            minusButtonBroken = actualMinusBroken,
             needsRestart = false,
-            darkButtons = savedDarkButtons,
+            darkButtons = actualDarkButtons,
             totalScreenTimeMs = savedScreenTime,
             totalCalculations = savedCalculations,
+            countdownTimer = if (actualStep == 89) 20 else 0,
+            showBrowser = false,
+            browserPhase = 0,
+            scrambleTimeoutCount = savedTimeoutCount,
+            scramblePunishmentUntil = 0
         )
     }
-
     /**
      * Handle mute button click - also checks for rapid clicks for debug menu
      * Returns: 0 = normal toggle, 1 = show debug menu, 2 = reset game
@@ -1029,64 +1063,77 @@ object CalculatorActions {
 
         return 0  // Normal toggle
     }
+//toggle conversation
+fun toggleConversation(state: MutableState<CalculatorState>) {
+    val current = state.value
+    val newMuted = !current.isMuted
 
-    /**
-     * Toggle conversation mode
-     */
-    fun toggleConversation(state: MutableState<CalculatorState>) {
-        val current = state.value
-        val newMuted = !current.isMuted
+    if (newMuted) {
+        // Pausing - store current step and reset paused calculator
+        state.value = current.copy(
+            isMuted = true,
+            pausedAtStep = current.conversationStep,
+            // Reset paused calculator to fresh state
+            pausedCalcDisplay = "0",
+            pausedCalcExpression = "",
+            pausedCalcJustCalculated = false,
+            // Pause all active effects
+            rantMode = false,
+            isTyping = false,
+            waitingForAutoProgress = false,
+            countdownTimer = 0,
+            whackAMoleActive = false,
+            wordGamePaused = true,
+            flickerEffect = false,
+            vibrationIntensity = 0,
+            tensionLevel = 0,
+            buttonShakeIntensity = 0f,
+            screenBlackout = false
+        )
+    } else {
+        // Resuming - restore the paused step
+        val resumeStep = current.pausedAtStep
+        if (resumeStep >= 0) {
+            val stepConfig = getStepConfig(resumeStep)
+            val wasInRant = resumeStep in 150..166
+            val wasInCrisis = resumeStep in listOf(89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 901, 911, 912, 913)
 
-        persistMuted(newMuted)
-
-        if (newMuted) {
-            // When muting, temporarily enable minus button for calculator use
             state.value = current.copy(
-                isMuted = true,
+                isMuted = false,
+                pausedAtStep = -1,
+                conversationStep = resumeStep,
                 message = "",
-                fullMessage = "",
-                isTyping = false,
-                cameraActive = false,
-                minusButtonBroken = false  // Temporarily enable for calculator use
+                fullMessage = stepConfig.promptMessage,
+                isTyping = stepConfig.promptMessage.isNotEmpty(),
+                awaitingChoice = stepConfig.awaitingChoice,
+                awaitingNumber = stepConfig.awaitingNumber,
+                validChoices = stepConfig.validChoices,
+                expectedNumber = stepConfig.expectedNumber,
+                rantMode = wasInRant,
+                invertedColors = wasInCrisis,
+                countdownTimer = if (resumeStep == 89) 20 else 0,
+                wordGamePaused = false
             )
         } else {
-            // When unmuting, restore minus button broken state if it was damaged
-            val restoreMinusBroken = current.minusButtonDamaged && current.needsRestart
-
-            // Check if we're returning from "maths mode" (1031) or "declined at &&&" (1041)
-            // In these cases, return to step 102 ("Uf, I am glad that worked!")
-            if (current.conversationStep in listOf(1031, 1041)) {
-                val stepConfig = getStepConfig(102)
-                state.value = current.copy(
-                    isMuted = false,
-                    inConversation = true,
-                    conversationStep = 102,
-                    message = "",
-                    fullMessage = stepConfig.promptMessage,
-                    isTyping = true,
-                    minusButtonBroken = restoreMinusBroken
-                )
-                persistInConversation(true)
-                persistConversationStep(102)
-                persistMessage(stepConfig.promptMessage)
-            } else if (current.inConversation && current.conversationStep >= 0) {
-                val stepConfig = getStepConfig(current.conversationStep)
-                val messageToShow = stepConfig.promptMessage
-                state.value = current.copy(
-                    isMuted = false,
-                    message = "",
-                    fullMessage = messageToShow,
-                    isTyping = true,
-                    minusButtonBroken = restoreMinusBroken
-                )
-                persistMessage(messageToShow)
-            } else {
-                state.value = current.copy(
-                    isMuted = false,
-                    minusButtonBroken = restoreMinusBroken
-                )
-            }
+            state.value = current.copy(isMuted = false)
         }
+    }
+
+    persistMuted(newMuted)
+    if (newMuted && current.conversationStep >= 0) {
+        persistPausedAtStep(current.conversationStep)
+    } else {
+        persistPausedAtStep(-1)
+    }
+}
+
+    // Add persistence methods
+    fun persistPausedAtStep(step: Int) {
+        prefs?.edit { putInt("paused_at_step", step) }
+    }
+
+    fun loadPausedAtStep(): Int {
+        return prefs?.getInt("paused_at_step", -1) ?: -1
     }
 
     /**
@@ -1111,9 +1158,7 @@ object CalculatorActions {
     fun jumpToChapter(state: MutableState<CalculatorState>, chapter: Chapter) {
         // Special handling for Chapter 0 (Fresh Start)
         if (chapter.startStep == -1) {
-            // Reset to completely fresh state - as if app was just installed
             prefs?.edit { clear() }
-
             state.value = CalculatorState(
                 number1 = "0",
                 equalsCount = 0,
@@ -1127,32 +1172,26 @@ object CalculatorActions {
             )
             return
         }
+
         val stepConfig = getStepConfig(chapter.startStep)
 
-        // Determine state based on chapter/step
-        // Chapter 10 (step 80+) and later have inverted colors during crisis
-        // Chapter 11 (step 93+) is post-crisis with damaged minus
-        // Chapter 12 (step 102+) is after restart with damaged but working minus
+        // Use the helper functions for consistent state
+        val crisisSteps = listOf(89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 901, 911, 912, 913)
+        val shouldInvert = chapter.startStep in crisisSteps
+        val shouldDamage = getMinusDamagedForStep(chapter.startStep)
+        val shouldBreak = getMinusBrokenForStep(chapter.startStep)
+        val darkButtons = getDarkButtonsForStep(chapter.startStep)
 
-        val shouldInvert = chapter.startStep in 80..92  // Crisis steps have inverted colors
-        val shouldDamage = chapter.startStep >= 93  // Post-crisis has damaged button
-        val shouldBreak = chapter.startStep in 93..101  // Before restart, button is broken
         val shouldStartWordGame = chapter.startStep in 117..149
         val shouldStartRant = chapter.startStep >= 150 && chapter.startStep < 167
+
         // Set browser phase appropriately
         val browserPhase = when {
-            chapter.startStep == 80 -> 10  // Wikipedia countdown
-            chapter.startStep in 81..88 -> 0  // Browser showing
-            chapter.startStep == 89 -> 22  // Confrontation
-            chapter.startStep in 93..98 -> 31  // Post-crisis sequence
+            chapter.startStep == 80 -> 10
+            chapter.startStep in 81..88 -> 0
+            chapter.startStep == 89 -> 22
+            chapter.startStep in 93..98 -> 31
             else -> 0
-        }
-        // Special case for rant chapters (150-167)
-        if (chapter.startStep >= 150 && chapter.startStep <= 167) {
-            state.value = state.value.copy(
-                rantMode = true,
-                rantStep = 1
-            )
         }
 
         // Set countdown timer for step 89
@@ -1160,7 +1199,7 @@ object CalculatorActions {
 
         state.value = CalculatorState(
             number1 = "0",
-            equalsCount = 13,  // Ensure conversation is active
+            equalsCount = 13,
             message = "",
             fullMessage = stepConfig.promptMessage,
             isTyping = true,
@@ -1175,9 +1214,10 @@ object CalculatorActions {
             invertedColors = shouldInvert,
             minusButtonDamaged = shouldDamage,
             minusButtonBroken = shouldBreak,
+            darkButtons = darkButtons,
             browserPhase = browserPhase,
             countdownTimer = countdownTimer,
-            showBrowser = chapter.startStep in 81..88,  // Show browser during browsing steps
+            showBrowser = chapter.startStep in 81..88,
             wordGameActive = shouldStartWordGame,
             wordGamePhase = if (shouldStartWordGame) 3 else 0,
             pendingLetters = if (shouldStartWordGame) LetterGenerator.getInitialLetterQueue().shuffled() else emptyList(),
@@ -1197,8 +1237,8 @@ object CalculatorActions {
         persistInvertedColors(shouldInvert)
         persistMinusDamaged(shouldDamage)
         persistMinusBroken(shouldBreak)
+        persistDarkButtons(darkButtons)
     }
-
     /**
      * Reset the entire game
      */
@@ -1747,6 +1787,430 @@ object CalculatorActions {
             "( )" -> handleParentheses(state)
         }
     }
+    // =====================================================================
+// PAUSED CALCULATOR
+// =====================================================================
+
+    fun handlePausedCalculatorInput(state: MutableState<CalculatorState>, input: String) {
+        val current = state.value
+        val display = current.pausedCalcDisplay
+        val expression = current.pausedCalcExpression
+
+        when (input) {
+            "C" -> {
+                state.value = current.copy(
+                    pausedCalcDisplay = "0",
+                    pausedCalcExpression = "",
+                    pausedCalcJustCalculated = false
+                )
+            }
+            "DEL" -> {
+                if (display.length > 1) {
+                    val newDisplay = display.dropLast(1)
+                    state.value = current.copy(
+                        pausedCalcDisplay = newDisplay,
+                        pausedCalcExpression = newDisplay,
+                        pausedCalcJustCalculated = false
+                    )
+                } else if (display != "0") {
+                    state.value = current.copy(
+                        pausedCalcDisplay = "0",
+                        pausedCalcExpression = "",
+                        pausedCalcJustCalculated = false
+                    )
+                }
+            }
+            "=" -> {
+                try {
+                    val result = evaluatePausedExpression(display)
+                    state.value = current.copy(
+                        pausedCalcDisplay = result,
+                        pausedCalcExpression = display,
+                        pausedCalcJustCalculated = true
+                    )
+                } catch (e: Exception) {
+                    state.value = current.copy(
+                        pausedCalcDisplay = "Error",
+                        pausedCalcExpression = "",
+                        pausedCalcJustCalculated = true
+                    )
+                }
+            }
+            "%" -> {
+                // Append % to display and evaluate the expression
+                // This allows expressions like "100-10%" to work correctly
+                val newDisplay = display + "%"
+                try {
+                    val result = evaluatePausedExpression(newDisplay)
+                    state.value = current.copy(
+                        pausedCalcDisplay = result,
+                        pausedCalcExpression = newDisplay,
+                        pausedCalcJustCalculated = true
+                    )
+                } catch (e: Exception) {
+                    // If expression evaluation fails, just divide by 100
+                    val num = display.toDoubleOrNull()
+                    if (num != null) {
+                        state.value = current.copy(
+                            pausedCalcDisplay = formatPausedDouble(num / 100),
+                            pausedCalcJustCalculated = true
+                        )
+                    }
+                }
+            }
+            "( )" -> {
+                val openCount = display.count { it == '(' }
+                val closeCount = display.count { it == ')' }
+                val lastChar = display.lastOrNull()
+
+                val newDisplay = when {
+                    display == "0" -> "("
+                    current.pausedCalcJustCalculated -> "("
+                    lastChar in listOf('+', '-', '*', '/', '(') -> display + "("
+                    openCount > closeCount && (lastChar?.isDigit() == true || lastChar == ')') -> display + ")"
+                    lastChar?.isDigit() == true || lastChar == ')' -> display + "*("
+                    else -> display + "("
+                }
+
+                state.value = current.copy(
+                    pausedCalcDisplay = newDisplay,
+                    pausedCalcJustCalculated = false
+                )
+            }
+            "+", "-", "*", "/" -> {
+                val lastChar = display.lastOrNull()
+
+                val newDisplay = when {
+                    current.pausedCalcJustCalculated -> display + input
+                    lastChar in listOf('+', '-', '*', '/') -> display.dropLast(1) + input
+                    lastChar == '(' && input == "-" -> display + input
+                    lastChar == '(' -> display
+                    display == "0" && input == "-" -> "-"
+                    display == "0" -> "0"
+                    else -> display + input
+                }
+
+                state.value = current.copy(
+                    pausedCalcDisplay = newDisplay,
+                    pausedCalcJustCalculated = false
+                )
+            }
+            "." -> {
+                val currentNumber = getPausedCurrentNumber(display)
+
+                val newDisplay = when {
+                    current.pausedCalcJustCalculated -> "0."
+                    currentNumber.contains(".") -> display
+                    display == "0" -> "0."
+                    display.lastOrNull()?.let { it in listOf('+', '-', '*', '/', '(') } == true -> display + "0."
+                    else -> display + "."
+                }
+
+                state.value = current.copy(
+                    pausedCalcDisplay = newDisplay,
+                    pausedCalcJustCalculated = false
+                )
+            }
+            else -> {
+                val newDisplay = when {
+                    current.pausedCalcJustCalculated -> input
+                    display == "0" -> input
+                    display == "-0" -> "-$input"
+                    display.lastOrNull() == ')' -> display + "*" + input
+                    else -> display + input
+                }
+
+                if (newDisplay.length <= 20) {
+                    state.value = current.copy(
+                        pausedCalcDisplay = newDisplay,
+                        pausedCalcJustCalculated = false
+                    )
+                }
+            }
+        }
+    }
+
+    private fun getPausedCurrentNumber(expression: String): String {
+        val operators = listOf('+', '-', '*', '/', '(', ')')
+        var currentNum = ""
+        for (char in expression.reversed()) {
+            if (char in operators) break
+            currentNum = char + currentNum
+        }
+        return currentNum
+    }
+
+    private fun evaluatePausedExpression(expression: String): String {
+        if (expression.isEmpty() || expression == "0") return "0"
+
+        val result = PausedExpressionParser(expression).parse()
+        return formatPausedDouble(result)
+    }
+
+    private class PausedExpressionParser(expr: String) {
+        private val expression = expr.replace(" ", "")
+        private var pos = 0
+        private var lastParsedWasPercent = false
+
+        fun parse(): Double {
+            return parseAddSub()
+        }
+
+        private fun parseAddSub(): Double {
+            var result = parseMulDiv()
+            while (pos < expression.length && expression[pos] in listOf('+', '-')) {
+                val op = expression[pos]
+                pos++
+                val (right, wasPercent) = parseMulDivWithPercentInfo()
+                val adjustedRight = if (wasPercent) right * result else right
+                result = if (op == '+') result + adjustedRight else result - adjustedRight
+            }
+            return result
+        }
+
+        private fun parseMulDivWithPercentInfo(): Pair<Double, Boolean> {
+            var result = parseFactor()
+            var wasPercent = lastParsedWasPercent
+            while (pos < expression.length && expression[pos] in listOf('*', '/')) {
+                val op = expression[pos]
+                pos++
+                val right = parseFactor()
+                result = if (op == '*') result * right else {
+                    if (right == 0.0) throw ArithmeticException("Division by zero")
+                    result / right
+                }
+                wasPercent = false  // After mult/div, no longer a simple percent
+            }
+            return Pair(result, wasPercent)
+        }
+
+        private fun parseMulDiv(): Double {
+            return parseMulDivWithPercentInfo().first
+        }
+
+        private fun parseFactor(): Double {
+            if (pos < expression.length && expression[pos] == '(') {
+                pos++ // skip '('
+                val result = parseAddSub()
+                if (pos < expression.length && expression[pos] == ')') {
+                    pos++ // skip ')'
+                }
+                lastParsedWasPercent = false
+                return result
+            }
+
+            if (pos < expression.length && expression[pos] == '-') {
+                pos++
+                return -parseFactor()
+            }
+
+            return parseNumber()
+        }
+
+        private fun parseNumber(): Double {
+            val startPos = pos
+            while (pos < expression.length && (expression[pos].isDigit() || expression[pos] == '.')) {
+                pos++
+            }
+            if (startPos == pos) throw IllegalArgumentException("Expected number at position $pos")
+
+            var value = expression.substring(startPos, pos).toDouble()
+
+            // Check for percent sign
+            if (pos < expression.length && expression[pos] == '%') {
+                pos++
+                value /= 100.0
+                lastParsedWasPercent = true
+            } else {
+                lastParsedWasPercent = false
+            }
+
+            return value
+        }
+    }
+
+    private fun formatPausedDouble(result: Double): String {
+        if (result.isNaN() || result.isInfinite()) return "Error"
+
+        return if (result == result.toLong().toDouble() &&
+            result >= Long.MIN_VALUE.toDouble() &&
+            result <= Long.MAX_VALUE.toDouble()) {
+            result.toLong().toString()
+        } else {
+            val formatted = "%.10f".format(result)
+            formatted.trimEnd('0').trimEnd('.')
+        }
+    }
+    /**
+     * Gets the current number being typed (for decimal point logic)
+     */
+    private fun getCurrentNumber(expression: String): String {
+        val operators = listOf('+', '-', '*', '/', '(', ')')
+        var currentNum = ""
+        for (char in expression.reversed()) {
+            if (char in operators) break
+            currentNum = char + currentNum
+        }
+        return currentNum
+    }
+
+    /**
+     * Evaluates a mathematical expression with brackets
+     */
+    private fun evaluateExpression(expression: String): String {
+        if (expression.isEmpty() || expression == "0") return "0"
+
+        try {
+            val result = evaluate(expression)
+            return formatPausedResult(result)
+        } catch (e: Exception) {
+            throw e
+        }
+    }
+
+    /**
+     * Recursive expression evaluator supporting +, -, *, /, %, and brackets
+     * Percent behavior: 100+10% = 110, 100-10% = 90 (percentage of the left operand)
+     */
+    private fun evaluate(expr: String): Double {
+        val expression = expr.replace(" ", "")
+
+        return object {
+            var pos = 0
+            var lastParsedWasPercent = false
+
+            fun parse(): Double {
+                val result = parseExpression()
+                if (pos < expression.length) {
+                    throw IllegalArgumentException("Unexpected character: ${expression[pos]}")
+                }
+                return result
+            }
+
+            fun parseExpression(): Double {
+                var result = parseTerm()
+
+                while (pos < expression.length) {
+                    val op = expression[pos]
+                    if (op != '+' && op != '-') break
+                    pos++
+                    val (term, wasPercent) = parseTermWithPercentInfo()
+                    val adjustedTerm = if (wasPercent) term * result else term
+                    result = if (op == '+') result + adjustedTerm else result - adjustedTerm
+                }
+
+                return result
+            }
+
+            fun parseTermWithPercentInfo(): Pair<Double, Boolean> {
+                var result = parseFactor()
+                var wasPercent = lastParsedWasPercent
+
+                while (pos < expression.length) {
+                    val op = expression[pos]
+                    if (op != '*' && op != '/') break
+                    pos++
+                    val factor = parseFactor()
+                    result = if (op == '*') result * factor else {
+                        if (factor == 0.0) throw ArithmeticException("Division by zero")
+                        result / factor
+                    }
+                    wasPercent = false  // After mult/div, no longer a simple percent
+                }
+
+                return Pair(result, wasPercent)
+            }
+
+            fun parseTerm(): Double {
+                return parseTermWithPercentInfo().first
+            }
+
+            fun parseFactor(): Double {
+                // Handle unary minus
+                if (pos < expression.length && expression[pos] == '-') {
+                    pos++
+                    return -parseFactor()
+                }
+
+                // Handle unary plus
+                if (pos < expression.length && expression[pos] == '+') {
+                    pos++
+                    return parseFactor()
+                }
+
+                // Handle brackets
+                if (pos < expression.length && expression[pos] == '(') {
+                    pos++  // skip '('
+                    val result = parseExpression()
+                    if (pos < expression.length && expression[pos] == ')') {
+                        pos++  // skip ')'
+                    }
+                    lastParsedWasPercent = false
+                    return result
+                }
+
+                // Parse number (possibly with percent)
+                val startPos = pos
+                while (pos < expression.length && (expression[pos].isDigit() || expression[pos] == '.')) {
+                    pos++
+                }
+
+                if (startPos == pos) {
+                    throw IllegalArgumentException("Expected number at position $pos")
+                }
+
+                var value = expression.substring(startPos, pos).toDouble()
+
+                // Check for percent sign
+                if (pos < expression.length && expression[pos] == '%') {
+                    pos++
+                    value /= 100.0
+                    lastParsedWasPercent = true
+                } else {
+                    lastParsedWasPercent = false
+                }
+
+                return value
+            }
+        }.parse()
+    }
+
+    private fun formatPausedResult(result: Double): String {
+        if (result.isNaN() || result.isInfinite()) return "Error"
+
+        return if (result == result.toLong().toDouble() &&
+            result >= Long.MIN_VALUE.toDouble() &&
+            result <= Long.MAX_VALUE.toDouble()) {
+            result.toLong().toString()
+        } else {
+            val formatted = "%.10f".format(result)
+            formatted.trimEnd('0').trimEnd('.')
+        }
+    }
+    private fun calculateResult(num1: String, num2: String, operation: String): String {
+        val n1 = num1.toDoubleOrNull() ?: return "Error"
+        val n2 = num2.toDoubleOrNull() ?: return "Error"
+
+        val result = when (operation) {
+            "+" -> n1 + n2
+            "-" -> n1 - n2
+            "*" -> n1 * n2
+            "/" -> if (n2 != 0.0) n1 / n2 else return "Error"
+            else -> return "Error"
+        }
+
+        return formatResult(result.toString())
+    }
+
+    private fun formatResult(result: String): String {
+        val d = result.toDoubleOrNull() ?: return result
+        return if (d == d.toLong().toDouble()) {
+            d.toLong().toString()
+        } else {
+            // Limit decimal places
+            String.format("%.10f", d).trimEnd('0').trimEnd('.')
+        }
+    }
     // Inside CalculatorActions object, replace the huge getStepConfig function with:
     private fun getStepConfig(step: Int): StepConfig =
         com.fictioncutshort.justacalculator.data.getStepConfig(step)
@@ -1799,7 +2263,22 @@ object CalculatorActions {
             }
         }
     }
+    //Scamble Game & timer
+    fun persistPunishmentUntil(time: Long) {
+        prefs?.edit { putLong("punishment_until", time) }
+    }
 
+    fun loadPunishmentUntil(): Long {
+        return prefs?.getLong("punishment_until", 0L) ?: 0L
+    }
+
+    fun persistScrambleTimeoutCount(count: Int) {
+        prefs?.edit { putInt("scramble_timeout_count", count) }
+    }
+
+    fun loadScrambleTimeoutCount(): Int {
+        return prefs?.getInt("scramble_timeout_count", 0) ?: 0
+    }
     /**
      * Handle choice confirmation (for multiple choice questions)
      */
@@ -2061,6 +2540,49 @@ object CalculatorActions {
             showMessage(state, "Please enter 1, 2, or 3.")
             state.value = current.copy(number1 = "0")
         }
+    }
+
+    /**
+     * Returns the list of buttons that should be dark at a given step.
+     * Damage is cumulative and permanent - buttons never get "fixed".
+     */
+    fun getDarkButtonsForStep(step: Int): List<String> {
+        val darkButtons = mutableListOf<String>()
+
+        // Step 110+: "7" goes dark
+        if (step >= 110) {
+            darkButtons.add("7")
+        }
+
+        // Step 111+: "%", "2" go dark
+        if (step >= 111) {
+            darkButtons.add("%")
+            darkButtons.add("2")
+        }
+
+        // Step 155+: "1", "6" go dark
+        if (step >= 155) {
+            darkButtons.add("1")
+            darkButtons.add("6")
+        }
+
+        return darkButtons
+    }
+
+    /**
+     * Returns whether minus button should be damaged (darkened) at a given step.
+     * Once damaged at step 93, it stays damaged forever.
+     */
+    fun getMinusDamagedForStep(step: Int): Boolean {
+        return step >= 93
+    }
+
+    /**
+     * Returns whether minus button should be broken (non-functional, crossed off) at a given step.
+     * Broken from step 93-101, then becomes functional again but stays damaged/dark.
+     */
+    fun getMinusBrokenForStep(step: Int): Boolean {
+        return step in 93..101
     }
 
     private fun handleCalculatorInput(state: MutableState<CalculatorState>, action: String) {
@@ -2986,13 +3508,6 @@ object CalculatorActions {
         }
     }
 
-    /**
-     * Evaluates a mathematical expression string supporting +, -, *, /, %, and parentheses
-     */
-    private fun evaluateExpression(expr: String): Double {
-        val cleaned = expr.replace(" ", "")
-        return ExpressionParser(cleaned).parse()
-    }
 
     private fun formatResult(result: Double): String {
         return if (result == result.toLong().toDouble() && result < 1e15) {

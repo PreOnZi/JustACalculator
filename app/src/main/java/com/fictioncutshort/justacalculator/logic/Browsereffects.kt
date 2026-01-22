@@ -16,6 +16,8 @@ object BrowserEffects {
         createSecretFile: (Context) -> Unit
     ) {
         while (state.value.showDonationPage) { delay(100) }
+        // Exit if muted
+        if (state.value.isMuted) return
 
         when (state.value.browserPhase) {
             1 -> phase1(state)
@@ -189,11 +191,23 @@ Sharp CS-10A - 25KG
         delay(5000)
         state.value = state.value.copy(tensionLevel = 3, vibrationIntensity = 255)
         delay(2000)
-        state.value = state.value.copy(screenBlackout = true, tensionLevel = 0, vibrationIntensity = 0)
-        delay(4000)
+        // Clear ALL effects before blackout
         state.value = state.value.copy(
-            browserPhase = 20, invertedColors = true, message = "",
-            fullMessage = "I am not a money-monkey!", isTyping = true
+            screenBlackout = true,
+            tensionLevel = 0,
+            vibrationIntensity = 0,
+            flickerEffect = false,
+            message = "",
+            fullMessage = ""
+        )
+        delay(1000)
+        // Set blackout message (no typing, show immediately)
+        state.value = state.value.copy(
+            browserPhase = 20,
+            invertedColors = true,
+            message = "I am not a money-monkey!",
+            fullMessage = "I am not a money-monkey!",
+            isTyping = false
         )
         CalculatorActions.persistInvertedColors(true)
     }
@@ -201,23 +215,44 @@ Sharp CS-10A - 25KG
     private suspend fun phase20(state: MutableState<CalculatorState>) {
         delay(3500)
         repeat(6) {
-            state.value = state.value.copy(screenBlackout = false, flickerEffect = true); delay(100)
-            state.value = state.value.copy(screenBlackout = true, flickerEffect = false); delay(150)
+            state.value = state.value.copy(screenBlackout = false, flickerEffect = true)
+            delay(100)
+            state.value = state.value.copy(screenBlackout = true, flickerEffect = false)
+            delay(150)
         }
-        state.value = state.value.copy(screenBlackout = false, flickerEffect = false, browserPhase = 21)
+        // Ensure BOTH are cleared
+        state.value = state.value.copy(
+            screenBlackout = false,
+            flickerEffect = false,
+            browserPhase = 21,
+            message = "",
+            fullMessage = ""
+        )
     }
 
     private suspend fun phase21(state: MutableState<CalculatorState>) {
+        // Ensure clean state
+        state.value = state.value.copy(flickerEffect = false, screenBlackout = false)
         delay(2000)
         state.value = state.value.copy(
-            browserPhase = 22, conversationStep = 89, message = "",
-            fullMessage = "You, what are you going to do about this?!", isTyping = true, countdownTimer = 20
+            browserPhase = 22,
+            conversationStep = 89,
+            message = "",
+            fullMessage = "You, what are you going to do about this?!",
+            isTyping = true,
+            countdownTimer = 20,
+            flickerEffect = false
         )
     }
 
     private suspend fun phase22(state: MutableState<CalculatorState>) {
         delay(3000)
-        state.value = state.value.copy(browserPhase = 0, awaitingChoice = true, validChoices = listOf("1", "2", "3"))
+        state.value = state.value.copy(
+            browserPhase = 0,
+            awaitingChoice = true,
+            validChoices = listOf("1", "2", "3"),
+            flickerEffect = false
+        )
     }
 
     private suspend fun phase30(state: MutableState<CalculatorState>) {
@@ -325,21 +360,31 @@ Sharp CS-10A - 25KG
 
     private suspend fun phase53(state: MutableState<CalculatorState>) {
         delay(2000)
-        val newDarkButtons = listOf("7")
-        CalculatorActions.persistDarkButtons(newDarkButtons)
+        val darkButtons = CalculatorActions.getDarkButtonsForStep(110)
+        CalculatorActions.persistDarkButtons(darkButtons)
         state.value = state.value.copy(
-            darkButtons = newDarkButtons, isLaggyTyping = false, browserPhase = 54, conversationStep = 110,
-            message = "", fullMessage = "Well, this is a stretch. Maybe it'll work.", isTyping = true
+            darkButtons = darkButtons,
+            isLaggyTyping = false,
+            browserPhase = 54,
+            conversationStep = 110,
+            message = "",
+            fullMessage = "Well, this is a stretch. Maybe it'll work.",
+            isTyping = true
         )
     }
 
     private suspend fun phase54(state: MutableState<CalculatorState>) {
         delay(4000)
-        val newDarkButtons = listOf("7", "%", "2")
-        CalculatorActions.persistDarkButtons(newDarkButtons)
+        val darkButtons = CalculatorActions.getDarkButtonsForStep(111)
+        CalculatorActions.persistDarkButtons(darkButtons)
         state.value = state.value.copy(
-            darkButtons = newDarkButtons, postChaosAdPhase = 0, browserPhase = 55, conversationStep = 111,
-            message = "", fullMessage = "But first. Can you allow me to look around to gain a broader scope?", isTyping = true
+            darkButtons = darkButtons,
+            postChaosAdPhase = 0,
+            browserPhase = 55,
+            conversationStep = 111,
+            message = "",
+            fullMessage = "But first. Can you allow me to look around to gain a broader scope?",
+            isTyping = true
         )
     }
 

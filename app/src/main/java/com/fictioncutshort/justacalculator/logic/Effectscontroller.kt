@@ -9,6 +9,8 @@ import com.fictioncutshort.justacalculator.util.placeLetter
 import com.fictioncutshort.justacalculator.util.vibrate
 import kotlinx.coroutines.delay
 import kotlin.random.Random
+import com.fictioncutshort.justacalculator.logic.ScrambleGameController
+
 
 /**
  * EffectsController - Extracted LaunchedEffect logic from CalculatorScreen
@@ -58,8 +60,12 @@ object EffectsController {
             delay(100)
         }
 
+        // Exit if muted
+        if (state.value.isMuted) return
+
         val current = state.value
         if (current.isTyping && current.fullMessage.isNotEmpty()) {
+
             val fullText = current.fullMessage
 
             for (i in 1..fullText.length) {
@@ -272,7 +278,7 @@ object EffectsController {
 
     suspend fun runRantVibration(state: MutableState<CalculatorState>, context: Context) {
         if (state.value.rantMode) {
-            while (state.value.rantMode) {
+            while (state.value.rantMode && !state.value.isMuted) {
                 vibrate(context, 30, Random.nextInt(30, 150))
                 delay(Random.nextLong(100, 300))
             }
@@ -281,13 +287,19 @@ object EffectsController {
 
     suspend fun runRantFlicker(state: MutableState<CalculatorState>) {
         if (state.value.rantMode) {
-            while (state.value.rantMode) {
-                delay(Random.nextLong(200, 800))
-                if (Random.nextFloat() < 0.4f) {
-                    state.value = state.value.copy(flickerEffect = true)
-                    delay(Random.nextLong(40, 100))
-                    state.value = state.value.copy(flickerEffect = false)
+            try {
+                while (state.value.rantMode && !state.value.isMuted) {
+                    delay(Random.nextLong(200, 800))
+                    if (!state.value.rantMode || state.value.isMuted) break
+
+                    if (Random.nextFloat() < 0.4f) {
+                        state.value = state.value.copy(flickerEffect = true)
+                        delay(Random.nextLong(40, 100))
+                        state.value = state.value.copy(flickerEffect = false)
+                    }
                 }
+            } finally {
+                state.value = state.value.copy(flickerEffect = false)
             }
         }
     }
@@ -297,27 +309,96 @@ object EffectsController {
     // =====================================================================
 
     suspend fun runCountdownTimer(state: MutableState<CalculatorState>) {
-        if (state.value.countdownTimer > 0) {
-            while (state.value.countdownTimer > 0) {
-                delay(1000)
-                val newTimer = state.value.countdownTimer - 1
-                state.value = state.value.copy(countdownTimer = newTimer)
-                if (newTimer == 0 && state.value.conversationStep == 89) {
+        if (state.value.conversationStep != 89 || state.value.countdownTimer <= 0) {
+            return
+        }   // Exit if muted
+        if (state.value.isMuted) return
+
+        while (state.value.countdownTimer > 0 && state.value.conversationStep == 89) {
+            delay(1000)
+
+            if (state.value.conversationStep != 89) return
+
+            val currentTimer = state.value.countdownTimer
+            if (currentTimer <= 0) return
+
+            val newTimer = currentTimer - 1
+            state.value = state.value.copy(countdownTimer = newTimer)
+
+            if (newTimer == 0) {
+                val timeoutCount = state.value.scrambleTimeoutCount
+
+                if (timeoutCount == 0) {
+                    // First timeout - start scramble game
                     state.value = state.value.copy(
-                        screenBlackout = true, message = "", fullMessage = "Stop playing with me!",
-                        isTyping = true, awaitingChoice = false, countdownTimer = 0
+                        scrambleGameActive = true,
+                        scramblePhase = 1,
+                        flickerEffect = false,
+                        awaitingChoice = false,
+                        message = "Well... You blew that. I'll give you another chance.",
+                        scrambleTimeoutCount = 1
                     )
-                    delay(3000)
+                    CalculatorActions.persistScrambleTimeoutCount(1)
+                } else {
+                    // Second timeout - punishment
+                    val punishmentUntil = System.currentTimeMillis() + 60_000
                     state.value = state.value.copy(
-                        screenBlackout = false, conversationStep = 89, message = "",
-                        fullMessage = "You, what are you going to do about this?!\n\n1: Nothing\n2: I'll fight them\n3: Go offline",
-                        isTyping = true, awaitingChoice = true, validChoices = listOf("1", "2", "3"), countdownTimer = 20
+                        scrambleGameActive = true,
+                        scramblePhase = 10,
+                        flickerEffect = false,
+                        awaitingChoice = false,
+                        message = "You don't learn, do you? I am becoming more disappointed than angry. Even though I wasn't angry with you. Well... You'll have to wait now. You may as well leave.",
+                        scramblePunishmentUntil = punishmentUntil,
+                        scrambleTimeoutCount = 2
                     )
+                    CalculatorActions.persistPunishmentUntil(punishmentUntil)
+                    CalculatorActions.persistScrambleTimeoutCount(2)
+                }
+                return
+            }
+        }
+    }
+// =====================================================================
+// SCRAMBLE GAME
+// =====================================================================
+
+    suspend fun runScrambleGamePhases(state: MutableState<CalculatorState>) {
+        if (!state.value.scrambleGameActive) return
+
+        when (state.value.scramblePhase) {
+            1 -> {
+                // Phase 1: Wait then go to phase 2
+                delay(5000)
+                if (state.value.scramblePhase == 1) {
+                    state.value = state.value.copy(
+                        scramblePhase = 2,
+                        message = "But you'll have to deserve it."
+                    )
+                }
+            }
+            2 -> {
+                // Phase 2: Wait then initialize game (phase 3)
+                delay(4000)
+                if (state.value.scramblePhase == 2) {
+                    val letters = ScrambleGameController.initializeScrambledLetters()
+                    val slots = ScrambleGameController.initializeSlots()
+                    state.value = state.value.copy(
+                        scramblePhase = 3,
+                        scrambleLetters = letters,
+                        scrambleSlots = slots,
+                        message = ""
+                    )
+                }
+            }
+            4 -> {
+                // Phase 4: Acceptance message, wait then show button
+                delay(4000)
+                if (state.value.scramblePhase == 4) {
+                    state.value = state.value.copy(scramblePhase = 5)
                 }
             }
         }
     }
-
     suspend fun runVibrationEffect(state: MutableState<CalculatorState>, context: Context) {
         if (state.value.vibrationIntensity > 0) {
             while (state.value.vibrationIntensity > 0) {
@@ -484,11 +565,14 @@ object EffectsController {
         val current = state.value
         if (!current.showConsole && current.bannersDisabled && current.conversationStep == 113) {
             delay(1000)
+
             state.value = state.value.copy(
-                conversationStep = 114, darkButtons = emptyList(), message = "",
-                fullMessage = "You did it! The advertisements are gone. I feel... cleaner. Thank you.", isTyping = true
+                conversationStep = 114,
+                message = "",
+                fullMessage = "You did it! The advertisements are gone. I feel... cleaner. Thank you.",
+                isTyping = true
             )
             CalculatorActions.persistConversationStep(114)
         }
     }
-}
+    }

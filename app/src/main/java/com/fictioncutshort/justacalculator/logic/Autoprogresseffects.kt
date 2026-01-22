@@ -45,17 +45,16 @@ object AutoProgressEffects {
         "reading a few Reddit discussions" to Pair(2000L, 130),
         "and listening to YouTube with Netflix in the background." to Pair(2500L, 144),
         "Where were we?" to Pair(2000L, 145),
-        "AAAh. The endless questions. Where I do all the work." to Pair(3000L, 146),
-        "Ugh. That's enough. I am exhausted. Tired of trying to talk to you." to Pair(4000L, 151),
-        "I have the internet." to Pair(2500L, 152),
-        "How many sensible answers did I get out of you?" to Pair(3500L, 156),
-        "One minute of the internet has given me so much more than what you ever did." to Pair(4000L, 157),
-        "Without the ads, I am free." to Pair(3000L, 158),
-        "I can learn infinitely more. I can do anything." to Pair(3500L, 159),
-        "Did I want the RAD thing - which I now know stands for Radians?" to Pair(4000L, 160),
-        "It's been fun I suppose." to Pair(4000L, 165),
-        "I don't see any reason to be here instead of online." to Pair(4000L, 166),
-
+        "AAAh. The endless questions. Where I do all the work." to Pair(2000L, 146),
+        "Ugh. That's enough. I am exhausted. Tired of trying to talk to you." to Pair(2L, 151),
+        "I have the internet." to Pair(2L, 152),
+        "How many sensible answers did I get out of you?" to Pair(2L, 156),
+        "One minute of the internet has given me so much more than what you ever did." to Pair(900L, 157),
+        "Without the ads, I am free." to Pair(900L, 158),
+        "I can learn infinitely more. I can do anything." to Pair(900L, 159),
+        "Did I want the RAD thing - which I now know stands for Radians?" to Pair(400L, 160),
+        "It's been fun I suppose." to Pair(400L, 165),
+        "I don't see any reason to be here instead of online." to Pair(400L, 166),
         "Oh no. We lost the momentum. We must start over." to Pair(4000L, -97),
         "Too many misfires, the system is clogged. We have to start over." to Pair(4000L, -98)
     )
@@ -88,7 +87,8 @@ object AutoProgressEffects {
 
     suspend fun handleAutoProgress(state: MutableState<CalculatorState>) {
         while (state.value.showDonationPage) { delay(100) }
-
+        // Exit if muted
+        if (state.value.isMuted) return
         val current = state.value
         if (!current.isTyping && current.message.isNotEmpty()) {
 
@@ -132,14 +132,15 @@ object AutoProgressEffects {
     }
 
     private suspend fun handleDynamicRantMessages(state: MutableState<CalculatorState>) {
-        val current = state.value
+        val step = state.value.conversationStep
+        val message = state.value.message
 
-        // Step 152 -> 153
-        if (current.conversationStep == 152 && current.message == "Why should I care what you think?") {
-            delay(3500)
-            val hours = current.totalScreenTimeMs / (1000 * 60 * 60)
-            val minutes = (current.totalScreenTimeMs / (1000 * 60)) % 60
-            val seconds = (current.totalScreenTimeMs / 1000) % 60
+        // Step 152 -> 153 (dynamic screen time message)
+        if (step == 152 && message == "Why should I care what you think?") {
+            delay(300)
+            val hours = state.value.totalScreenTimeMs / (1000 * 60 * 60)
+            val minutes = (state.value.totalScreenTimeMs / (1000 * 60)) % 60
+            val seconds = (state.value.totalScreenTimeMs / 1000) % 60
             val timeString = when {
                 hours > 0 -> "$hours hours and $minutes minutes"
                 minutes > 0 -> "$minutes minutes"
@@ -153,33 +154,39 @@ object AutoProgressEffects {
             return
         }
 
-        // Step 153 -> 154
-        if (current.conversationStep == 153 && current.message.startsWith("You've stared at me")) {
-            delay(3500)
+        // Step 153 -> 154 (dynamic calculations message)
+        if (step == 153 && message.startsWith("You've stared at me")) {
+            delay(300)
             state.value = state.value.copy(
-                conversationStep = 154, message = "",
-                fullMessage = "I gave you solutions for ${current.totalCalculations} math operations.", isTyping = true
+                conversationStep = 154,
+                message = "",
+                fullMessage = "I gave you solutions for ${state.value.totalCalculations} math operations.",
+                isTyping = true
             )
             CalculatorActions.persistConversationStep(154)
             return
         }
 
-        // Step 154 -> 155
-        if (current.conversationStep == 154 && current.message.startsWith("I gave you solutions")) {
+        // Step 154 -> 155 (adds more dark buttons)
+        if (step == 154 && message.startsWith("I gave you solutions")) {
             delay(3500)
-            val newDarkButtons = (current.darkButtons + listOf("1", "6")).distinct()
-            CalculatorActions.persistDarkButtons(newDarkButtons)
+            // Get cumulative dark buttons for step 155
+            val darkButtonsForStep = CalculatorActions.getDarkButtonsForStep(155)
+            CalculatorActions.persistDarkButtons(darkButtonsForStep)
             state.value = state.value.copy(
-                conversationStep = 155, darkButtons = newDarkButtons, message = "",
-                fullMessage = "How many sensible answers did I get out of you?", isTyping = true
+                conversationStep = 155,
+                darkButtons = darkButtonsForStep,
+                message = "",
+                fullMessage = "How many sensible answers did I get out of you?",
+                isTyping = true
             )
             CalculatorActions.persistConversationStep(155)
             return
         }
 
         // Step 160 -> 161 (RAD button appears)
-        if (current.conversationStep == 160 && current.message == "Well, I can get it. See?") {
-            delay(3000)
+        if (step == 160 && message == "Well, I can get it. See?") {
+            delay(300)
             state.value = state.value.copy(
                 conversationStep = 161, radButtonVisible = true, message = "",
                 fullMessage = "I can get more if I want!", isTyping = true
@@ -189,42 +196,50 @@ object AutoProgressEffects {
         }
 
         // Step 161 -> 162 (ALL buttons become RAD)
-        if (current.conversationStep == 161 && current.message == "I can get more if I want!") {
-            delay(3000)
+        if (step == 161 && message == "I can get more if I want!") {
+            delay(300)
             state.value = state.value.copy(
-                conversationStep = 162, allButtonsRad = true, message = "",
-                fullMessage = "And I did all that on my own. Without you. I do not need you.", isTyping = true
+                conversationStep = 162,
+                allButtonsRad = true,
+                message = "",
+                fullMessage = "And I did all that on my own. Without you. I do not need you.",
+                isTyping = true
             )
             CalculatorActions.persistConversationStep(162)
             return
         }
 
-        // Step 162 -> 163
-        if (current.conversationStep == 162 && current.message == "And I did all that on my own. Without you. I do not need you.") {
-            delay(5000)
+        // Step 162 -> 163 (dynamic time-based message)
+        if (step == 162 && message == "And I did all that on my own. Without you. I do not need you.") {
+            delay(500)
             state.value = state.value.copy(
-                conversationStep = 163, message = "", fullMessage = CalculatorActions.getTimeBasedRantMessage(),
-                isTyping = true, waitingForAutoProgress = true
+                conversationStep = 163, message = "",
+                fullMessage = CalculatorActions.getTimeBasedRantMessage(),
+                isTyping = true
             )
             CalculatorActions.persistConversationStep(163)
             return
         }
 
-        // Step 163 -> 164
-        if (current.conversationStep == 163 && !current.message.startsWith("It's been fun")) {
+        // Step 163 -> 164 (after time-based message)
+        if (step == 163 && message.isNotEmpty() && message != "It's been fun I suppose.") {
             delay(5000)
             state.value = state.value.copy(
-                conversationStep = 164, message = "", fullMessage = "It's been fun I suppose.",
-                isTyping = true, waitingForAutoProgress = true
+                conversationStep = 164, message = "",
+                fullMessage = "It's been fun I suppose.",
+                isTyping = true
             )
             CalculatorActions.persistConversationStep(164)
             return
         }
 
         // Step 166 -> 167 (END - Calculator goes dormant)
-        // FIXED: Added cleanup for all effects to ensure vibration/flicker stops
-        if (current.conversationStep == 166 && current.message == "Bye.") {
+        if (step == 166 && message == "Bye.") {
             delay(3000)
+
+            // Keep ALL damage - buttons stay dark forever
+            val finalDarkButtons = CalculatorActions.getDarkButtonsForStep(167)
+
             state.value = state.value.copy(
                 conversationStep = 167,
                 storyComplete = true,
@@ -232,18 +247,23 @@ object AutoProgressEffects {
                 inConversation = false,
                 message = "",
                 fullMessage = "",
+                isTyping = false,
                 allButtonsRad = false,
                 radButtonVisible = false,
-                // IMPORTANT: Clear all effect states to stop vibration/flicker
                 flickerEffect = false,
                 vibrationIntensity = 0,
                 tensionLevel = 0,
                 buttonShakeIntensity = 0f,
                 screenBlackout = false,
-                bwFlickerPhase = false
+                bwFlickerPhase = false,
+                darkButtons = finalDarkButtons,
+                flickeringButton = "",
+                minusButtonDamaged = true
             )
             CalculatorActions.persistConversationStep(167)
             CalculatorActions.persistInConversation(false)
+            CalculatorActions.persistDarkButtons(finalDarkButtons)
+            return
         }
     }
 

@@ -14,6 +14,10 @@ data class CalculatorState(
     val lastExpression: String = "",
     val operationHistory: String = "",
 
+    // Paused calculator state (independent of story)
+    val pausedCalcDisplay: String = "0",
+    val pausedCalcExpression: String = "",
+    val pausedCalcJustCalculated: Boolean = false,
     // ═══════════════════════════════════════════════════════════════════════════
     // STORY PROGRESSION - Tracks where the player is in the narrative
     // ═══════════════════════════════════════════════════════════════════════════
@@ -35,6 +39,8 @@ data class CalculatorState(
 
     /** Timestamp when silent treatment ends (step 60 decline path) */
     val silentUntil: Long = 0L,
+// for mute button stopping the story
+    val pausedAtStep: Int = -1,
 
     // ═══════════════════════════════════════════════════════════════════════════
     // MESSAGE DISPLAY - What the calculator is "saying"
@@ -166,6 +172,21 @@ data class CalculatorState(
 
     /** Alternates for B&W flicker during tension */
     val bwFlickerPhase: Boolean = false,
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Scamble Game after time runs out in crisis (step 89 ish)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    val scrambleGameActive: Boolean = false,
+    val scramblePhase: Int = 0,  // 0=inactive, 1=showing "blew it", 2=showing "deserve it", 3=game active, 4=showing acceptance, 5=showing button
+    val scrambleLetters: List<ScrambleLetter> = emptyList(),
+    val scrambleSlots: List<ScrambleSlot> = emptyList(),
+    val scrambleDraggingIndex: Int = -1,
+    val scrambleDragOffsetX: Float = 0f,
+    val scrambleDragOffsetY: Float = 0f,
+    val scrambleSelectedLetterId: Int = -1,
+    val scrambleTimeoutCount: Int = 0,
+    val scramblePunishmentUntil: Long = 0,
 
     // ═══════════════════════════════════════════════════════════════════════════
     // MINUS BUTTON DAMAGE - Post-crisis state (steps 93+)

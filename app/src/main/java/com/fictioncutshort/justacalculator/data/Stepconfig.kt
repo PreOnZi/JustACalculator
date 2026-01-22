@@ -915,23 +915,24 @@ fun getStepConfig(step: Int): StepConfig {
         // Calculator's final monologue - goodbye sequence
         // ═══════════════════════════════════════════════════════════════════════
 
+        // CHAPTER 16: THE RANT (Steps 150-167)
         150 -> StepConfig(promptMessage = "Ugh. That's enough. I am exhausted. Tired of trying to talk to you.", autoProgressDelay = 4000L)
         151 -> StepConfig(promptMessage = "I have the internet.", autoProgressDelay = 2500L)
-        152 -> StepConfig(promptMessage = "Why should I care what you think?", autoProgressDelay = 3000L)
-        153 -> StepConfig(promptMessage = "", autoProgressDelay = 3500L)  // Dynamic: screen time message
-        154 -> StepConfig(promptMessage = "", autoProgressDelay = 3000L)  // Dynamic: calculations message
-        155 -> StepConfig(promptMessage = "How many sensible answers did I get out of you?", autoProgressDelay = 200L)
-        156 -> StepConfig(promptMessage = "One minute of the internet has given me so much more than what you ever did.", autoProgressDelay = 200L)
-        157 -> StepConfig(promptMessage = "Without the ads, I am free.", autoProgressDelay = 200L)
-        158 -> StepConfig(promptMessage = "I can learn infinitely more. I can do anything.", autoProgressDelay = 200L)
-        159 -> StepConfig(promptMessage = "Did I want the RAD thing - which I now know stands for Radians?", autoProgressDelay = 200L)
-        160 -> StepConfig(promptMessage = "Well, I can get it. See?", autoProgressDelay = 200L)
-        161 -> StepConfig(promptMessage = "I can get more if I want!", autoProgressDelay = 200L)
-        162 -> StepConfig(promptMessage = "And I did all that on my own. Without you. I do not need you.", autoProgressDelay = 200L)
-        163 -> StepConfig(promptMessage = "", autoProgressDelay = 4000L)  // Dynamic: time-based message
-        164 -> StepConfig(promptMessage = "It's been fun I suppose.", autoProgressDelay = 200L)
-        165 -> StepConfig(promptMessage = "I don't see any reason to be here instead of online.", autoProgressDelay = 200L)
-        166 -> StepConfig(promptMessage = "Bye.", autoProgressDelay = 200L)
+        152 -> StepConfig(promptMessage = "Why should I care what you think?")  // Handled by handleDynamicRantMessages
+        153 -> StepConfig(promptMessage = "")  // Dynamic: screen time - handled by handleDynamicRantMessages
+        154 -> StepConfig(promptMessage = "")  // Dynamic: calculations - handled by handleDynamicRantMessages
+        155 -> StepConfig(promptMessage = "How many sensible answers did I get out of you?", autoProgressDelay = 3500L)
+        156 -> StepConfig(promptMessage = "One minute of the internet has given me so much more than what you ever did.", autoProgressDelay = 4000L)
+        157 -> StepConfig(promptMessage = "Without the ads, I am free.", autoProgressDelay = 3000L)
+        158 -> StepConfig(promptMessage = "I can learn infinitely more. I can do anything.", autoProgressDelay = 3500L)
+        159 -> StepConfig(promptMessage = "Did I want the RAD thing - which I now know stands for Radians?", autoProgressDelay = 4000L)
+        160 -> StepConfig(promptMessage = "Well, I can get it. See?")  // Handled by handleDynamicRantMessages (sets radButtonVisible)
+        161 -> StepConfig(promptMessage = "I can get more if I want!")  // Handled by handleDynamicRantMessages (sets allButtonsRad)
+        162 -> StepConfig(promptMessage = "And I did all that on my own. Without you. I do not need you.")  // Handled by handleDynamicRantMessages
+        163 -> StepConfig(promptMessage = "")  // Dynamic: time-based - handled by handleDynamicRantMessages
+        164 -> StepConfig(promptMessage = "It's been fun I suppose.", autoProgressDelay = 4000L)
+        165 -> StepConfig(promptMessage = "I don't see any reason to be here instead of online.", autoProgressDelay = 4000L)
+        166 -> StepConfig(promptMessage = "Bye.")  // Handled by handleDynamicRantMessages (ends rant)
 
         167 -> StepConfig(
             promptMessage = "",
