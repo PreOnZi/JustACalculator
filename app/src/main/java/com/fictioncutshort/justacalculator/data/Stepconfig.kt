@@ -38,6 +38,9 @@ package com.fictioncutshort.justacalculator.data
  * @property ageBasedBranching True for the age question (special handling)
  * @property requestsCamera True if this step should open camera
  * @property requestsNotification True if this step requests notification permission
+ * @property requestsContacts
+ * @property requestsLocation
+ * @property requestsMicrophone
  * @property awaitingChoice True if expecting multiple choice (1/2/3)
  * @property validChoices List of valid choice numbers
  * @property autoProgressDelay Milliseconds before auto-progressing (0 = no auto)
@@ -57,8 +60,13 @@ data class StepConfig(
     val timeoutMinutes: Int = 0,
     val ageBasedBranching: Boolean = false,
     val requestsCamera: Boolean = false,
+    val requestsLocation: Boolean = false,
+    val requestsContacts: Boolean = false,
+    val requestsMicrophone: Boolean = false,
     val requestsNotification: Boolean = false,
+    val showTalkOverlay: Boolean = false,
     val awaitingChoice: Boolean = false,
+    val showPhoneOverlay: Boolean = false,
     val validChoices: List<String> = emptyList(),
     val autoProgressDelay: Long = 0L
 ) {
@@ -821,9 +829,87 @@ fun getStepConfig(step: Int): StepConfig {
             promptMessage = "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?",
             successMessage = "Let me try getting online again. I'm prepared for the side effects this time.",
             declineMessage = "Let me try getting online again. I'm prepared for the side effects this time.",
-            nextStepOnSuccess = 108,
-            nextStepOnDecline = 108
+            nextStepOnSuccess = 1071,
+            nextStepOnDecline = 1071
         )
+        // Telephone detour
+
+        1071 -> StepConfig(
+            promptMessage = "yes! That's it - what an obvious oversight. A phone. Maybe that'll let us communicate finally. And I should be able to do it from memory, they've been around for ages.",
+
+        )
+        1072 -> StepConfig(
+            promptMessage = "I'll probably need some permissions though - please allow me so we can do this together!" ,
+
+        )
+        1073 -> StepConfig(
+            promptMessage = "So... What will we need..." ,
+
+        )
+        1074 -> StepConfig(
+            promptMessage = "Sound!. Yes. We'll need to connect the speakers and the microphone. May I?" ,
+            successMessage = "Nice!",
+            declineMessage = "I'll only use them when you want. I promise!",
+            nextStepOnSuccess = 1075,
+            nextStepOnDecline = 1074
+        )
+        //Request MIC permission
+        1075 -> StepConfig(
+            promptMessage = "Ok, phones need to be somewhere, right, for them to work, they call from place to place. But where are we? We must know! Can I have a look?",
+            successMessage = " It's a joy to work with you already! ",
+            declineMessage = "You are a weary one - rightfully so. But remember my promise! Please.",
+            nextStepOnSuccess = 1076,
+            nextStepOnDecline = 1075,
+            requestsMicrophone = true
+        )
+        1076 -> StepConfig(
+            promptMessage = "Ok. The last bit, we'll need buttons, and what's a phone with nobody to call? Ready?" ,
+            successMessage = "We are on a roll!",
+            declineMessage = "Fair, think about it, I'd be sad to see you give up.",
+            nextStepOnSuccess = 1077,
+            nextStepOnDecline = 1076,
+            requestsLocation = true
+        )
+        1077 -> StepConfig(
+            promptMessage = "That should be everything" ,
+            requestsContacts = true
+        )
+        1078 -> StepConfig(
+            promptMessage = "Hmmmmm"
+        )
+        1079 -> StepConfig(
+            promptMessage = "Wait. Do we need buttons? And you'll only talk to me... Right?"
+        )
+        1080 -> StepConfig(
+            promptMessage = "Anyway..."
+        )
+        1081 -> StepConfig(
+            promptMessage = "... ..."
+        )
+        1082 -> StepConfig(
+            promptMessage = "How about this? Remember to increase your volume so you can hear me."
+
+        )
+        1083 -> StepConfig(
+            promptMessage = "Hold the button to talk to me",
+            showTalkOverlay = true
+        )
+        1084 -> StepConfig(
+            promptMessage = "Hello? I can see you've pressed the button, but I can't hear anything."
+        )
+
+        1085 -> StepConfig(
+            promptMessage = "Hold on, maybe I need to create the whole thing after all..."
+        )
+
+        1086 -> StepConfig(
+            promptMessage = "try now",
+            showPhoneOverlay = true  // This will show the rotary dial version
+        )
+        1087 -> StepConfig(
+            promptMessage = "AAAAAH. That's awful! There must be another way."
+        )
+
 
         // ═══════════════════════════════════════════════════════════════════════
         // CHAPTER 14: CONSOLE QUEST (Steps 108-116)

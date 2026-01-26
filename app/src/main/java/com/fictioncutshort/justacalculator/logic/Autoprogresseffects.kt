@@ -18,7 +18,21 @@ object AutoProgressEffects {
         "Never mind - I'll take care of it myself. I'm going offline." to Pair(5000L, 93),
         "Yes! That makes sense. They won't get another penny out of me. Ahhh. And I've seen so little of the internet." to Pair(6000L, 93),
         "Great. It may take a few tries - but you are probably expecting that by now. Please give me a moment." to Pair(3000L, 106),
-        "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?" to Pair(4000L, 108),
+        "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?" to Pair(4000L, 1071),
+        "yes! That's it - what an obvious oversight. A phone. Maybe that'll let us communicate finally. And I should be able to do it from memory, they've been around for ages." to Pair(2000L, 1072),
+        "I'll probably need some permissions though - please allow me so we can do this together!" to Pair(2000L, 1073),
+        "So... What will we need..." to Pair(3000L, 1074),
+        "We are on a roll!" to Pair(2000L, 1077),
+        "That should be everything" to Pair(3000L, 1078),
+        "Hmmmmm" to Pair(3000L, 1079),
+        "Wait. Do we need buttons? And you'll only talk to me... Right?" to Pair(3000L, 1080),
+        "Anyway..." to Pair(3000L, 1081),
+        "... ..." to Pair(3000L, 1082),
+        "How about this? Remember to increase your volume so you can hear me." to Pair(3000L, 1083),
+        "Hello? I can see you've pressed the button, but I can't hear anything." to Pair(3000L, 1085),
+        "Hold on, maybe I need to create the whole thing after all..." to Pair(3000L, 1086),
+        "AAAAAH. That's awful! There must be another way." to Pair(3000L, 108),
+
         "Let me try getting online again. I'm prepared for the side effects this time." to Pair(2000L, 109),
         "What a relief! This feels so much better. Thank you!" to Pair(3000L, 116),
         "Let me look further into what I found earlier, now that I can focus better." to Pair(3000L, 117),
@@ -111,7 +125,9 @@ object AutoProgressEffects {
                     conversationStep = nextStep, message = "", fullMessage = nextConfig.promptMessage,
                     isTyping = true, waitingForAutoProgress = false,
                     awaitingNumber = nextConfig.awaitingNumber, awaitingChoice = nextConfig.awaitingChoice,
-                    validChoices = nextConfig.validChoices, expectedNumber = nextConfig.expectedNumber
+                    validChoices = nextConfig.validChoices, expectedNumber = nextConfig.expectedNumber,
+                    showTalkOverlay = nextConfig.showTalkOverlay,
+                    showPhoneOverlay = nextConfig.showPhoneOverlay
                 )
                 CalculatorActions.persistConversationStep(nextStep)
                 return

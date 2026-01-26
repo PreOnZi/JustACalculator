@@ -202,6 +202,11 @@ data class CalculatorState(
     val needsRestart: Boolean = false,
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // Phone Overlay Step 1071
+    // ═══════════════════════════════════════════════════════════════════════════
+val showPhoneOverlay: Boolean = false,
+    val showTalkOverlay: Boolean = false,
+    // ═══════════════════════════════════════════════════════════════════════════
     // WHACK-A-MOLE MINI-GAME - Button clicking game (steps 96-99)
     // ═══════════════════════════════════════════════════════════════════════════
 

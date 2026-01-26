@@ -9,7 +9,7 @@ import com.fictioncutshort.justacalculator.util.placeLetter
 import com.fictioncutshort.justacalculator.util.vibrate
 import kotlinx.coroutines.delay
 import kotlin.random.Random
-import com.fictioncutshort.justacalculator.logic.ScrambleGameController
+import com.fictioncutshort.justacalculator.logic.TalkAudioHandler
 
 
 /**
@@ -55,7 +55,11 @@ object EffectsController {
     // TYPING ANIMATION
     // =====================================================================
 
-    suspend fun runTypingAnimation(state: MutableState<CalculatorState>, context: Context) {
+    suspend fun runTypingAnimation(
+        state: MutableState<CalculatorState>,
+        context: Context,
+        audioHandler: TalkAudioHandler? = null
+    ) {
         while (state.value.showDonationPage) {
             delay(100)
         }
@@ -76,7 +80,13 @@ object EffectsController {
                 }
                 val randomExtra = if (state.value.isLaggyTyping) Random.nextLong(0, 200) else Random.nextLong(0, 15)
                 delay(baseDelay + randomExtra)
-                vibrate(context, 15, 80)
+
+                // Reduced vibration (was 15, 80) - now softer
+                vibrate(context, 5, 30)
+
+                // Play soft click sound
+                audioHandler?.playTypingClick()
+
                 state.value = state.value.copy(
                     message = fullText.substring(0, i),
                     isLaggyTyping = if (i == fullText.length) false else state.value.isLaggyTyping

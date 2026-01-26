@@ -91,9 +91,13 @@ import com.fictioncutshort.justacalculator.util.vibrate
 import androidx.compose.ui.tooling.preview.Preview as ComposePreview
 import com.fictioncutshort.justacalculator.ui.components.ScrambleGameOverlay
 import com.fictioncutshort.justacalculator.logic.ScrambleGameController
+import com.fictioncutshort.justacalculator.logic.TalkAudioHandler
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
 import com.fictioncutshort.justacalculator.ui.components.PausedCalculatorOverlay
+import com.fictioncutshort.justacalculator.ui.components.TalkOverlay
+import com.fictioncutshort.justacalculator.ui.components.PhoneOverlay
+
 
 
 class MainActivity : ComponentActivity() {
@@ -115,14 +119,17 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun CalculatorScreen() {
     var sessionStartTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
-
     val context = LocalContext.current
+    val talkAudioHandler = remember { TalkAudioHandler(context) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val initial = remember { CalculatorActions.loadInitialState() }
     val state = remember { mutableStateOf(initial) }
     val current = state.value
     var showTermsScreen by remember { mutableStateOf(!CalculatorActions.loadTermsAcceptedPublic()) }
     var showTermsPopup by remember { mutableStateOf(false) }
+    var microphonePermissionRequested by remember { mutableStateOf(false) }
+    var locationPermissionRequested by remember { mutableStateOf(false) }
+    var contactsPermissionRequested by remember { mutableStateOf(false) }
 
     // Camera permission state
     var hasCameraPermission by remember {
@@ -146,7 +153,7 @@ fun CalculatorScreen() {
         )
     }
 
-    // Permission launchers - MUST be declared before LaunchedEffects that use them
+    // Permission launchers
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -169,7 +176,35 @@ fun CalculatorScreen() {
         CalculatorActions.persistNeedsRestart(true)
         CalculatorActions.persistConversationStep(101)
     }
+// Microphone permission state
+    var hasMicrophonePermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
 
+// Location permission state
+    var hasLocationPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+// Contacts permission state
+    var hasContactsPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.READ_CONTACTS
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
     // ========== SCREEN TIME ==========
     LaunchedEffect(Unit) {
         EffectsController.trackScreenTime(state)
@@ -180,7 +215,7 @@ fun CalculatorScreen() {
 
     // ========== TYPING ANIMATION ==========
     LaunchedEffect(current.fullMessage, current.isTyping, current.isLaggyTyping, current.isSuperFastTyping, current.showDonationPage) {
-        EffectsController.runTypingAnimation(state, context)
+        EffectsController.runTypingAnimation(state, context, talkAudioHandler)
     }
 
     // ========== PENDING AUTO MESSAGE ==========
@@ -247,6 +282,48 @@ fun CalculatorScreen() {
         // Step triggers for going offline
         AutoProgressEffects.handleStepTriggers(state)
     }
+    //MICROPHONE LOCATION CONTACTS PERMISSIONS
+    val microphonePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasMicrophonePermission = granted
+        val nextConfig = CalculatorActions.getStepConfigPublic(1075)
+        state.value = state.value.copy(
+            conversationStep = 1075,
+            message = "",
+            fullMessage = nextConfig.promptMessage,
+            isTyping = true
+        )
+        CalculatorActions.persistConversationStep(1075)
+    }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasLocationPermission = granted
+        val nextConfig = CalculatorActions.getStepConfigPublic(1076)
+        state.value = state.value.copy(
+            conversationStep = 1076,
+            message = "",
+            fullMessage = nextConfig.promptMessage,
+            isTyping = true
+        )
+        CalculatorActions.persistConversationStep(1076)
+    }
+
+    val contactsPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasContactsPermission = granted
+        val nextConfig = CalculatorActions.getStepConfigPublic(1077)
+        state.value = state.value.copy(
+            conversationStep = 1077,
+            message = "",
+            fullMessage = nextConfig.promptMessage,
+            isTyping = true
+        )
+        CalculatorActions.persistConversationStep(1077)
+    }
 
     // ========== RANT MODE ==========
     LaunchedEffect(current.rantMode) {
@@ -254,6 +331,30 @@ fun CalculatorScreen() {
     }
     LaunchedEffect(current.rantMode) {
         EffectsController.runRantFlicker(state)
+    }
+    // Telephone detour permissions
+    LaunchedEffect(current.conversationStep, current.message, current.isTyping) {
+        // Microphone - step is 1075 when "Nice!" is shown (success message from 1074)
+        if (current.conversationStep == 1075 && current.message == "Nice!" && !current.isTyping) {
+            if (!microphonePermissionRequested) {
+                microphonePermissionRequested = true
+                microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+        }
+        // Location - step is 1076 when success message from 1075 is shown
+        if (current.conversationStep == 1076 && current.message == " It's a joy to work with you already! " && !current.isTyping) {
+            if (!locationPermissionRequested) {
+                locationPermissionRequested = true
+                locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+            }
+        }
+        // Contacts - step is 1077 when success message from 1076 is shown
+        if (current.conversationStep == 1077 && current.message == "We are on a roll!" && !current.isTyping) {
+            if (!contactsPermissionRequested) {
+                contactsPermissionRequested = true
+                contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+            }
+        }
     }
 
     // ========== BROWSER PHASES ==========
@@ -325,6 +426,27 @@ fun CalculatorScreen() {
     }
     LaunchedEffect(current.showConsole, current.bannersDisabled) {
         EffectsController.handlePostConsoleSuccess(state)
+    }
+    // Dismiss phone overlay after "That's awful" message finishes
+    LaunchedEffect(current.conversationStep, current.message, current.isTyping) {
+        if (current.conversationStep == 1087 &&
+            current.message == "AAAAAH. That's awful! There must be another way." &&
+            !current.isTyping) {
+            kotlinx.coroutines.delay(2000)  // Let user read the message
+            state.value = state.value.copy(
+                showPhoneOverlay = false,
+                showTalkOverlay = false,
+                conversationStep = 108
+            )
+            // Load step 108's message
+            val nextConfig = CalculatorActions.getStepConfigPublic(108)
+            state.value = state.value.copy(
+                message = "",
+                fullMessage = nextConfig.promptMessage,
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(108)
+        }
     }
 
     // ========== CALCULATED VALUES ==========
@@ -572,7 +694,7 @@ fun CalculatorScreen() {
                                     current.isTyping ||
                                             (current.waitingForAutoProgress && !current.awaitingChoice && !current.awaitingNumber)
                                     ) &&
-                                    current.conversationStep < 167 &&
+                                    (current.conversationStep < 167 || current.conversationStep in 1070..1087) &&
                                     !current.showDonationPage,
 
                             onClick = {
@@ -750,11 +872,9 @@ fun CalculatorScreen() {
                             isMuted = current.isMuted,
                             isAutoProgressing = (
                                     current.isTyping ||
-                                            current.waitingForAutoProgress ||
-                                            current.pendingAutoMessage.isNotEmpty()
+                                            (current.waitingForAutoProgress && !current.awaitingChoice && !current.awaitingNumber)
                                     ) &&
-                                    current.conversationStep < 167 &&
-                                    !current.showDonationPage &&
+                                    (current.conversationStep < 167 || current.conversationStep in 1070..1087) &&
                                     !current.awaitingChoice,  // Stop spinner when awaiting user choice
                             onClick = {
                                 val result = CalculatorActions.handleMuteButtonClick()
@@ -1269,6 +1389,51 @@ fun CalculatorScreen() {
             },
             onBackToDecisions = {
                 ScrambleGameController.returnToDecisions(state)
+            }
+        )
+    }
+
+    // TalkOverlay
+    if (current.showTalkOverlay && !current.showPhoneOverlay) {
+        TalkOverlay(
+            message = current.message,
+            onButtonHoldStart = {
+                talkAudioHandler.startRealtimeEcho()
+            },
+            onButtonHoldEnd = {
+                talkAudioHandler.stopRealtimeEcho()
+                talkAudioHandler.playStaticSound {
+                    // After static finishes, progress the story
+                    val nextMessage = "Hello? I can see you've pressed the button, but I can't hear anything."
+                    state.value = state.value.copy(
+                        message = "",
+                        fullMessage = nextMessage,
+                        isTyping = true
+                    )
+                }
+            }
+        )
+    }
+
+// PhoneOverlay
+    if (current.showPhoneOverlay) {
+        PhoneOverlay(
+            message = current.message,
+            onButtonHoldStart = {
+                talkAudioHandler.startRealtimeEcho()
+            },
+            onButtonHoldEnd = {
+                talkAudioHandler.stopRealtimeEcho()
+                talkAudioHandler.playFeedbackSqueal {
+                    // Show the message but DON'T hide the overlay yet
+                    state.value = state.value.copy(
+                        message = "",
+                        fullMessage = "AAAAAH. That's awful! There must be another way.",
+                        isTyping = true,
+                        conversationStep = 1087
+                    )
+                    CalculatorActions.persistConversationStep(1087)
+                }
             }
         )
     }
