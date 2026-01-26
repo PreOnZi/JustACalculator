@@ -77,6 +77,8 @@ fun PhoneOverlay(
                 modifier = Modifier.size(300.dp),
                 contentAlignment = Alignment.Center
             ) {
+                // Add space at top to push message down
+                Spacer(modifier = Modifier.height(80.dp))
                 // Outer dial ring (rotates when holding)
                 Box(
                     modifier = Modifier

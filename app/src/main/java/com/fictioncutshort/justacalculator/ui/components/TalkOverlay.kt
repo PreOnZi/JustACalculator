@@ -12,6 +12,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.tooling.preview.PreviewParameter
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fictioncutshort.justacalculator.util.AccentOrange
@@ -35,6 +37,8 @@ fun TalkOverlay(
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // Add space at top to push message down
+            Spacer(modifier = Modifier.height(80.dp))
             // Message display area at top (like calculator display)
             Box(
                 modifier = Modifier
@@ -54,23 +58,7 @@ fun TalkOverlay(
 
             Spacer(modifier = Modifier.weight(1f))
 
-            // Waveform visualization placeholder
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(100.dp)
-                    .padding(horizontal = 32.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                if (isHolding) {
-                    // TODO: Add waveform visualization here
-                    Text(
-                        text = "🎤 Listening...",
-                        color = AccentOrange,
-                        fontSize = 16.sp
-                    )
-                }
-            }
+
 
             Spacer(modifier = Modifier.weight(1f))
 

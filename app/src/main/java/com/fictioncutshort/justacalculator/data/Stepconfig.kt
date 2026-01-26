@@ -847,7 +847,7 @@ fun getStepConfig(step: Int): StepConfig {
 
         )
         1074 -> StepConfig(
-            promptMessage = "Sound!. Yes. We'll need to connect the speakers and the microphone. May I?" ,
+            promptMessage = "Sound! Yes. We'll need to connect the speakers and the microphone. May I?" ,
             successMessage = "Nice!",
             declineMessage = "I'll only use them when you want. I promise!",
             nextStepOnSuccess = 1075,
