@@ -10,6 +10,47 @@ import kotlinx.coroutines.delay
  */
 object BrowserEffects {
 
+    // =====================================================================
+    // HELPER: Calculate delay based on message length
+    // =====================================================================
+
+    /**
+     * Calculates appropriate delay for a message to finish typing plus reading time.
+     *
+     * Typing speed: ~70ms per character (55ms base + ~15ms random average)
+     * Reading pause: 2500ms for short, 3000ms for medium, 4000ms for long messages
+     */
+    private fun calculateMessageDelay(message: String, extraPause: Long = 0L): Long {
+        val typingTime = message.length * 70L
+        val readingPause = when {
+            message.length > 200 -> 4000L
+            message.length > 100 -> 3000L
+            else -> 2500L
+        }
+        return typingTime + readingPause + extraPause
+    }
+
+    /**
+     * Waits for typing to complete before continuing.
+     * This is safer than calculating delays as it handles laggy typing too.
+     */
+    private suspend fun waitForTypingComplete(state: MutableState<CalculatorState>, maxWaitMs: Long = 30000L) {
+        val startTime = System.currentTimeMillis()
+        while (state.value.isTyping && (System.currentTimeMillis() - startTime) < maxWaitMs) {
+            delay(100)
+        }
+        // Add reading pause after typing completes
+        if (!state.value.isTyping) {
+            val messageLength = state.value.message.length
+            val readingPause = when {
+                messageLength > 200 -> 4000L
+                messageLength > 100 -> 3000L
+                else -> 2500L
+            }
+            delay(readingPause)
+        }
+    }
+
     suspend fun handleBrowserPhases(
         state: MutableState<CalculatorState>,
         context: Context,
@@ -255,43 +296,72 @@ Sharp CS-10A - 25KG
         )
     }
 
+    // =====================================================================
+    // FIX #2: Reset tensionLevel and vibrationIntensity when exiting crisis
+    // =====================================================================
     private suspend fun phase30(state: MutableState<CalculatorState>) {
         repeat(5) {
             state.value = state.value.copy(flickerEffect = true, screenBlackout = true); delay(80)
             state.value = state.value.copy(flickerEffect = false, screenBlackout = false); delay(120)
         }
+        // FIX: Added tensionLevel = 0, vibrationIntensity = 0 to clear the white overlay
         state.value = state.value.copy(
-            invertedColors = false, adAnimationPhase = 0, minusButtonDamaged = true, minusButtonBroken = true,
-            browserPhase = 31, conversationStep = 93
+            invertedColors = false,
+            adAnimationPhase = 0,
+            minusButtonDamaged = true,
+            minusButtonBroken = true,
+            tensionLevel = 0,           // FIX: Reset tension to remove gray overlay
+            vibrationIntensity = 0,     // FIX: Stop any lingering vibration
+            flickerEffect = false,      // FIX: Ensure flicker is off
+            browserPhase = 31,
+            conversationStep = 93
         )
         CalculatorActions.persistInvertedColors(false)
         CalculatorActions.persistMinusDamaged(true)
         CalculatorActions.persistMinusBroken(true)
     }
 
+    // =====================================================================
+    // FIX #1: Wait for typing to complete instead of fixed delays
+    // =====================================================================
     private suspend fun phase31(state: MutableState<CalculatorState>) {
         delay(500)
+        val message = "This has never happened to me. I am truly sorry for the outburst. I believe I got overwhelmed by the vastness of the internet and sobering back through the advertising was rather harsh. I still feel dirty."
         state.value = state.value.copy(
             message = "",
-            fullMessage = "This has never happened to me. I am truly sorry for the outburst. I believe I got overwhelmed by the vastness of the internet and sobering back through the advertising was rather harsh. I still feel dirty.",
-            isTyping = true, browserPhase = 32
+            fullMessage = message,
+            isTyping = true,
+            browserPhase = 32
         )
     }
 
+    // FIX: Wait for typing to complete instead of hardcoded 8000ms
     private suspend fun phase32(state: MutableState<CalculatorState>) {
-        delay(8000)
+        // Wait for step 93 message to finish typing
+        waitForTypingComplete(state)
+
+        val message = "Oh, strange. I knew I wasn't completely back to normal yet. You can't disagree with me right now! As much as I may enjoy that, let me have a look into it."
         state.value = state.value.copy(
-            browserPhase = 33, conversationStep = 94, message = "",
-            fullMessage = "Oh, strange. I knew I wasn't completely back to normal yet. You can't disagree with me right now! As much as I may enjoy that, let me have a look into it.",
+            browserPhase = 33,
+            conversationStep = 94,
+            message = "",
+            fullMessage = message,
             isTyping = true
         )
     }
 
+    // FIX: Wait for typing to complete instead of hardcoded 6000ms
     private suspend fun phase33(state: MutableState<CalculatorState>) {
-        delay(6000)
+        // Wait for step 94 message to finish typing
+        waitForTypingComplete(state)
+
         state.value = state.value.copy(
-            browserPhase = 34, conversationStep = 95, message = "", fullMessage = "...",
-            isTyping = true, isLaggyTyping = true
+            browserPhase = 34,
+            conversationStep = 95,
+            message = "",
+            fullMessage = "...",
+            isTyping = true,
+            isLaggyTyping = true
         )
     }
 
@@ -345,17 +415,30 @@ Sharp CS-10A - 25KG
 
     private suspend fun phase51(state: MutableState<CalculatorState>) {
         delay(3000)
+        val message = "There's so much, just endless streams of opinions, advices, unsolicited advices... But nothing about our situation."
         state.value = state.value.copy(
-            postChaosAdPhase = 1, isLaggyTyping = false, browserPhase = 52, conversationStep = 109,
+            postChaosAdPhase = 1,
+            isLaggyTyping = false,
+            browserPhase = 52,
+            conversationStep = 109,
             message = "",
-            fullMessage = "There's so much, just endless streams of opinions, advices, unsolicited advices... But nothing about our situation.",
+            fullMessage = message,
             isTyping = true
         )
     }
 
+    // FIX: Wait for typing to complete instead of hardcoded 5000ms
     private suspend fun phase52(state: MutableState<CalculatorState>) {
-        delay(5000)
-        state.value = state.value.copy(browserPhase = 53, message = "", fullMessage = "...", isTyping = true, isLaggyTyping = true)
+        // Wait for step 109 message to finish typing
+        waitForTypingComplete(state)
+
+        state.value = state.value.copy(
+            browserPhase = 53,
+            message = "",
+            fullMessage = "...",
+            isTyping = true,
+            isLaggyTyping = true
+        )
     }
 
     private suspend fun phase53(state: MutableState<CalculatorState>) {

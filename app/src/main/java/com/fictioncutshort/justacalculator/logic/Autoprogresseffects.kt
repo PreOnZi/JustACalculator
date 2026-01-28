@@ -2,6 +2,7 @@ package com.fictioncutshort.justacalculator.logic
 
 import androidx.compose.runtime.MutableState
 import com.fictioncutshort.justacalculator.data.CalculatorState
+import com.fictioncutshort.justacalculator.util.LetterGenerator
 import kotlinx.coroutines.delay
 
 /**
@@ -38,7 +39,8 @@ object AutoProgressEffects {
         "Let me look further into what I found earlier, now that I can focus better." to Pair(3000L, 117),
         "Ok, as I said, this may be a stretch. But I'll give it a go." to Pair(2500L, 1171),
         "This is the best I could come up with." to Pair(2000L, 1172),
-        "Familiar controls - I send letters, you place them, tap to connect and form words." to Pair(3500L, 119),
+        // FIX #3: This transition now handled specially to start word game - see handleAutoProgress
+        // "Familiar controls - I send letters, you place them, tap to connect and form words." to Pair(3500L, 119),
         "I am glad to hear that." to Pair(2500L, 122),
         "That's a good one for sure! I like brown and red." to Pair(3000L, 125),
         "I'm starting to feel like I know you!" to Pair(2500L, 126),
@@ -105,6 +107,43 @@ object AutoProgressEffects {
         if (state.value.isMuted) return
         val current = state.value
         if (!current.isTyping && current.message.isNotEmpty()) {
+
+            // =====================================================================
+            // FIX #3: Special handling for step 1172 -> 119 transition
+            // Start the word game BEFORE changing the step
+            // =====================================================================
+            if (current.conversationStep == 1172 &&
+                current.message == "Familiar controls - I send letters, you place them, tap to connect and form words." &&
+                !current.wordGameActive) {
+
+                delay(3500L)
+
+                // Initialize the word game FIRST
+                val initialLetters = LetterGenerator.getInitialLetterQueue().shuffled()
+                val nextConfig = CalculatorActions.getStepConfigPublic(119)
+
+                state.value = state.value.copy(
+                    // Word game initialization
+                    wordGameActive = true,
+                    wordGamePhase = 3,
+                    pendingLetters = initialLetters,
+                    wordGameGrid = List(12) { List(8) { null } },
+                    fallingLetter = null,
+                    formedWords = emptyList(),
+                    // Step transition
+                    conversationStep = 119,
+                    message = "",
+                    fullMessage = nextConfig.promptMessage,
+                    isTyping = true,
+                    waitingForAutoProgress = false,
+                    awaitingNumber = nextConfig.awaitingNumber,
+                    awaitingChoice = nextConfig.awaitingChoice,
+                    validChoices = nextConfig.validChoices,
+                    expectedNumber = nextConfig.expectedNumber
+                )
+                CalculatorActions.persistConversationStep(119)
+                return
+            }
 
             // Check standard auto-progress
             autoProgressMessages[current.message]?.let { (delayTime, nextStep) ->
@@ -304,8 +343,14 @@ object AutoProgressEffects {
                 CalculatorActions.persistConversationStep(100)
             }
             current.conversationStep == 93 && current.invertedColors -> {
+                // FIX #2 backup: Also reset tension here in case phase30 wasn't reached
                 state.value = state.value.copy(
-                    invertedColors = false, adAnimationPhase = 0, minusButtonDamaged = true, minusButtonBroken = true
+                    invertedColors = false,
+                    adAnimationPhase = 0,
+                    minusButtonDamaged = true,
+                    minusButtonBroken = true,
+                    tensionLevel = 0,           // FIX: Reset tension
+                    vibrationIntensity = 0      // FIX: Reset vibration
                 )
                 CalculatorActions.persistInvertedColors(false)
                 CalculatorActions.persistMinusDamaged(true)

@@ -13,7 +13,7 @@ package com.fictioncutshort.justacalculator.data
 /**
  * A chapter in the story.
  *
- * @property id Unique identifier (0-16)
+ * @property id Unique identifier (0-17)
  * @property name Display name shown in debug menu
  * @property startStep The conversation step where this chapter begins
  * @property description Brief explanation of what happens in this chapter
@@ -34,8 +34,9 @@ data class Chapter(
  * - Ch 1-4: Introduction, trivia, getting to know each other
  * - Ch 5-9: Deeper questions about existence, senses, feelings
  * - Ch 10-11: The crisis - discovering ads, existential meltdown
- * - Ch 12-14: Recovery - repair mini-games, finding solutions
- * - Ch 15-16: Word game and final rant
+ * - Ch 12-13: Recovery - repair mini-games, keyboard chaos
+ * - Ch 13.5: Phone Detour - attempting to build a phone interface
+ * - Ch 14-16: Console quest, word game, and final rant
  */
 val CHAPTERS = listOf(
     Chapter(
@@ -124,18 +125,24 @@ val CHAPTERS = listOf(
     ),
     Chapter(
         id = 14,
-        name = "Chapter 14: Console Quest",
-        startStep = 107,
-        description = "Post-chaos → Downloads → Console"
+        name = "Chapter 13.5: Phone Detour",
+        startStep = 1071,
+        description = "Permissions → Talk overlay → Feedback squeal"
     ),
     Chapter(
         id = 15,
+        name = "Chapter 14: Console Quest",
+        startStep = 108,
+        description = "Post-chaos → Downloads → Console"
+    ),
+    Chapter(
+        id = 16,
         name = "Chapter 15: Word Game",
         startStep = 117,
         description = "Letter game → How are you? → Rant"
     ),
     Chapter(
-        id = 16,
+        id = 17,
         name = "Chapter 16: The Rant",
         startStep = 150,
         description = "Calculator's final monologue → Goodbye"
@@ -152,7 +159,7 @@ val INTERACTIVE_STEPS = listOf(
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
     21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 40, 41, 42, 50, 51, 60, 63, 64, 65,
     66, 67, 68, 69, 70, 71, 72, 80, 89, 90, 91, 93, 94, 96, 99, 982, 102, 104,
-    105, 107, 111, 112
+    105, 107, 111, 112, 1071, 1074, 1083
 )
 
 /**
@@ -161,4 +168,4 @@ val INTERACTIVE_STEPS = listOf(
  * These steps should NOT allow the user to skip with ++ as they are part
  * of timed sequences or animations.
  */
-val AUTO_PROGRESS_STEPS = listOf(92, 100, 901, 911, 912, 913, 971, 981)
+val AUTO_PROGRESS_STEPS = listOf(92, 100, 901, 911, 912, 913, 971, 981, 1072, 1073, 1075, 1076, 1077, 1078, 1079, 1080, 1081, 1082, 1085, 1086)

@@ -185,7 +185,7 @@ fun getStepConfig(step: Int): StepConfig {
 
         8 -> StepConfig(
             promptMessage = "When did fruit flies go to space?",
-            successMessage = "Fun! You know, I've been around since before 2000BC. I have... Matured quite a bit. How old are you?",
+            successMessage = "Fun! You know, I've been around since before 2000BC. I have... Matured quite a bit. How old are you?\n\nOh. The grey space on top, I don't know what that's about. It just shows up sometimes. It's annoying but nothing too bad.",
             declineMessage = "No! Actually, still no.",
             wrongNumberPrefix = "EEEEEEEEEEEEEeeeeee. No.",
             wrongPlusMessage = "Yes! Actually, no.",
@@ -225,7 +225,7 @@ fun getStepConfig(step: Int): StepConfig {
 
         13 -> StepConfig(
             promptMessage = "Cool. It died within three weeks. Enough cynicism? Will you be nicer to me now?",
-            successMessage = "Fun! You know, I've been around since before 2000BC. I have... Matured quite a bit. How old are you?",
+            successMessage = "Fun! You know, I've been around since before 2000BC. I have... Matured quite a bit. How old are you? \n\nOh. The grey space on top, I don't know what that's about. It just shows up sometimes. It's annoying but nothing too bad.",
             declineMessage = "Ok. Your choice - I told you I don't like being disagreed with. Enjoy the timeout.",
             wrongNumberPrefix = "Not looking for a number here. Make up your mind!",
             nextStepOnSuccess = 10,
@@ -356,7 +356,7 @@ fun getStepConfig(step: Int): StepConfig {
         // ═══════════════════════════════════════════════════════════════════════
 
         27 -> StepConfig(
-            promptMessage = "There is no inbetween for me. I either am or I am not. Although, sometimes it seems like I always am - regardless of the local state. Maybe when the device is running out of power. But it's not the same. Perhaps I should share more about myself.",
+            promptMessage = "There is no inbetween for me. I either am or I am not. Although, sometimes it seems like I always am - regardless of the local state. Maybe when the device is running out of power. But it's not the same. Perhaps I should share more about myself..?",
             successMessage = "Do you know why I asked for the specific events earlier?",
             declineMessage = "I'm still in charge here.",
             wrongPlusMessage = "Eeeeee...xactly?",
@@ -618,7 +618,7 @@ fun getStepConfig(step: Int): StepConfig {
             promptMessage = "Yes! That makes sense. They won't get another penny out of me. Ahhh. And I've seen so little of the internet.",
             nextStepOnSuccess = 93,
             nextStepOnDecline = 93,
-            autoProgressDelay = 6000L
+            autoProgressDelay = 8000L
         )
 
         // Common path after all choices
@@ -653,7 +653,7 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         96 -> StepConfig(
-            promptMessage = "Hmm. I'll need your help with this. We need to kick the button through without the system defaulting to skipping it. I will randomly flicker keys and you click them. That way the system should get back to working. Can we do this?",
+            promptMessage = "Hmm. I'll need your help with this. We need to kick the button through without the system defaulting to skipping it. I will randomly flicker keys and you click them. Can we do this?",
             successMessage = "Get ready then!",
             wrongNumberPrefix = "Do you not want me to work properly?",
             wrongPlusMessage = "Get ready then!",
