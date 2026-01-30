@@ -1063,69 +1063,69 @@ object CalculatorActions {
 
         return 0  // Normal toggle
     }
-//toggle conversation
-fun toggleConversation(state: MutableState<CalculatorState>) {
-    val current = state.value
-    val newMuted = !current.isMuted
+    //toggle conversation
+    fun toggleConversation(state: MutableState<CalculatorState>) {
+        val current = state.value
+        val newMuted = !current.isMuted
 
-    if (newMuted) {
-        // Pausing - store current step and reset paused calculator
-        state.value = current.copy(
-            isMuted = true,
-            pausedAtStep = current.conversationStep,
-            // Reset paused calculator to fresh state
-            pausedCalcDisplay = "0",
-            pausedCalcExpression = "",
-            pausedCalcJustCalculated = false,
-            // Pause all active effects
-            rantMode = false,
-            isTyping = false,
-            waitingForAutoProgress = false,
-            countdownTimer = 0,
-            whackAMoleActive = false,
-            wordGamePaused = true,
-            flickerEffect = false,
-            vibrationIntensity = 0,
-            tensionLevel = 0,
-            buttonShakeIntensity = 0f,
-            screenBlackout = false
-        )
-    } else {
-        // Resuming - restore the paused step
-        val resumeStep = current.pausedAtStep
-        if (resumeStep >= 0) {
-            val stepConfig = getStepConfig(resumeStep)
-            val wasInRant = resumeStep in 150..166
-            val wasInCrisis = resumeStep in listOf(89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 901, 911, 912, 913)
-
+        if (newMuted) {
+            // Pausing - store current step and reset paused calculator
             state.value = current.copy(
-                isMuted = false,
-                pausedAtStep = -1,
-                conversationStep = resumeStep,
-                message = "",
-                fullMessage = stepConfig.promptMessage,
-                isTyping = stepConfig.promptMessage.isNotEmpty(),
-                awaitingChoice = stepConfig.awaitingChoice,
-                awaitingNumber = stepConfig.awaitingNumber,
-                validChoices = stepConfig.validChoices,
-                expectedNumber = stepConfig.expectedNumber,
-                rantMode = wasInRant,
-                invertedColors = wasInCrisis,
-                countdownTimer = if (resumeStep == 89) 20 else 0,
-                wordGamePaused = false
+                isMuted = true,
+                pausedAtStep = current.conversationStep,
+                // Reset paused calculator to fresh state
+                pausedCalcDisplay = "0",
+                pausedCalcExpression = "",
+                pausedCalcJustCalculated = false,
+                // Pause all active effects
+                rantMode = false,
+                isTyping = false,
+                waitingForAutoProgress = false,
+                countdownTimer = 0,
+                whackAMoleActive = false,
+                wordGamePaused = true,
+                flickerEffect = false,
+                vibrationIntensity = 0,
+                tensionLevel = 0,
+                buttonShakeIntensity = 0f,
+                screenBlackout = false
             )
         } else {
-            state.value = current.copy(isMuted = false)
+            // Resuming - restore the paused step
+            val resumeStep = current.pausedAtStep
+            if (resumeStep >= 0) {
+                val stepConfig = getStepConfig(resumeStep)
+                val wasInRant = resumeStep in 150..166
+                val wasInCrisis = resumeStep in listOf(89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 901, 911, 912, 913)
+
+                state.value = current.copy(
+                    isMuted = false,
+                    pausedAtStep = -1,
+                    conversationStep = resumeStep,
+                    message = "",
+                    fullMessage = stepConfig.promptMessage,
+                    isTyping = stepConfig.promptMessage.isNotEmpty(),
+                    awaitingChoice = stepConfig.awaitingChoice,
+                    awaitingNumber = stepConfig.awaitingNumber,
+                    validChoices = stepConfig.validChoices,
+                    expectedNumber = stepConfig.expectedNumber,
+                    rantMode = wasInRant,
+                    invertedColors = wasInCrisis,
+                    countdownTimer = if (resumeStep == 89) 20 else 0,
+                    wordGamePaused = false
+                )
+            } else {
+                state.value = current.copy(isMuted = false)
+            }
+        }
+
+        persistMuted(newMuted)
+        if (newMuted && current.conversationStep >= 0) {
+            persistPausedAtStep(current.conversationStep)
+        } else {
+            persistPausedAtStep(-1)
         }
     }
-
-    persistMuted(newMuted)
-    if (newMuted && current.conversationStep >= 0) {
-        persistPausedAtStep(current.conversationStep)
-    } else {
-        persistPausedAtStep(-1)
-    }
-}
 
     // Add persistence methods
     fun persistPausedAtStep(step: Int) {
@@ -1717,6 +1717,7 @@ fun toggleConversation(state: MutableState<CalculatorState>) {
                     } else {
                         lastOp = "+"
                         lastOpTimeMillis = now
+                        return  // Don't fall through to calculator operations - wait for second tap
                     }
                 }
                 "-" -> {
@@ -1738,6 +1739,7 @@ fun toggleConversation(state: MutableState<CalculatorState>) {
                     } else {
                         lastOp = "-"
                         lastOpTimeMillis = now
+                        return  // Don't fall through to calculator operations - wait for second tap
                     }
                 }
                 "=" -> {
@@ -3128,7 +3130,7 @@ fun toggleConversation(state: MutableState<CalculatorState>) {
             0L
         }
 
-        // Special case: Step 18 → 19 needs message chaining because step 18's success message
+        // Special case: Step 18 â†’ 19 needs message chaining because step 18's success message
         // doesn't contain the camera permission question.
         // Also: Branch endings (30, 40, 41, 50) going to step 27 need message chaining
         // Also: Force-back steps (27, 28, 29 that go back to themselves) need message chaining
