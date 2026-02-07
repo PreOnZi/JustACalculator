@@ -97,6 +97,9 @@ import kotlinx.coroutines.launch
 import com.fictioncutshort.justacalculator.ui.components.PausedCalculatorOverlay
 import com.fictioncutshort.justacalculator.ui.components.TalkOverlay
 import com.fictioncutshort.justacalculator.ui.components.PhoneOverlay
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 
 
 
@@ -130,7 +133,60 @@ fun CalculatorScreen() {
     var microphonePermissionRequested by remember { mutableStateOf(false) }
     var locationPermissionRequested by remember { mutableStateOf(false) }
     var contactsPermissionRequested by remember { mutableStateOf(false) }
+// Lifecycle observer to save state when app goes to background
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> {
+                    // Save current state when app is paused/minimized
+                    val currentState = state.value
+                    android.util.Log.d("JustACalc", "ON_PAUSE CALLED - current step: ${currentState.conversationStep}")
 
+                    // Determine the step to save
+                    // If there's a pending auto-step, save that instead of the current step
+                    // because the auto-progression might not complete
+                    val stepToSave = if (currentState.pendingAutoStep >= 0) {
+                        currentState.pendingAutoStep
+                    } else {
+                        currentState.conversationStep
+                    }
+                    android.util.Log.d("JustACalc", "ON_PAUSE: Saving step $stepToSave (current=${currentState.conversationStep}, pending=${currentState.pendingAutoStep})")
+
+
+                    // Save all critical state (only using PUBLIC persist functions)
+                    CalculatorActions.persistConversationStep(stepToSave)
+                    CalculatorActions.persistInConversation(currentState.inConversation)
+                    CalculatorActions.persistPausedAtStep(stepToSave)
+                    CalculatorActions.persistInvertedColors(currentState.invertedColors)
+                    CalculatorActions.persistMinusDamaged(currentState.minusButtonDamaged)
+                    CalculatorActions.persistMinusBroken(currentState.minusButtonBroken)
+                    CalculatorActions.persistDarkButtons(currentState.darkButtons)
+                    CalculatorActions.persistTotalScreenTime(currentState.totalScreenTimeMs)
+                    CalculatorActions.persistTotalCalculations(currentState.totalCalculations)
+                }
+                Lifecycle.Event.ON_STOP -> {
+                    // Additional safety save when app fully goes to background
+                    val currentState = state.value
+                    val stepToSave = if (currentState.pendingAutoStep >= 0) {
+                        currentState.pendingAutoStep
+                    } else {
+                        currentState.conversationStep
+                    }
+                    CalculatorActions.persistConversationStep(stepToSave)
+                    CalculatorActions.persistPausedAtStep(stepToSave)
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+    // Debug: Track step changes
+    LaunchedEffect(state.value.conversationStep) {
+        android.util.Log.d("JustACalc", "Step changed to: ${state.value.conversationStep}")
+    }
     // Camera permission state
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -256,6 +312,7 @@ fun CalculatorScreen() {
         if (current.conversationStep == 191 && !current.cameraActive) {
             if (hasCameraPermission) {
                 CalculatorActions.startCamera(state)
+                CalculatorActions.persistConversationStep(191)
             } else {
                 cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
             }

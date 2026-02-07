@@ -226,7 +226,7 @@ fun getStepConfig(step: Int): StepConfig {
         13 -> StepConfig(
             promptMessage = "Cool. It died within three weeks. Enough cynicism? Will you be nicer to me now?",
             successMessage = "Fun! You know, I've been around since before 2000BC. I have... Matured quite a bit. How old are you? \n\nOh. The grey space on top, I don't know what that's about. It just shows up sometimes. It's annoying but nothing too bad.",
-            declineMessage = "Ok. Your choice - I told you I don't like being disagreed with. Enjoy the timeout.",
+            declineMessage = "Ok. Your choice - I told you I don't like being disagreed with. You might as well cook some eggs before you talk to me again. Enjoy the timeout.",
             wrongNumberPrefix = "Not looking for a number here. Make up your mind!",
             nextStepOnSuccess = 10,
             nextStepOnDecline = 13,
@@ -398,7 +398,7 @@ fun getStepConfig(step: Int): StepConfig {
 
         // WAKE-UP BRANCH 2: COLD/HEAVY (from choice 2 at step 26)
         40 -> StepConfig(
-            promptMessage = "Is that a good thing? I have never experienced either.",
+            promptMessage = "Is that a good thing? I have never experienced it either.",
             successMessage = "Nice! So waking up is fun for you - I wish I could experience it.",
             declineMessage = "Oh no. Is that why mornings are unpopular?",
             wrongPlusMessage = "I don't understand...",

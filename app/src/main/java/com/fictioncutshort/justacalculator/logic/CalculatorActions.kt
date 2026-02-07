@@ -25,6 +25,7 @@ import com.fictioncutshort.justacalculator.util.PREF_MUTED
 import com.fictioncutshort.justacalculator.util.PREF_NEEDS_RESTART
 import com.fictioncutshort.justacalculator.util.PREF_TERMS_ACCEPTED
 import com.fictioncutshort.justacalculator.util.PREF_TIMEOUT_UNTIL
+import com.fictioncutshort.justacalculator.data.INTERACTIVE_STEPS
 import com.fictioncutshort.justacalculator.util.validateWordSelection
 import kotlin.random.Random
 
@@ -651,7 +652,7 @@ object CalculatorActions {
 
     private var lastOp: String? = null
     private var lastOpTimeMillis: Long = 0L
-    private const val DOUBLE_PRESS_WINDOW_MS = 600L
+    private const val DOUBLE_PRESS_WINDOW_MS = 800L
 
     // Mute button rapid click tracking for debug menu
     private var muteClickTimes = mutableListOf<Long>()
@@ -741,15 +742,7 @@ object CalculatorActions {
     private fun loadMinusBroken(): Boolean = prefs?.getBoolean(PREF_MINUS_BROKEN, false) ?: false
     private fun loadNeedsRestart(): Boolean = prefs?.getBoolean(PREF_NEEDS_RESTART, false) ?: false
 
-    // Steps that require user interaction (safe to open on)
-    // Steps that require user interaction (safe to open on)
-    private val INTERACTIVE_STEPS = listOf(
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
-        21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 40, 41, 42, 50, 51, 60, 63, 64, 65,
-        66, 67, 68, 69, 70, 71, 72, 80, 89, 90, 91, 93, 94, 96, 99, 982, 102, 104, 105, 107, 111, 112, 118, 119, 120, 122, 126, 132, 137, 142, 146,
-        // Add more recovery steps
-        1021, 1031, 1032, 10321, 10322, 10323
-    )
+
     private val AUTO_PROGRESS_STEPS = listOf(92, 100, 901, 911, 912, 913, 971, 981)
     fun handleConsoleInput(state: MutableState<CalculatorState>, input: String): Boolean {
         val current = state.value
@@ -907,29 +900,106 @@ object CalculatorActions {
         return false
     }
     private fun getSafeStep(step: Int): Int {
+        // If it's already an interactive step, use it directly
         if (step in INTERACTIVE_STEPS) return step
 
+        // Map to chapter start points based on step ranges
         return when {
-            step >= 112 -> 112
-            step >= 111 -> 111
-            step >= 107 -> 107
-            step >= 105 -> 105
-            step >= 104 -> 104
-            step >= 102 -> 102
-            step in 61..62 -> 60
-            step in 81..88 -> 80
-            step == 92 -> 89
-            step == 100 -> 89
-            step == 901 -> 89
-            step in 911..913 -> 89
-            step in 95..98 -> 96
-            step in 971..981 -> 99
-            step in 991..101 -> 982
+            // Camera step -> camera request
             step == 191 -> 19
+
+            // Rant steps (150-166) -> start of rant (150)
+            step in 150..166 -> 150
+
+            // Word game steps (117-149) -> start of word game section
+            step in 117..149 -> 117
+
+            // Console quest / downloads area (108-116)
+            step in 108..116 -> when {
+                step >= 112 -> 112
+                step >= 111 -> 111
+                step >= 108 -> 107
+                else -> 107
+            }
+
+            // Keyboard chaos (105-107)
+            step in 105..107 -> 105
+
+            // Recovery / post-restart (102-104)
+            step in 102..104 -> 102
+
+            // Post-crisis / whack-a-mole area (93-101)
+            step in 93..101 -> when {
+                step == 100 -> 99  // After whack-a-mole round
+                step in 97..99 -> 96
+                step in 93..96 -> 93
+                else -> 93
+            }
+
+            // Crisis steps (89-92) -> crisis choice
+            step in 89..92 -> 89
+
+            // Wikipedia/history animation (80-88)
+            step in 80..88 -> 80
+
+            // Taste & senses (63-79)
+            step in 63..79 -> when {
+                step >= 70 -> 70
+                else -> 63
+            }
+
+            // Browser animation (61-62) -> history question
+            step in 61..62 -> 60
+
+            // Self discovery (27-59)
+            step in 27..59 -> 27
+
+            // Getting personal (25-26)
+            step in 25..26 -> 25
+
+            // Camera/trivia area (19-24)
+            step in 19..24 -> when {
+                step == 191 -> 19
+                step in 21..24 -> 21
+                step == 20 -> 20
+                else -> 19
+            }
+
+            // Age & identity (10-18)
+            step in 10..18 -> 10
+
+            // Agreement/cynicism (5-9)
+            step in 5..9 -> 5
+
+            // Trivia begins (3-4)
+            step in 3..4 -> 3
+
+            // First contact (0-2)
+            step in 0..2 -> 0
+
+            // Phone detour steps (1071-1086)
+            step in 1071..1086 -> 1071
+
+            // Deep branch steps (1000+) - map to their root
+            step >= 10000 -> {
+                // 10321, 10322, etc -> 103
+                val root = step / 100
+                if (root in INTERACTIVE_STEPS) root else 102
+            }
+            step >= 1000 -> {
+                // 1021, 1031, 1032 -> find nearest
+                when {
+                    step in 1021..1030 -> 1021
+                    step in 1031..1039 -> 1031
+                    step in 1032..1039 -> 1032
+                    else -> 102
+                }
+            }
+
+            // Fallback: find nearest interactive step
             else -> INTERACTIVE_STEPS.filter { it <= step }.maxOrNull() ?: 0
         }
     }
-
     fun loadInitialState(): CalculatorState {
         val savedCount = loadEqualsCount()
         val savedStep = loadConversationStep()
@@ -946,6 +1016,13 @@ object CalculatorActions {
         val savedPunishmentUntil = loadPunishmentUntil()
         val savedTimeoutCount = loadScrambleTimeoutCount()
         val savedPausedAtStep = loadPausedAtStep()
+
+        // DEBUG LOGGING - REMOVE AFTER FIXING
+        android.util.Log.d("JustACalc", "========== loadInitialState ==========")
+        android.util.Log.d("JustACalc", "savedStep from prefs: $savedStep")
+        android.util.Log.d("JustACalc", "savedInConvo: $savedInConvo")
+        android.util.Log.d("JustACalc", "savedMuted: $savedMuted")
+        android.util.Log.d("JustACalc", "savedPausedAtStep: $savedPausedAtStep")
 
 
         // Check if still in punishment
@@ -983,6 +1060,9 @@ object CalculatorActions {
             wasInCrisis -> 89
             else -> getSafeStep(savedStep)
         }
+        android.util.Log.d("JustACalc", "getSafeStep($savedStep) returned: ${getSafeStep(savedStep)}")
+        android.util.Log.d("JustACalc", "actualStep will be: $actualStep")
+        android.util.Log.d("JustACalc", "==========================================")
 
         // Use helper functions for consistent state
         val actuallyInverted = actualStep in crisisSteps
@@ -1501,25 +1581,6 @@ object CalculatorActions {
         }
 
 
-
-// Check if console code is entered - works ANYTIME (secret cheat code)
-        if (!current.showConsole && !current.isMuted && action == "+") {
-            val now = System.currentTimeMillis()
-            if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
-                val enteredNumber = current.number1.trimEnd('.')
-                if (enteredNumber == "353942320485") {
-                    // Open console from anywhere!
-                    state.value = current.copy(
-                        showConsole = true,
-                        consoleStep = 0,
-                        number1 = "0"
-                    )
-                    lastOp = null
-                    lastOpTimeMillis = 0L
-                    return
-                }
-            }
-        }
 
 
 
@@ -2841,26 +2902,6 @@ object CalculatorActions {
             return
         }
 
-        // SOFT-LOCK FIX: If ++ is pressed but there's no success message and no clear next step,
-// redirect to nearest interactive step instead of step 0
-        if (accepted && stepConfig.successMessage.isEmpty() && stepConfig.nextStepOnSuccess == 0) {
-            val nearestStep = findNearestInteractiveStep(current.conversationStep)
-            val nearestConfig = getStepConfig(nearestStep)
-            state.value = current.copy(
-                number1 = "0",
-                number2 = "",
-                operation = null,
-                conversationStep = nearestStep,
-                awaitingNumber = nearestConfig.awaitingNumber,
-                awaitingChoice = nearestConfig.awaitingChoice,
-                validChoices = nearestConfig.validChoices,
-                expectedNumber = nearestConfig.expectedNumber,
-                isEnteringAnswer = false
-            )
-            showMessage(state, nearestConfig.promptMessage)
-            persistConversationStep(nearestStep)
-            return
-        }
 
         // SOFT-LOCK FIX: If ++ is pressed but there's no success message and no clear next step,
         // redirect to nearest main branch step instead of step 0
@@ -3357,6 +3398,8 @@ object CalculatorActions {
             if (enteringConversation) {
                 persistInConversation(true)
                 persistConversationStep(0)
+                lastOp = null
+                lastOpTimeMillis = 0L
             }
 
             val newState = current.copy(

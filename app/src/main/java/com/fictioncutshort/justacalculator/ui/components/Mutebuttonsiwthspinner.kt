@@ -111,18 +111,18 @@ fun MuteButtonWithSpinner(
                     .graphicsLayer { rotationZ = rotation }
             ) {
                 val radius = size.minDimension / 2 - 2.dp.toPx()
-                val dashCount = 12
+                val dashCount = 2
                 val dashAngle = 360f / dashCount
                 val dashSweep = dashAngle * 0.6f
 
                 // Draw 12 dashed segments around the circle
                 for (i in 0 until dashCount) {
                     drawArc(
-                        Color(0xFF8B0000),
+                        Color(0xFF00B3C0),
                         startAngle = i * dashAngle,
                         sweepAngle = dashSweep,
                         useCenter = false,
-                        style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round),
+                        style = Stroke(width = 15.dp.toPx(), cap = StrokeCap.Round),
                         topLeft = Offset(2.dp.toPx(), 2.dp.toPx()),
                         size = Size(radius * 2, radius * 2)
                     )
