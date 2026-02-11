@@ -46,6 +46,9 @@ data class CalculatorState(
     // MESSAGE DISPLAY - What the calculator is "saying"
     // ═══════════════════════════════════════════════════════════════════════════
 
+    /** True when spinner should be shown (with delayed turn-off to prevent flicker) */
+    val showSpinner: Boolean = false,
+
     /** Currently displayed text (builds up character by character) */
     val message: String = "",
 

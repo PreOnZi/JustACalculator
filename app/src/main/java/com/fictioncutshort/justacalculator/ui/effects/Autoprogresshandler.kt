@@ -48,8 +48,20 @@ fun AutoProgressHandler(state: MutableState<CalculatorState>) {
 
             val nextStep = state.value.pendingAutoStep
             if (nextStep >= 0) {
-                state.value = state.value.copy(pendingAutoStep = -1)
-                StoryManager.goToStep(nextStep, state)
+                val config = getStepConfig(nextStep)
+                state.value = state.value.copy(
+                    pendingAutoStep = -1,
+                    waitingForAutoProgress = false,
+                    conversationStep = nextStep,
+                    awaitingNumber = config.awaitingNumber,
+                    expectedNumber = config.expectedNumber,
+                    awaitingChoice = config.awaitingChoice,
+                    validChoices = config.validChoices,
+                    isEnteringAnswer = false,
+                    fullMessage = config.promptMessage,
+                    message = "",
+                    isTyping = config.promptMessage.isNotEmpty()
+                )
             }
         }
     }

@@ -822,7 +822,7 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         106 -> StepConfig(
-            promptMessage = "AU! Well, that didn't work... So many wrong keays... Please, get rid of them!"
+            promptMessage = "AU! Well, that didn't work... So many wrong keys... Please, get rid of them!"
         )
 
         107 -> StepConfig(

@@ -123,9 +123,6 @@ private fun handlePostTypingProgress(state: MutableState<CalculatorState>) {
 
     // Check for pending step change
     if (currentState.pendingAutoStep >= 0 && currentState.waitingForAutoProgress) {
-        // The actual step change is handled by AutoProgressHandler
-        // Just mark that typing is done
-        state.value = state.value.copy(waitingForAutoProgress = false)
     }
 }
 

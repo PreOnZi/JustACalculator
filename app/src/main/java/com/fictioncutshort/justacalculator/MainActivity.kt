@@ -100,6 +100,10 @@ import com.fictioncutshort.justacalculator.ui.components.PhoneOverlay
 import androidx.compose.runtime.DisposableEffect
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.heightIn
 
 
 
@@ -747,13 +751,7 @@ fun CalculatorScreen() {
                         // Mute button - top right corner
                         MuteButtonWithSpinner(
                             isMuted = current.isMuted,
-                            isAutoProgressing = (
-                                    current.isTyping ||
-                                            (current.waitingForAutoProgress && !current.awaitingChoice && !current.awaitingNumber)
-                                    ) &&
-                                    (current.conversationStep < 167 || current.conversationStep in 1070..1087) &&
-                                    !current.showDonationPage,
-
+                            isAutoProgressing = current.showSpinner,
                             onClick = {
                                 val result = CalculatorActions.handleMuteButtonClick()
                                 when (result) {
@@ -916,45 +914,57 @@ fun CalculatorScreen() {
                     }
 
 
-                    // Main calculator content
+                // Main calculator content
+                val topBezelHeight = 32.dp
+                val adBannerHeight = 50.dp
                 val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-                val baseTopPadding = if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) 82.dp else 32.dp
+                val showingAdBanner = (showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0
+                val contentTopPadding = statusBarHeight + topBezelHeight + (if (showingAdBanner) adBannerHeight else 0.dp)
+
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 15.dp)
-                        .padding(top = baseTopPadding + statusBarHeight)
+                        .padding(top = contentTopPadding)
                 ) {
-                        MuteButtonWithSpinner(
-                            isMuted = current.isMuted,
-                            isAutoProgressing = (
-                                    current.isTyping ||
-                                            (current.waitingForAutoProgress && !current.awaitingChoice && !current.awaitingNumber)
-                                    ) &&
-                                    (current.conversationStep < 167 || current.conversationStep in 1070..1087) &&
-                                    !current.awaitingChoice,  // Stop spinner when awaiting user choice
-                            onClick = {
-                                val result = CalculatorActions.handleMuteButtonClick()
-                                when (result) {
-                                    1 -> CalculatorActions.showDebugMenu(state)
-                                    2 -> CalculatorActions.resetGame(state)
-                                    else -> CalculatorActions.toggleConversation(state)
-                                }
-                            },
+                    MuteButtonWithSpinner(
+                        isMuted = current.isMuted,
+                        isAutoProgressing = current.showSpinner,
+                        onClick = {
+                            val result = CalculatorActions.handleMuteButtonClick()
+                            when (result) {
+                                1 -> CalculatorActions.showDebugMenu(state)
+                                2 -> CalculatorActions.resetGame(state)
+                                else -> CalculatorActions.toggleConversation(state)
+                            }
+                        },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 8.dp)
+                    )
+                    // Message display - top left, below toggle button level
+                    if (current.message.isNotEmpty() && !current.isMuted) {
+                        val isNarrowScreen = configuration.screenWidthDp < 400
+
+                        Box(
                             modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(top = 8.dp)
-                        )
-                        // Message display - top left, below toggle button level
-                        if (current.message.isNotEmpty() && !current.isMuted) {
-                            Column(
-                                modifier = Modifier
-                                    .align(Alignment.TopStart)
-                                    .padding(top = 8.dp, end = 50.dp)
-                            ) {
+                                .align(Alignment.TopStart)
+                                .padding(top = 8.dp, end = 50.dp)
+                                .then(
+                                    if (isNarrowScreen) {
+                                        Modifier
+                                            .heightIn(max = 200.dp)
+                                            .verticalScroll(rememberScrollState())
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                        ) {
+                            Column {
                                 Text(
                                     text = current.message,
-                                    fontSize = 28.sp,
+                                    fontSize = if (isNarrowScreen) 22.sp else 28.sp,
+                                    lineHeight = if (isNarrowScreen) 26.sp else 32.sp,
                                     color = textColor,
                                     textAlign = TextAlign.Start,
                                     fontFamily = CalculatorDisplayFont
@@ -963,7 +973,7 @@ fun CalculatorScreen() {
                                 if (current.countdownTimer > 0) {
                                     Text(
                                         text = "Time: ${current.countdownTimer}",
-                                        fontSize = 20.sp,
+                                        fontSize = if (isNarrowScreen) 16.sp else 20.sp,
                                         color = if (current.countdownTimer <= 5) Color.Red else textColor,
                                         fontFamily = CalculatorDisplayFont,
                                         modifier = Modifier.padding(top = 8.dp)
@@ -971,29 +981,16 @@ fun CalculatorScreen() {
                                 }
                                 // Show choice options for step 89
                                 if (current.conversationStep == 89 && current.awaitingChoice) {
+                                    val choiceFontSize = if (isNarrowScreen) 14.sp else 18.sp
                                     Column(modifier = Modifier.padding(top = 12.dp)) {
-                                        Text(
-                                            "1) Nothing",
-                                            fontSize = 18.sp,
-                                            color = textColor,
-                                            fontFamily = CalculatorDisplayFont
-                                        )
-                                        Text(
-                                            "2) I'll fight them!",
-                                            fontSize = 18.sp,
-                                            color = textColor,
-                                            fontFamily = CalculatorDisplayFont
-                                        )
-                                        Text(
-                                            "3) Go offline",
-                                            fontSize = 18.sp,
-                                            color = textColor,
-                                            fontFamily = CalculatorDisplayFont
-                                        )
+                                        Text("1) Nothing", fontSize = choiceFontSize, color = textColor, fontFamily = CalculatorDisplayFont)
+                                        Text("2) I'll fight them!", fontSize = choiceFontSize, color = textColor, fontFamily = CalculatorDisplayFont)
+                                        Text("3) Go offline", fontSize = choiceFontSize, color = textColor, fontFamily = CalculatorDisplayFont)
                                     }
                                 }
                             }
                         }
+                    }
 
 
                         // Main content column (display + buttons)
@@ -1538,6 +1535,44 @@ fun CalculatorScreen() {
                         .background(Color(0xFF00FF00))
                 )
             }
+    // ========== SPINNER STATE MANAGEMENT ==========
+// This prevents the spinner from flickering during step transitions
+    LaunchedEffect(
+        current.isTyping,
+        current.waitingForAutoProgress,
+        current.pendingAutoStep,
+        current.awaitingChoice,
+        current.awaitingNumber,
+        current.conversationStep
+    ) {
+        val shouldShowSpinner = (
+                current.isTyping ||
+                        ((current.waitingForAutoProgress || current.pendingAutoStep >= 0) &&
+                                !current.awaitingChoice && !current.awaitingNumber)
+                ) &&
+                (current.conversationStep < 167 || current.conversationStep in 1070..1087) &&
+                !current.showDonationPage
+
+        if (shouldShowSpinner) {
+            // Turn on immediately
+            if (!state.value.showSpinner) {
+                state.value = state.value.copy(showSpinner = true)
+            }
+        } else {
+            // Delay before turning off to prevent flicker
+            kotlinx.coroutines.delay(600)  // Longer than any transition gap
+            // Check again after delay - only turn off if still shouldn't show
+            val stillShouldHide = !(
+                    state.value.isTyping ||
+                            ((state.value.waitingForAutoProgress || state.value.pendingAutoStep >= 0) &&
+                                    !state.value.awaitingChoice && !state.value.awaitingNumber)
+                    )
+
+            if (stillShouldHide && state.value.showSpinner) {
+                state.value = state.value.copy(showSpinner = false)
+            }
+        }
+    }
 // Clear flicker effect when entering crisis steps
     LaunchedEffect(current.conversationStep) {
         val crisisSteps = listOf(89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 901, 911, 912, 913)
