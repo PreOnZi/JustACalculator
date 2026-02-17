@@ -1102,6 +1102,8 @@ object CalculatorActions {
             expectedNumber = if (shouldShowMessage) stepConfig.expectedNumber else "",
             timeoutUntil = savedTimeout,
             isMuted = savedMuted,
+            // Restore pausedAtStep so unmuting works correctly after app restart
+            pausedAtStep = if (savedMuted) savedPausedAtStep else -1,
             invertedColors = actuallyInverted,
             minusButtonDamaged = actualMinusDamaged,
             minusButtonBroken = actualMinusBroken,
@@ -1148,6 +1150,11 @@ object CalculatorActions {
         val current = state.value
         val newMuted = !current.isMuted
 
+        android.util.Log.d("JustACalc", "toggleConversation: newMuted=$newMuted, step=${current.conversationStep}, " +
+                "inConvo=${current.inConversation}, pausedAtStep=${current.pausedAtStep}, " +
+                "pendingAutoMsg='${current.pendingAutoMessage.take(30)}', " +
+                "browserPhase=${current.browserPhase}")
+
         if (newMuted) {
             // Pausing - store current step and reset paused calculator
             state.value = current.copy(
@@ -1161,6 +1168,9 @@ object CalculatorActions {
                 rantMode = false,
                 isTyping = false,
                 waitingForAutoProgress = false,
+                // Clear pending transitions so they don't block input after unmute
+                pendingAutoMessage = "",
+                pendingAutoStep = -1,
                 countdownTimer = 0,
                 whackAMoleActive = false,
                 wordGamePaused = true,
@@ -1178,21 +1188,43 @@ object CalculatorActions {
                 val wasInRant = resumeStep in 150..166
                 val wasInCrisis = resumeStep in listOf(89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 901, 911, 912, 913)
 
+                // Reset double-tap tracking so previous presses don't interfere
+                lastOp = null
+                lastOpTimeMillis = 0L
+
                 state.value = current.copy(
                     isMuted = false,
                     pausedAtStep = -1,
                     conversationStep = resumeStep,
+                    // Clean message state - re-type the prompt from scratch
                     message = "",
                     fullMessage = stepConfig.promptMessage,
                     isTyping = stepConfig.promptMessage.isNotEmpty(),
+                    // Restore step-specific input expectations
                     awaitingChoice = stepConfig.awaitingChoice,
                     awaitingNumber = stepConfig.awaitingNumber,
                     validChoices = stepConfig.validChoices,
                     expectedNumber = stepConfig.expectedNumber,
+                    isEnteringAnswer = false,
+                    // Clear ALL transient state that could block input
+                    pendingAutoMessage = "",
+                    pendingAutoStep = -1,
+                    waitingForAutoProgress = false,
+                    showBrowser = false,
+                    browserPhase = 0,
+                    // Reset calculator state for clean interaction
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    operationHistory = "",
+                    isReadyForNewOperation = true,
+                    // Restore mode flags
                     rantMode = wasInRant,
                     invertedColors = wasInCrisis,
                     countdownTimer = if (resumeStep == 89) 20 else 0,
-                    wordGamePaused = false
+                    wordGamePaused = false,
+                    // Clear visual effects
+                    showSpinner = false
                 )
             } else {
                 state.value = current.copy(isMuted = false)
@@ -1444,6 +1476,12 @@ object CalculatorActions {
 
     fun handleInput(state: MutableState<CalculatorState>, action: String) {
         val current = state.value
+        if (action == "+" || action == "-") {
+            android.util.Log.d("JustACalc", "handleInput: action=$action, step=${current.conversationStep}, " +
+                    "inConvo=${current.inConversation}, isMuted=${current.isMuted}, " +
+                    "lastOp=$lastOp, rantMode=${current.rantMode}, storyComplete=${current.storyComplete}, " +
+                    "showConsole=${current.showConsole}, showBrowser=${current.showBrowser}, browserPhase=${current.browserPhase}")
+        }
 // Block all input during rant mode
         if (current.rantMode) {
             return
@@ -1713,6 +1751,7 @@ object CalculatorActions {
 
         // If browser animation is active, ignore input (except phase 55 which waits for user response)
         if (current.showBrowser || (current.browserPhase > 0 && current.conversationStep !in listOf(111, 112, 113, 114)))  {
+            android.util.Log.d("JustACalc", "!! INPUT BLOCKED by browser: showBrowser=${current.showBrowser}, browserPhase=${current.browserPhase}, step=${current.conversationStep}")
             return
         }
 
@@ -1765,6 +1804,10 @@ object CalculatorActions {
             when (action) {
                 "+" -> {
                     if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
+                        android.util.Log.d("JustACalc", "++ DETECTED at step ${current.conversationStep}, " +
+                                "awaitingChoice=${current.awaitingChoice}, awaitingNumber=${current.awaitingNumber}, " +
+                                "pendingAutoMsg='${current.pendingAutoMessage.take(30)}', " +
+                                "browserPhase=${current.browserPhase}, showBrowser=${current.showBrowser}")
                         if (current.awaitingChoice) {
                             handleChoiceConfirmation(state)
                         } else if (current.awaitingNumber) {
@@ -1776,6 +1819,7 @@ object CalculatorActions {
                         lastOpTimeMillis = 0L
                         return
                     } else {
+                        android.util.Log.d("JustACalc", "+ single tap (waiting for second), step=${current.conversationStep}, inConvo=${current.inConversation}")
                         lastOp = "+"
                         lastOpTimeMillis = now
                         return  // Don't fall through to calculator operations - wait for second tap
@@ -1812,6 +1856,9 @@ object CalculatorActions {
                 }
             }
         } else {
+            if (action == "+") {
+                android.util.Log.d("JustACalc", "!! + pressed but inConversation=FALSE, step=${current.conversationStep}, isMuted=${current.isMuted}")
+            }
             if (lastOp != null && (now - lastOpTimeMillis) > DOUBLE_PRESS_WINDOW_MS) {
                 lastOp = null
             }
@@ -2868,6 +2915,9 @@ object CalculatorActions {
 
     private fun handleConversationResponse(state: MutableState<CalculatorState>, accepted: Boolean) {
         val current = state.value
+        android.util.Log.d("JustACalc", "handleConversationResponse: accepted=$accepted, step=${current.conversationStep}, " +
+                "pendingAutoMsg='${current.pendingAutoMessage.take(30)}', " +
+                "browserPhase=${current.browserPhase}, showBrowser=${current.showBrowser}")
         // Special handling for step 111: storage permission
         if (current.conversationStep == 111) {
             if (accepted) {
@@ -2890,6 +2940,7 @@ object CalculatorActions {
 
         // If there's a pending message, ignore this response - user needs to wait
         if (current.pendingAutoMessage.isNotEmpty()) {
+            android.util.Log.d("JustACalc", "!! ++ BLOCKED by pendingAutoMessage: '${current.pendingAutoMessage.take(50)}'")
             return
         }
 
@@ -2898,6 +2949,7 @@ object CalculatorActions {
         // CRITICAL: Prevent ++ from skipping auto-progress steps
         // These steps MUST progress automatically - user cannot skip them
         if (accepted && current.conversationStep in AUTO_PROGRESS_STEPS) {
+            android.util.Log.d("JustACalc", "!! ++ BLOCKED by AUTO_PROGRESS_STEPS at step ${current.conversationStep}")
             // Just ignore ++ on these steps - they will auto-progress
             return
         }
@@ -3171,7 +3223,7 @@ object CalculatorActions {
             0L
         }
 
-        // Special case: Step 18 â†’ 19 needs message chaining because step 18's success message
+        // Special case: Step 18 Ã¢â€ â€™ 19 needs message chaining because step 18's success message
         // doesn't contain the camera permission question.
         // Also: Branch endings (30, 40, 41, 50) going to step 27 need message chaining
         // Also: Force-back steps (27, 28, 29 that go back to themselves) need message chaining
