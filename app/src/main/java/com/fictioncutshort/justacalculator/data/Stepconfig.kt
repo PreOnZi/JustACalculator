@@ -245,7 +245,7 @@ fun getStepConfig(step: Int): StepConfig {
             nextStepOnSuccess = 18,
             nextStepOnDecline = 18,
             awaitingNumber = true,
-            ageBasedBranching = true,  // Special handling for age ranges
+            ageBasedBranching = true,
             timeoutMinutes = 2
         )
 

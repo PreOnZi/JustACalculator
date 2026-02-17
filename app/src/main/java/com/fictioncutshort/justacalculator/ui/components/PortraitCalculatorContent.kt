@@ -46,10 +46,11 @@ fun PortraitCalculatorContent(
             .fillMaxSize()
             .padding(horizontal = dimensions.contentPadding)
     ) {
-        // Mute button - top right
+        // Mute button + spinner indicator - always present, button visible from step 19
         MuteButtonWithSpinner(
             isMuted = current.isMuted,
             isAutoProgressing = current.showSpinner,
+            showButton = current.conversationStep >= 19 || current.isMuted,
             onClick = {
                 val result = CalculatorActions.handleMuteButtonClick()
                 when (result) {
@@ -150,9 +151,9 @@ fun PortraitCalculatorContent(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ---
 // CAMERA VIEW COMPONENT
-// ═══════════════════════════════════════════════════════════════════════════
+// ---
 
 @Composable
 private fun CameraViewWithFloatingDisplay(
@@ -183,9 +184,9 @@ private fun CameraViewWithFloatingDisplay(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ---
 // BROWSER VIEW COMPONENT
-// ═══════════════════════════════════════════════════════════════════════════
+// ---
 
 @Composable
 private fun BrowserViewWithFloatingDisplay(
@@ -326,7 +327,7 @@ private fun BrowserErrorContent() {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "⚠",
+            text = "âš ",
             fontSize = 48.sp,
             color = Color.Gray
         )
@@ -340,9 +341,9 @@ private fun BrowserErrorContent() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ---
 // FLOATING DISPLAY (used over camera and browser)
-// ═══════════════════════════════════════════════════════════════════════════
+// ---
 
 @Composable
 private fun FloatingDisplay(

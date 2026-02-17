@@ -45,19 +45,20 @@ fun LandscapeCalculatorContent(
             .padding(horizontal = dimensions.contentPadding)
             .padding(top = 8.dp, bottom = 8.dp)
     ) {
-        // ═══════════════════════════════════════════════════════════════════
+        // ---
         // LEFT PANEL - Messages, Camera/Browser, Display
-        // ═══════════════════════════════════════════════════════════════════
+        // ---
         Box(
             modifier = Modifier
                 .weight(dimensions.leftPanelWeight)
                 .fillMaxHeight()
                 .padding(end = dimensions.contentPadding / 2)
         ) {
-            // Mute button - top right of left panel
+            // Mute button + spinner indicator - always present, button visible from step 19
             MuteButtonWithSpinner(
                 isMuted = current.isMuted,
                 isAutoProgressing = current.showSpinner,
+                showButton = current.conversationStep >= 19 || current.isMuted,
                 onClick = {
                     val result = CalculatorActions.handleMuteButtonClick()
                     when (result) {
@@ -156,9 +157,9 @@ fun LandscapeCalculatorContent(
             }
         }
 
-        // ═══════════════════════════════════════════════════════════════════
+        // ---
         // RIGHT PANEL - Calculator Keyboard
-        // ═══════════════════════════════════════════════════════════════════
+        // ---
         Box(
             modifier = Modifier
                 .weight(dimensions.rightPanelWeight)

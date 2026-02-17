@@ -116,6 +116,7 @@ import com.fictioncutshort.justacalculator.ui.components.LandscapeCalculatorCont
 import com.fictioncutshort.justacalculator.util.rememberResponsiveDimensions
 import com.fictioncutshort.justacalculator.util.BezelBrown
 import com.fictioncutshort.justacalculator.util.BezelInverted
+import androidx.compose.runtime.saveable.rememberSaveable
 
 
 
@@ -140,10 +141,19 @@ fun CalculatorScreen() {
     val context = LocalContext.current
     val talkAudioHandler = remember { TalkAudioHandler(context) }
     val lifecycleOwner = LocalLifecycleOwner.current
-    val initial = remember { CalculatorActions.loadInitialState() }
-    val state = remember { mutableStateOf(initial) }
+    // Use live state from singleton if it exists (survives rotation),
+    // otherwise create fresh from SharedPreferences
+    val state = remember {
+        CalculatorActions.liveState ?: mutableStateOf(CalculatorActions.loadInitialState()).also {
+            CalculatorActions.liveState = it
+        }
+    }
+    // Re-attach after activity recreation (remember re-runs but singleton keeps state)
+    LaunchedEffect(Unit) {
+        CalculatorActions.liveState = state
+    }
     val current = state.value
-    var showTermsScreen by remember { mutableStateOf(!CalculatorActions.loadTermsAcceptedPublic()) }
+    var showTermsScreen by rememberSaveable { mutableStateOf(!CalculatorActions.loadTermsAcceptedPublic()) }
     var showTermsPopup by remember { mutableStateOf(false) }
     var microphonePermissionRequested by remember { mutableStateOf(false) }
     var locationPermissionRequested by remember { mutableStateOf(false) }
@@ -893,7 +903,7 @@ fun CalculatorScreen() {
 
 
             }}
-        }
+    }
     if (current.isMuted && current.inConversation) {
         PausedCalculatorOverlay(
             display = current.pausedCalcDisplay,
@@ -919,23 +929,23 @@ fun CalculatorScreen() {
     }
 
     // Console overlay
-            if (current.showConsole) {
-                ConsoleWindow(
-                    consoleStep = current.consoleStep,
-                    adminCodeEntered = current.adminCodeEntered,
-                    currentInput = current.number1,
-                    bannersDisabled = current.bannersDisabled,
-                    fullScreenAdsEnabled = current.fullScreenAdsEnabled,
-                    totalScreenTimeMs = current.totalScreenTimeMs,
-                    totalCalculations = current.totalCalculations,
-                    onOpenContributeLink = {
+    if (current.showConsole) {
+        ConsoleWindow(
+            consoleStep = current.consoleStep,
+            adminCodeEntered = current.adminCodeEntered,
+            currentInput = current.number1,
+            bannersDisabled = current.bannersDisabled,
+            fullScreenAdsEnabled = current.fullScreenAdsEnabled,
+            totalScreenTimeMs = current.totalScreenTimeMs,
+            totalCalculations = current.totalCalculations,
+            onOpenContributeLink = {
 
 
 
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+    }
     // Blackout overlay
     if (current.screenBlackout && !current.scrambleGameActive) {
         Box(
@@ -1029,43 +1039,43 @@ fun CalculatorScreen() {
                 .background(Color.White.copy(alpha = 0.5f))
         )
     }
-            // B&W flicker overlay during tension (handled via backgroundColor now)
-            // No separate overlay needed - the background color flickers directly
+    // B&W flicker overlay during tension (handled via backgroundColor now)
+    // No separate overlay needed - the background color flickers directly
 
-            // Retro scan lines overlay (subtle CRT effect)
-            if (!current.screenBlackout) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val lineSpacing = 4.dp.toPx()
-                    var y = 0f
-                    while (y < size.height) {
-                        drawLine(
-                            color = Color.Black.copy(alpha = 0.03f),
-                            start = Offset(0f, y),
-                            end = Offset(size.width, y),
-                            strokeWidth = 1f
-                        )
-                        y += lineSpacing
-                    }
-                }
-            }
-
-            // Desaturation/grayscale overlay during tension
-            if (desaturationAmount > 0f && !current.screenBlackout) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Gray.copy(alpha = desaturationAmount * 0.5f))
+    // Retro scan lines overlay (subtle CRT effect)
+    if (!current.screenBlackout) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val lineSpacing = 4.dp.toPx()
+            var y = 0f
+            while (y < size.height) {
+                drawLine(
+                    color = Color.Black.copy(alpha = 0.03f),
+                    start = Offset(0f, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = 1f
                 )
+                y += lineSpacing
             }
+        }
+    }
 
-            // Green screen flash during chaos phase 3
-            if (current.chaosPhase == 3) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(0xFF00FF00))
-                )
-            }
+    // Desaturation/grayscale overlay during tension
+    if (desaturationAmount > 0f && !current.screenBlackout) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Gray.copy(alpha = desaturationAmount * 0.5f))
+        )
+    }
+
+    // Green screen flash during chaos phase 3
+    if (current.chaosPhase == 3) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF00FF00))
+        )
+    }
     // ========== SPINNER STATE MANAGEMENT ==========
 // This prevents the spinner from flickering during step transitions
     LaunchedEffect(
@@ -1150,102 +1160,102 @@ fun CalculatorScreen() {
     }
 
     // Debug menu overlay - at the outermost level to cover everything
-            if (current.showDebugMenu) {
-                Box(
+    if (current.showDebugMenu) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.85f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .background(Color.White, RoundedCornerShape(16.dp))
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "DEBUG MENU",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AccentOrange,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                Text(
+                    text = "Current Step: ${current.conversationStep}",
+                    fontSize = 14.sp,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                // Chapter buttons in a scrollable column
+                Column(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.85f)),
-                    contentAlignment = Alignment.Center
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth(0.9f)
-                            .background(Color.White, RoundedCornerShape(16.dp))
-                            .padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = "DEBUG MENU",
-                            fontSize = 24.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = AccentOrange,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
-
-                        Text(
-                            text = "Current Step: ${current.conversationStep}",
-                            fontSize = 14.sp,
-                            color = Color.Gray,
-                            modifier = Modifier.padding(bottom = 16.dp)
-                        )
-
-                        // Chapter buttons in a scrollable column
-                        Column(
+                    CHAPTERS.forEach { chapter ->
+                        Button(
+                            onClick = { CalculatorActions.jumpToChapter(state, chapter) },
                             modifier = Modifier
-                                .weight(1f)
                                 .fillMaxWidth()
-                                .verticalScroll(rememberScrollState())
+                                .padding(vertical = 4.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (current.conversationStep >= chapter.startStep)
+                                    AccentOrange else Color(0xFFE0E0E0)
+                            ),
+                            shape = RoundedCornerShape(8.dp)
                         ) {
-                            CHAPTERS.forEach { chapter ->
-                                Button(
-                                    onClick = { CalculatorActions.jumpToChapter(state, chapter) },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (current.conversationStep >= chapter.startStep)
-                                            AccentOrange else Color(0xFFE0E0E0)
-                                    ),
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Column(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalAlignment = Alignment.Start
-                                    ) {
-                                        Text(
-                                            text = chapter.name,
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (current.conversationStep >= chapter.startStep)
-                                                Color.White else Color.DarkGray
-                                        )
-                                        Text(
-                                            text = "Step ${chapter.startStep}: ${chapter.description}",
-                                            fontSize = 10.sp,
-                                            color = if (current.conversationStep >= chapter.startStep)
-                                                Color.White.copy(alpha = 0.8f) else Color.Gray
-                                        )
-                                    }
-                                }
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.Start
+                            ) {
+                                Text(
+                                    text = chapter.name,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (current.conversationStep >= chapter.startStep)
+                                        Color.White else Color.DarkGray
+                                )
+                                Text(
+                                    text = "Step ${chapter.startStep}: ${chapter.description}",
+                                    fontSize = 10.sp,
+                                    color = if (current.conversationStep >= chapter.startStep)
+                                        Color.White.copy(alpha = 0.8f) else Color.Gray
+                                )
                             }
-                        }
-
-                        // Reset button
-                        Button(
-                            onClick = { CalculatorActions.resetGame(state) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("Reset Game", color = Color.White, fontWeight = FontWeight.Bold)
-                        }
-
-                        // Close button
-                        Button(
-                            onClick = { CalculatorActions.hideDebugMenu(state) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 8.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.Gray),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("Close", color = Color.White)
                         }
                     }
                 }
-            }// Donation landing page overlay - ADD THIS after the debug menu if block
+
+                // Reset button
+                Button(
+                    onClick = { CalculatorActions.resetGame(state) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Reset Game", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+
+                // Close button
+                Button(
+                    onClick = { CalculatorActions.hideDebugMenu(state) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Gray),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Close", color = Color.White)
+                }
+            }
+        }
+    }// Donation landing page overlay - ADD THIS after the debug menu if block
     if (current.showDonationPage) {
         DonationLandingPage(
             onDismiss = {
@@ -1257,12 +1267,12 @@ fun CalculatorScreen() {
             }
         )
     }
-        }
+}
 
 
 
-        @ComposePreview(showBackground = true)
-        @Composable
-        fun DefaultPreview() {
-            MaterialTheme { CalculatorScreen() }
-        }
+@ComposePreview(showBackground = true)
+@Composable
+fun DefaultPreview() {
+    MaterialTheme { CalculatorScreen() }
+}

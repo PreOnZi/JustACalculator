@@ -650,6 +650,10 @@ object CalculatorActions {
     }
     private var prefs: android.content.SharedPreferences? = null
 
+    // Live state reference survives activity recreation (config changes)
+    // since CalculatorActions is a singleton object in the app process
+    var liveState: MutableState<CalculatorState>? = null
+
     private var lastOp: String? = null
     private var lastOpTimeMillis: Long = 0L
     private const val DOUBLE_PRESS_WINDOW_MS = 800L
@@ -1196,6 +1200,8 @@ object CalculatorActions {
                     isMuted = false,
                     pausedAtStep = -1,
                     conversationStep = resumeStep,
+                    // Ensure conversation mode is active when restoring a story step
+                    inConversation = true,
                     // Clean message state - re-type the prompt from scratch
                     message = "",
                     fullMessage = stepConfig.promptMessage,

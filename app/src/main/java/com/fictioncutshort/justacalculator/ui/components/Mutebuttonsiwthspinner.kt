@@ -44,8 +44,8 @@ import kotlinx.coroutines.delay
  * conversation mode on/off.
  *
  * Features:
- * - Filled circle (●) when conversation is active
- * - Empty circle (○) when muted
+ * - Filled circle (â—) when conversation is active
+ * - Empty circle (â—‹) when muted
  * - Spinning dashed border when auto-progressing (waiting for next message)
  *
  * Hidden features (via rapid clicking):
@@ -66,6 +66,7 @@ fun MuteButtonWithSpinner(
     isMuted: Boolean,
     isAutoProgressing: Boolean,
     onClick: () -> Unit,
+    showButton: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -130,27 +131,29 @@ fun MuteButtonWithSpinner(
             }
         }
 
-        // Main circular button
-        Button(
-            onClick = {
-                vibrate(context, 10, 30)
-                onClick()
-            },
-            modifier = Modifier.size(36.dp),
-            shape = CircleShape,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = AccentOrange,
-                contentColor = Color.White
-            ),
-            contentPadding = PaddingValues(0.dp),
-            elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
-        ) {
-            Text(
-                text = if (isMuted) "○" else "●",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
+        // Main circular button (only visible from step 19 onward)
+        if (showButton) {
+            Button(
+                onClick = {
+                    vibrate(context, 10, 30)
+                    onClick()
+                },
+                modifier = Modifier.size(36.dp),
+                shape = CircleShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AccentOrange,
+                    contentColor = Color.White
+                ),
+                contentPadding = PaddingValues(0.dp),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
+            ) {
+                Text(
+                    text = if (isMuted) "○" else "●",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            }
         }
     }
 }

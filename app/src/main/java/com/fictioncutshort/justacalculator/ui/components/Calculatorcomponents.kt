@@ -30,9 +30,9 @@ import com.fictioncutshort.justacalculator.util.*
  * These components adapt to different screen sizes and orientations.
  */
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ---
 // TOP BAR COMPONENTS
-// ═══════════════════════════════════════════════════════════════════════════
+// ---
 
 /**
  * Brown bezel bar that covers the status bar area.
@@ -91,7 +91,7 @@ fun AdBanner(
             when {
                 postChaosAdPhase == 1 -> {
                     Text(
-                        text = "✨ UNLOCK YOUR POTENTIAL TODAY! ✨",
+                        text = "âœ¨ UNLOCK YOUR POTENTIAL TODAY! âœ¨",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White
@@ -99,7 +99,7 @@ fun AdBanner(
                 }
                 postChaosAdPhase == 2 -> {
                     Text(
-                        text = "🚀 LIMITED TIME OFFER - ACT NOW! 🚀",
+                        text = "ðŸš€ LIMITED TIME OFFER - ACT NOW! ðŸš€",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White
@@ -107,7 +107,7 @@ fun AdBanner(
                 }
                 adAnimationPhase == 1 -> {
                     Text(
-                        text = "🎉 YOU WON! Click here! 🎉",
+                        text = "ðŸŽ‰ YOU WON! Click here! ðŸŽ‰",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White
@@ -115,7 +115,7 @@ fun AdBanner(
                 }
                 adAnimationPhase == 2 -> {
                     Text(
-                        text = "💰 EARN $500/DAY FROM HOME! 💰",
+                        text = "ðŸ’° EARN $500/DAY FROM HOME! ðŸ’°",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White
@@ -127,9 +127,9 @@ fun AdBanner(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ---
 // MESSAGE DISPLAY COMPONENT
-// ═══════════════════════════════════════════════════════════════════════════
+// ---
 
 /**
  * Displays the calculator's story messages with optional countdown and choices.
@@ -149,7 +149,7 @@ fun MessageDisplay(
     val maxHeight = if (dimensions.isLandscape) {
         (dimensions.screenHeight.value * 0.6f).dp
     } else {
-        200.dp
+        (dimensions.screenHeight.value * 0.35f).dp
     }
 
     Box(
@@ -191,9 +191,9 @@ fun MessageDisplay(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ---
 // LCD DISPLAY COMPONENT
-// ═══════════════════════════════════════════════════════════════════════════
+// ---
 
 /**
  * The calculator's LCD display showing numbers and operation history.
@@ -267,9 +267,9 @@ fun CalculatorLcdDisplay(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ---
 // CALCULATOR BUTTON GRID
-// ═══════════════════════════════════════════════════════════════════════════
+// ---
 
 /**
  * The calculator's button grid (5 rows x 4 columns).
@@ -327,9 +327,9 @@ fun CalculatorButtonGrid(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ---
 // RAD BUTTON (appears at certain story points)
-// ═══════════════════════════════════════════════════════════════════════════
+// ---
 
 @Composable
 fun RadButton(
