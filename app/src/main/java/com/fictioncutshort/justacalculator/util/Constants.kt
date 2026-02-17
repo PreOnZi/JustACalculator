@@ -1,9 +1,17 @@
 package com.fictioncutshort.justacalculator.util
 
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import android.content.res.Configuration
 import com.fictioncutshort.justacalculator.R
 
 /**
@@ -15,6 +23,7 @@ import com.fictioncutshort.justacalculator.R
  * - SharedPreferences keys
  * - Timing constants
  * - Calculator limits
+ * - Responsive dimensions
  */
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -38,6 +47,9 @@ val DarkText = Color(0xFF2D2D2D)
 
 /** Top bezel color - dark brown wood tone */
 val BezelBrown = Color(0xFF4A3728)
+
+/** Inverted bezel color - near black */
+val BezelInverted = Color(0xFF1A1A1A)
 
 /** Ad banner placeholder color */
 val BannerGray = Color(0xFFD4CBC0)
@@ -132,3 +144,109 @@ val WHACK_A_MOLE_BUTTONS = listOf(
     "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
     "+", "*", "/", "=", "%", "( )", ".", "C", "DEL"
 )
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RESPONSIVE DIMENSIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Responsive dimension provider that calculates sizes based on screen dimensions.
+ * Use this to get consistent, proportional sizing across all devices.
+ */
+data class ResponsiveDimensions(
+    val screenWidth: Dp,
+    val screenHeight: Dp,
+    val isLandscape: Boolean,
+    val isTablet: Boolean,
+    val statusBarHeight: Dp,
+
+    // Calculated dimensions
+    val adBannerHeight: Dp,
+    val buttonRowHeight: Dp,
+    val buttonSpacing: Dp,
+    val lcdDisplayHeight: Dp,
+    val contentPadding: Dp,
+    val messageFontSize: Int,
+    val displayFontSizeBase: Int,
+
+    // Landscape-specific
+    val leftPanelWeight: Float,
+    val rightPanelWeight: Float,
+    val keyboardWidth: Dp
+)
+
+/**
+ * Creates responsive dimensions based on current screen configuration.
+ * Call this in your Composable to get device-appropriate sizing.
+ */
+@Composable
+fun rememberResponsiveDimensions(): ResponsiveDimensions {
+    val configuration = LocalConfiguration.current
+    val screenWidth = configuration.screenWidthDp.dp
+    val screenHeight = configuration.screenHeightDp.dp
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val isTablet = configuration.screenWidthDp > 600
+    val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+
+    // Calculate proportional dimensions
+    val shortestDimension = minOf(screenWidth, screenHeight)
+
+    return ResponsiveDimensions(
+        screenWidth = screenWidth,
+        screenHeight = screenHeight,
+        isLandscape = isLandscape,
+        isTablet = isTablet,
+        statusBarHeight = statusBarHeight,
+
+        // Ad banner: ~6% of screen height, min 40dp, max 60dp
+        adBannerHeight = (screenHeight.value * 0.06f).dp.coerceIn(40.dp, 60.dp),
+
+        // Button rows: larger proportion in landscape since we have less vertical space
+        buttonRowHeight = if (isLandscape) {
+            (screenHeight.value * 0.12f).dp.coerceIn(44.dp, 56.dp)
+        } else {
+            (screenHeight.value * 0.075f).dp.coerceIn(50.dp, 65.dp)
+        },
+
+        // Button spacing: proportional to shortest dimension
+        buttonSpacing = (shortestDimension.value * 0.02f).dp.coerceIn(4.dp, 10.dp),
+
+        // LCD display height: proportional
+        lcdDisplayHeight = if (isLandscape) {
+            (screenHeight.value * 0.18f).dp.coerceIn(70.dp, 100.dp)
+        } else {
+            (screenHeight.value * 0.12f).dp.coerceIn(80.dp, 120.dp)
+        },
+
+        // Content padding: proportional
+        contentPadding = (shortestDimension.value * 0.04f).dp.coerceIn(12.dp, 20.dp),
+
+        // Font sizes (in sp, returned as Int)
+        messageFontSize = if (isLandscape || screenWidth.value < 400) 22 else 28,
+        displayFontSizeBase = if (isLandscape) 48 else 58,
+
+        // Landscape panel weights
+        leftPanelWeight = 0.58f,
+        rightPanelWeight = 0.42f,
+
+        // Keyboard width in landscape (fixed proportion of screen)
+        keyboardWidth = if (isLandscape) {
+            (screenWidth.value * 0.4f).dp.coerceIn(200.dp, 320.dp)
+        } else {
+            screenWidth  // Full width in portrait
+        }
+    )
+}
+
+/**
+ * Calculate display font size based on text length.
+ * Automatically scales down for longer numbers.
+ */
+fun calculateDisplayFontSize(textLength: Int, baseFontSize: Int): Int {
+    return when {
+        textLength > 12 -> (baseFontSize * 0.65f).toInt()
+        textLength > 10 -> (baseFontSize * 0.78f).toInt()
+        textLength > 8 -> (baseFontSize * 0.88f).toInt()
+        else -> baseFontSize
+    }
+}

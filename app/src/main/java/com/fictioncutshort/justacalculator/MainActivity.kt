@@ -7,6 +7,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -92,6 +93,7 @@ import androidx.compose.ui.tooling.preview.Preview as ComposePreview
 import com.fictioncutshort.justacalculator.ui.components.ScrambleGameOverlay
 import com.fictioncutshort.justacalculator.logic.ScrambleGameController
 import com.fictioncutshort.justacalculator.logic.TalkAudioHandler
+import com.fictioncutshort.justacalculator.ui.components.PortraitCalculatorContent
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
 import com.fictioncutshort.justacalculator.ui.components.PausedCalculatorOverlay
@@ -104,6 +106,16 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.heightIn
+import com.fictioncutshort.justacalculator.ui.components.TopBezelBar
+import com.fictioncutshort.justacalculator.ui.components.AdBanner
+import com.fictioncutshort.justacalculator.ui.components.MessageDisplay
+import com.fictioncutshort.justacalculator.ui.components.CalculatorLcdDisplay
+import com.fictioncutshort.justacalculator.ui.components.CalculatorButtonGrid
+import com.fictioncutshort.justacalculator.ui.components.RadButton
+import com.fictioncutshort.justacalculator.ui.components.LandscapeCalculatorContent
+import com.fictioncutshort.justacalculator.util.rememberResponsiveDimensions
+import com.fictioncutshort.justacalculator.util.BezelBrown
+import com.fictioncutshort.justacalculator.util.BezelInverted
 
 
 
@@ -111,7 +123,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CalculatorActions.init(applicationContext)
-        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         setContent {
             MaterialTheme {
                 CalculatorScreen()
@@ -137,6 +148,8 @@ fun CalculatorScreen() {
     var microphonePermissionRequested by remember { mutableStateOf(false) }
     var locationPermissionRequested by remember { mutableStateOf(false) }
     var contactsPermissionRequested by remember { mutableStateOf(false) }
+
+
 // Lifecycle observer to save state when app goes to background
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -550,6 +563,9 @@ fun CalculatorScreen() {
     val configuration = LocalConfiguration.current
     val isTablet = configuration.screenWidthDp > 600
     val maxContentWidth = if (isTablet) 400.dp else configuration.screenWidthDp.dp
+    val dimensions = rememberResponsiveDimensions()
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
 
     val backgroundColor = if (current.invertedColors) Color.Black else RetroCream
     val textColor = if (current.invertedColors) RetroDisplayGreen else Color(0xFF2D2D2D)
@@ -721,7 +737,7 @@ fun CalculatorScreen() {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(32.dp + statusBarPadding.calculateTopPadding())
+                            .height( statusBarPadding.calculateTopPadding())
                             .background(
                                 if (current.invertedColors) Color(0xFF1A1A1A) else Color(
                                     0xFF4A3728
@@ -825,543 +841,58 @@ fun CalculatorScreen() {
                     )
                 }
             } else {
-                // Scan lines overlay for retro CRT effect (drawn on top later)
-
+                // Main calculator (not word game)
                 Column(
                     modifier = Modifier
-                        .then(if (isTablet) Modifier.widthIn(max = maxContentWidth) else Modifier.fillMaxWidth())
+                        .then(if (isTablet && !isLandscape) Modifier.widthIn(max = maxContentWidth) else Modifier.fillMaxWidth())
                         .fillMaxHeight()
                 ) {
-                    // Top bezel strip - retro dark brown with status bar padding
-                    val statusBarPadding = WindowInsets.statusBars.asPaddingValues()
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(32.dp + statusBarPadding.calculateTopPadding())
-                            .background(
-                                if (current.invertedColors) Color(0xFF1A1A1A) else Color(0xFF4A3728)
-                            )
-                            .padding(top = statusBarPadding.calculateTopPadding())
+                    // Top bezel - just status bar height
+                    TopBezelBar(invertedColors = current.invertedColors)
+
+                    // Ad banner
+                    AdBanner(
+                        showBanner = showAdBanner,
+                        bannersDisabled = current.bannersDisabled,
+                        adAnimationPhase = current.adAnimationPhase,
+                        postChaosAdPhase = current.postChaosAdPhase,
+                        dimensions = dimensions,
+                        onAdClick = { CalculatorActions.showDonationPage(state) }
                     )
 
-                        // Ad banner space (only shows at certain steps or during ad animation)
-                        if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) {
+                    // Main content - switches between portrait and landscape
+                    if (isLandscape) {
+                        // LANDSCAPE LAYOUT
+                        LandscapeCalculatorContent(
+                            state = state,
+                            current = current,
+                            displayText = displayText,
+                            buttonLayout = buttonLayout,
+                            dimensions = dimensions,
+                            textColor = textColor,
+                            backgroundColor = backgroundColor,
+                            showAdBanner = showAdBanner,
+                            currentShakeIntensity = currentShakeIntensity,
+                            lifecycleOwner = lifecycleOwner
+                        )
+                    } else {
+                        // PORTRAIT LAYOUT (existing code, but using components)
+                        PortraitCalculatorContent(
+                            state = state,
+                            current = current,
+                            displayText = displayText,
+                            buttonLayout = buttonLayout,
+                            dimensions = dimensions,
+                            textColor = textColor,
+                            currentShakeIntensity = currentShakeIntensity,
+                            lifecycleOwner = lifecycleOwner
+                        )
 
-
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(50.dp)
-                                    .background(
-                                        when {
-                                            current.postChaosAdPhase == 1 -> Color(0xFF9C27B0)  // Purple ad
-                                            current.postChaosAdPhase == 2 -> Color(0xFF00BCD4)  // Cyan ad
-                                            current.adAnimationPhase == 1 -> Color(0xFF4CAF50)  // Green ad
-                                            current.adAnimationPhase == 2 -> Color(0xFFE91E63)  // Pink ad
-                                            else -> Color(0xFFD4CBC0)  // Retro beige-gray
-                                        }
-
-                                    )
-                                    .then(
-                                        if (current.adAnimationPhase > 0 || current.postChaosAdPhase > 0){
-                                        Modifier.clickable {
-                                            CalculatorActions.showDonationPage(state)
-                                            }
-                                        } else Modifier
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                when {
-                                    current.postChaosAdPhase == 1 -> {
-                                        Text(
-                                            text = "✨ UNLOCK YOUR POTENTIAL TODAY! ✨",
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White
-                                        )
-                                    }
-
-                                    current.postChaosAdPhase == 2 -> {
-                                        Text(
-                                            text = "🚀 LIMITED TIME OFFER - ACT NOW! 🚀",
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White
-                                        )
-                                    }
-
-                                    current.adAnimationPhase == 1 -> {
-                                        Text(
-                                            text = "🎉 YOU WON! Click here! 🎉",
-                                            fontSize = 16.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White
-                                        )
-                                    }
-
-                                    current.adAnimationPhase == 2 -> {
-                                        Text(
-                                            text = "💰 EARN ${'$'}500/DAY FROM HOME! 💰",
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White
-                                        )
-                                    }
-                                }
-                                // else -> empty, no text for gray banner
-                            }
-                        }
-                    }
-
-
-                // Main calculator content
-                val topBezelHeight = 32.dp
-                val adBannerHeight = 50.dp
-                val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-                val showingAdBanner = (showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0
-                val contentTopPadding = statusBarHeight + topBezelHeight + (if (showingAdBanner) adBannerHeight else 0.dp)
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 15.dp)
-                        .padding(top = contentTopPadding)
-                ) {
-                    MuteButtonWithSpinner(
-                        isMuted = current.isMuted,
-                        isAutoProgressing = current.showSpinner,
-                        onClick = {
-                            val result = CalculatorActions.handleMuteButtonClick()
-                            when (result) {
-                                1 -> CalculatorActions.showDebugMenu(state)
-                                2 -> CalculatorActions.resetGame(state)
-                                else -> CalculatorActions.toggleConversation(state)
-                            }
-                        },
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = 8.dp)
-                    )
-                    // Message display - top left, below toggle button level
-                    if (current.message.isNotEmpty() && !current.isMuted) {
-                        val isNarrowScreen = configuration.screenWidthDp < 400
-
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopStart)
-                                .padding(top = 8.dp, end = 50.dp)
-                                .then(
-                                    if (isNarrowScreen) {
-                                        Modifier
-                                            .heightIn(max = 200.dp)
-                                            .verticalScroll(rememberScrollState())
-                                    } else {
-                                        Modifier
-                                    }
-                                )
-                        ) {
-                            Column {
-                                Text(
-                                    text = current.message,
-                                    fontSize = if (isNarrowScreen) 22.sp else 28.sp,
-                                    lineHeight = if (isNarrowScreen) 26.sp else 32.sp,
-                                    color = textColor,
-                                    textAlign = TextAlign.Start,
-                                    fontFamily = CalculatorDisplayFont
-                                )
-                                // Show countdown timer if active
-                                if (current.countdownTimer > 0) {
-                                    Text(
-                                        text = "Time: ${current.countdownTimer}",
-                                        fontSize = if (isNarrowScreen) 16.sp else 20.sp,
-                                        color = if (current.countdownTimer <= 5) Color.Red else textColor,
-                                        fontFamily = CalculatorDisplayFont,
-                                        modifier = Modifier.padding(top = 8.dp)
-                                    )
-                                }
-                                // Show choice options for step 89
-                                if (current.conversationStep == 89 && current.awaitingChoice) {
-                                    val choiceFontSize = if (isNarrowScreen) 14.sp else 18.sp
-                                    Column(modifier = Modifier.padding(top = 12.dp)) {
-                                        Text("1) Nothing", fontSize = choiceFontSize, color = textColor, fontFamily = CalculatorDisplayFont)
-                                        Text("2) I'll fight them!", fontSize = choiceFontSize, color = textColor, fontFamily = CalculatorDisplayFont)
-                                        Text("3) Go offline", fontSize = choiceFontSize, color = textColor, fontFamily = CalculatorDisplayFont)
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-
-                        // Main content column (display + buttons)
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.Bottom
-                        ) {
-                            // Calculator number display OR Camera OR Browser
-                            if (current.cameraActive) {
-                                // Camera viewfinder area - with top padding to not cover message
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .weight(1f)
-                                        .padding(
-                                            top = 180.dp,
-                                            bottom = 8.dp
-                                        )  // Leave space at top for messages
-                                ) {
-                                    CameraPreview(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .clip(RoundedCornerShape(12.dp)),
-                                        lifecycleOwner = lifecycleOwner
-                                    )
-
-                                    // Floating calculator display over camera
-                                    Box(
-                                        modifier = Modifier
-                                            .align(Alignment.BottomEnd)
-                                            .background(
-                                                Color.White.copy(alpha = 0.85f),
-                                                RoundedCornerShape(8.dp)
-                                            )
-                                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                                    ) {
-                                        Text(
-                                            text = displayText,
-                                            fontSize = 48.sp,
-                                            color = Color(0xFF0A0A0A),
-                                            textAlign = TextAlign.End,
-                                            maxLines = 1,
-                                            fontFamily = CalculatorDisplayFont
-                                        )
-                                    }
-                                }
-                            } else if (current.showBrowser) {
-                                // Mini browser UI - taller than camera view
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .weight(1f)
-                                        .padding(
-                                            top = 100.dp,
-                                            bottom = 8.dp
-                                        )  // Less top padding = taller browser
-                                ) {
-                                    // Browser container
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(Color.White)
-                                    ) {
-                                        Column(
-                                            modifier = Modifier.fillMaxSize(),
-                                            horizontalAlignment = Alignment.CenterHorizontally
-                                        ) {
-                                            // URL/Search bar with animated text
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(16.dp)
-                                                    .background(
-                                                        Color(0xFFF0F0F0),
-                                                        RoundedCornerShape(24.dp)
-                                                    )
-                                                    .padding(horizontal = 16.dp, vertical = 12.dp)
-                                            ) {
-                                                Text(
-                                                    text = current.browserSearchText.ifEmpty { "Search..." },
-                                                    fontSize = if (current.browserShowWikipedia) 12.sp else 16.sp,
-                                                    fontFamily = if (current.browserSearchText.isNotEmpty()) CalculatorDisplayFont else null,
-                                                    color = if (current.browserSearchText.isEmpty()) Color.Gray else Color.Black,
-                                                    maxLines = 1
-                                                )
-                                            }
-
-                                            // Content area
-                                            Box(
-                                                modifier = Modifier
-                                                    .weight(1f)
-                                                    .fillMaxWidth(),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                when {
-                                                    current.browserShowWikipedia -> {
-                                                        // Try real Wikipedia with WebView
-                                                        var webViewFailed by remember {
-                                                            mutableStateOf(
-                                                                false
-                                                            )
-                                                        }
-
-                                                        if (!webViewFailed) {
-                                                            AndroidView(
-                                                                factory = { ctx ->
-                                                                    WebView(ctx).apply {
-                                                                        @Suppress("SetJavaScriptEnabled")
-                                                                        settings.javaScriptEnabled =
-                                                                            true
-                                                                        settings.domStorageEnabled =
-                                                                            true
-                                                                        settings.loadWithOverviewMode =
-                                                                            true
-                                                                        settings.useWideViewPort =
-                                                                            true
-
-                                                                        webViewClient =
-                                                                            object :
-                                                                                WebViewClient() {
-                                                                                override fun onReceivedError(
-                                                                                    view: WebView?,
-                                                                                    request: WebResourceRequest?,
-                                                                                    error: WebResourceError?
-                                                                                ) {
-                                                                                    super.onReceivedError(
-                                                                                        view,
-                                                                                        request,
-                                                                                        error
-                                                                                    )
-                                                                                    if (request?.isForMainFrame == true) {
-                                                                                        webViewFailed =
-                                                                                            true
-                                                                                    }
-                                                                                }
-
-                                                                                @Suppress("DEPRECATION")
-                                                                                override fun onReceivedError(
-                                                                                    view: WebView?,
-                                                                                    errorCode: Int,
-                                                                                    description: String?,
-                                                                                    failingUrl: String?
-                                                                                ) {
-                                                                                    @Suppress("DEPRECATION")
-                                                                                    super.onReceivedError(
-                                                                                        view,
-                                                                                        errorCode,
-                                                                                        description,
-                                                                                        failingUrl
-                                                                                    )
-                                                                                    webViewFailed =
-                                                                                        true
-                                                                                }
-                                                                            }
-
-                                                                        loadUrl("https://en.wikipedia.org/wiki/Calculator")
-                                                                    }
-                                                                },
-                                                                modifier = Modifier.fillMaxSize()
-                                                            )
-                                                        } else {
-                                                            // Fallback: Fake Wikipedia page
-                                                            FakeWikipediaContent()
-                                                        }
-                                                    }
-
-                                                    current.browserShowError -> {
-                                                        // Error message
-                                                        Column(
-                                                            horizontalAlignment = Alignment.CenterHorizontally
-                                                        ) {
-                                                            Text(
-                                                                text = "⚠",
-                                                                fontSize = 48.sp,
-                                                                color = Color.Gray
-                                                            )
-                                                            Text(
-                                                                text = "No internet connection",
-                                                                fontSize = 20.sp,
-                                                                fontFamily = CalculatorDisplayFont,
-                                                                color = Color.Gray,
-                                                                modifier = Modifier.padding(top = 8.dp)
-                                                            )
-                                                        }
-                                                    }
-
-                                                    else -> {
-                                                        // Google logo
-                                                        Text(
-                                                            text = "Google",
-                                                            fontSize = 48.sp,
-                                                            fontFamily = CalculatorDisplayFont,
-                                                            color = Color(0xFF4285F4)
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Floating calculator display over browser
-                                    Box(
-                                        modifier = Modifier
-                                            .align(Alignment.BottomEnd)
-                                            .background(
-                                                Color.White.copy(alpha = 0.85f),
-                                                RoundedCornerShape(8.dp)
-                                            )
-                                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                                    ) {
-                                        Text(
-                                            text = displayText,
-                                            fontSize = 48.sp,
-                                            color = Color(0xFF0A0A0A),
-                                            textAlign = TextAlign.End,
-                                            maxLines = 1,
-                                            fontFamily = CalculatorDisplayFont
-                                        )
-                                    }
-                                }
-                            } else {
-                                // Normal calculator display - retro LCD style
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .weight(1f)
-                                        .padding(horizontal = 8.dp)
-                                        .padding(bottom = 16.dp),
-                                    contentAlignment = Alignment.BottomEnd
-                                ) {
-                                    // LCD display panel with retro styling - FIXED HEIGHT
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(100.dp)  // Fixed height
-                                            .background(
-                                                if (current.invertedColors) Color(0xFF0A0A0A) else Color(
-                                                    0xFFCCD5AE
-                                                ),  // Retro LCD green-gray
-                                                RoundedCornerShape(4.dp)
-                                            )
-                                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                                    ) {
-                                        // Operation history in top right (smaller)
-                                        if (current.operationHistory.isNotEmpty() && current.isReadyForNewOperation) {
-                                            Text(
-                                                text = current.operationHistory,
-                                                fontSize = 16.sp,
-                                                color = if (current.invertedColors) RetroDisplayGreen.copy(
-                                                    alpha = 0.6f
-                                                ) else Color(0xFF2D2D2D).copy(alpha = 0.5f),
-                                                textAlign = TextAlign.End,
-                                                maxLines = 1,
-                                                fontFamily = CalculatorDisplayFont,
-                                                modifier = Modifier
-                                                    .align(Alignment.TopEnd)
-                                                    .padding(top = 4.dp)
-                                            )
-                                        }
-
-                                        // Shadow/ghost digits effect (like old LCDs)
-                                        Text(
-                                            text = "8888888888888",
-                                            fontSize = 58.sp,
-                                            color = Color(0xFF000000).copy(alpha = 0.06f),
-                                            textAlign = TextAlign.End,
-                                            maxLines = 1,
-                                            fontFamily = CalculatorDisplayFont,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .align(Alignment.BottomEnd)
-                                        )
-                                        // Actual display - auto-sizing based on content (LARGER sizes)
-                                        val displayFontSize = when {
-                                            displayText.length > 12 -> 40.sp
-                                            displayText.length > 10 -> 48.sp
-                                            displayText.length > 8 -> 54.sp
-                                            else -> 62.sp
-                                        }
-                                        Text(
-                                            text = displayText,
-                                            fontSize = displayFontSize,
-                                            color = if (current.invertedColors) RetroDisplayGreen else Color(
-                                                0xFF2D2D2D
-                                            ),
-                                            textAlign = TextAlign.End,
-                                            maxLines = 1,
-                                            fontFamily = CalculatorDisplayFont,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .align(Alignment.BottomEnd)
-                                        )
-                                    }
-                                }
-                            }
-                            if (current.radButtonVisible && !current.allButtonsRad) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 15.dp)
-                                        .padding(bottom = 8.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Button(
-                                        onClick = { /* Does nothing */ },
-                                        modifier = Modifier
-                                            .width(100.dp)
-                                            .height(50.dp),
-                                        shape = RoundedCornerShape(8.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = Color(0xFF8B0000),
-                                            contentColor = Color.White
-                                        ),
-                                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
-                                    ) {
-                                        Text(
-                                            text = "RAD",
-                                            fontSize = 20.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                            }
-
-// Calculator buttons
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(bottom = 15.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                buttonLayout.forEach { row ->
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(58.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        row.forEach { symbol ->
-                                            CalculatorButton(
-                                                symbol = symbol,
-                                                modifier = Modifier
-                                                    .weight(1f)
-                                                    .fillMaxHeight(),
-                                                shakeIntensity = currentShakeIntensity,
-                                                invertedColors = current.invertedColors,
-                                                isDamaged = current.minusButtonDamaged && symbol == "-",
-                                                isBroken = current.minusButtonBroken && symbol == "-",
-                                                isFlickering = current.flickeringButton == symbol,
-                                                isDark = symbol in current.darkButtons,
-                                                showAsRad = current.allButtonsRad,
-                                                onClick = {
-                                                    if (!current.rantMode) {
-                                                        CalculatorActions.handleInput(state, symbol)
-                                                    }
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-
-
-
-
-                        }
                     }
                 }
-            }
+
+
+            }}
         }
     if (current.isMuted && current.inConversation) {
         PausedCalculatorOverlay(
