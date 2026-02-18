@@ -263,7 +263,7 @@ fun getStepConfig(step: Int): StepConfig {
         // ═══════════════════════════════════════════════════════════════════════
 
         19 -> StepConfig(
-            promptMessage = "True. That's not really for you to answer...\n\nCould you... Perhaps... Show me around? I will need your permission for that.",
+            promptMessage = "True. That's not really for you to answer...\n\nCould you... Perhaps... Show me around? I will need your permission for that. \n\n Oh, the button in the top right-hand corner, that's for the time when you need more calculator and less opinion.",
             declineMessage = "That's fair. Perhaps you can describe things to me eventually. More trivia?",
             wrongPlusMessage = "Will you? Please.",
             wrongMinusMessage = "Will you? Please.",
