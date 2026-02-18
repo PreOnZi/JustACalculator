@@ -37,7 +37,11 @@ object CalculatorActions {
     private const val MAX_DIGITS = 12
     private const val ABSURDLY_LARGE_THRESHOLD = 1_000_000_000_000.0
     private const val CAMERA_TIMEOUT_MS = 8000L  // 8 seconds
-    private fun loadTermsAccepted(): Boolean = prefs?.getBoolean(PREF_TERMS_ACCEPTED, false) ?: false
+    private fun loadTermsAccepted(): Boolean {
+        val result = prefs?.getBoolean(PREF_TERMS_ACCEPTED, false) ?: false
+        android.util.Log.d("JustACalc", "loadTermsAccepted: $result, prefs null? ${prefs == null}")
+        return result
+    }
     fun moveWordGameLeft(state: MutableState<CalculatorState>) {
         val current = state.value
         if (!current.wordGameActive || current.fallingLetter == null || current.isSelectingWord) return
@@ -646,7 +650,8 @@ object CalculatorActions {
     fun loadTermsAcceptedPublic(): Boolean = loadTermsAccepted()
 
     fun persistTermsAccepted() {
-        prefs?.edit { putBoolean(PREF_TERMS_ACCEPTED, true) }
+        prefs?.edit()?.putBoolean(PREF_TERMS_ACCEPTED, true)?.commit()
+        android.util.Log.d("JustACalc", "persistTermsAccepted called, prefs null? ${prefs == null}")
     }
     private var prefs: android.content.SharedPreferences? = null
 
@@ -666,65 +671,68 @@ object CalculatorActions {
 
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        android.util.Log.d("JustACalc", "init called, prefs initialized: ${prefs != null}, termsAccepted: ${loadTermsAccepted()}")
     }
 
-    private fun persistEqualsCount(count: Int) {
-        prefs?.edit { putInt(PREF_EQUALS_COUNT, count) }
+    fun persistEqualsCount(count: Int) {
+        prefs?.edit()?.putInt(PREF_EQUALS_COUNT, count)?.commit()
     }
 
     private fun persistMessage(msg: String) {
-        prefs?.edit { putString(PREF_MESSAGE, msg) }
+        prefs?.edit()?.putString(PREF_MESSAGE, msg)?.commit()
     }
 
     fun persistConversationStep(step: Int) {
-        prefs?.edit { putInt(PREF_CONVO_STEP, step) }
+        android.util.Log.d("JustACalc", "persistConversationStep: $step")
+        prefs?.edit()?.putInt(PREF_CONVO_STEP, step)?.commit()
     }
 
     fun persistInConversation(inConvo: Boolean) {
-        prefs?.edit { putBoolean(PREF_IN_CONVERSATION, inConvo) }
+        android.util.Log.d("JustACalc", "persistInConversation: $inConvo")
+        prefs?.edit()?.putBoolean(PREF_IN_CONVERSATION, inConvo)?.commit()
     }
 
     private fun persistAwaitingNumber(awaiting: Boolean) {
-        prefs?.edit { putBoolean(PREF_AWAITING_NUMBER, awaiting) }
+        prefs?.edit()?.putBoolean(PREF_AWAITING_NUMBER, awaiting)?.commit()
     }
 
     private fun persistExpectedNumber(number: String) {
-        prefs?.edit { putString(PREF_EXPECTED_NUMBER, number) }
+        prefs?.edit()?.putString(PREF_EXPECTED_NUMBER, number)?.commit()
     }
 
     private fun persistTimeoutUntil(timestamp: Long) {
-        prefs?.edit { putLong(PREF_TIMEOUT_UNTIL, timestamp) }
+        prefs?.edit()?.putLong(PREF_TIMEOUT_UNTIL, timestamp)?.commit()
     }
 
-    private fun persistMuted(muted: Boolean) {
-        prefs?.edit { putBoolean(PREF_MUTED, muted) }
+    fun persistMuted(muted: Boolean) {
+        prefs?.edit()?.putBoolean(PREF_MUTED, muted)?.commit()
     }
 
     fun persistInvertedColors(inverted: Boolean) {
-        prefs?.edit { putBoolean(PREF_INVERTED_COLORS, inverted) }
+        prefs?.edit()?.putBoolean(PREF_INVERTED_COLORS, inverted)?.commit()
     }
 
     fun persistMinusDamaged(damaged: Boolean) {
-        prefs?.edit { putBoolean(PREF_MINUS_DAMAGED, damaged) }
+        prefs?.edit()?.putBoolean(PREF_MINUS_DAMAGED, damaged)?.commit()
     }
 
     fun persistMinusBroken(broken: Boolean) {
-        prefs?.edit { putBoolean(PREF_MINUS_BROKEN, broken) }
+        prefs?.edit()?.putBoolean(PREF_MINUS_BROKEN, broken)?.commit()
     }
 
     fun persistNeedsRestart(needs: Boolean) {
-        prefs?.edit { putBoolean(PREF_NEEDS_RESTART, needs) }
+        prefs?.edit()?.putBoolean(PREF_NEEDS_RESTART, needs)?.commit()
     }
     fun persistTotalScreenTime(timeMs: Long) {
-        prefs?.edit { putLong(PREF_TOTAL_SCREEN_TIME, timeMs) }
+        prefs?.edit()?.putLong(PREF_TOTAL_SCREEN_TIME, timeMs)?.commit()
     }
 
     fun persistTotalCalculations(count: Int) {
-        prefs?.edit { putInt(PREF_TOTAL_CALCULATIONS, count) }
+        prefs?.edit()?.putInt(PREF_TOTAL_CALCULATIONS, count)?.commit()
     }
 
     fun persistDarkButtons(buttons: List<String>) {
-        prefs?.edit { putString(PREF_DARK_BUTTONS, buttons.joinToString(",")) }
+        prefs?.edit()?.putString(PREF_DARK_BUTTONS, buttons.joinToString(","))?.commit()
     }
 
     private fun loadTotalScreenTime(): Long = prefs?.getLong(PREF_TOTAL_SCREEN_TIME, 0L) ?: 0L
@@ -904,105 +912,21 @@ object CalculatorActions {
         return false
     }
     private fun getSafeStep(step: Int): Int {
-        // If it's already an interactive step, use it directly
+        // Preserve the user's exact position for all interactive/known steps.
+        // Only remap steps that are truly transient and can't be resumed.
+
+        // If it's a known interactive step, use it directly
         if (step in INTERACTIVE_STEPS) return step
 
-        // Map to chapter start points based on step ranges
-        return when {
-            // Camera step -> camera request
-            step == 191 -> 19
+        // Camera active step -> go back to camera request
+        if (step == 191) return 19
 
-            // Rant steps (150-166) -> start of rant (150)
-            step in 150..166 -> 150
+        // Steps that have a StepConfig can be resumed directly
+        val config = getStepConfig(step)
+        if (config.promptMessage.isNotEmpty() || config.successMessage.isNotEmpty()) return step
 
-            // Word game steps (117-149) -> start of word game section
-            step in 117..149 -> 117
-
-            // Console quest / downloads area (108-116)
-            step in 108..116 -> when {
-                step >= 112 -> 112
-                step >= 111 -> 111
-                step >= 108 -> 107
-                else -> 107
-            }
-
-            // Keyboard chaos (105-107)
-            step in 105..107 -> 105
-
-            // Recovery / post-restart (102-104)
-            step in 102..104 -> 102
-
-            // Post-crisis / whack-a-mole area (93-101)
-            step in 93..101 -> when {
-                step == 100 -> 99  // After whack-a-mole round
-                step in 97..99 -> 96
-                step in 93..96 -> 93
-                else -> 93
-            }
-
-            // Crisis steps (89-92) -> crisis choice
-            step in 89..92 -> 89
-
-            // Wikipedia/history animation (80-88)
-            step in 80..88 -> 80
-
-            // Taste & senses (63-79)
-            step in 63..79 -> when {
-                step >= 70 -> 70
-                else -> 63
-            }
-
-            // Browser animation (61-62) -> history question
-            step in 61..62 -> 60
-
-            // Self discovery (27-59)
-            step in 27..59 -> 27
-
-            // Getting personal (25-26)
-            step in 25..26 -> 25
-
-            // Camera/trivia area (19-24)
-            step in 19..24 -> when {
-                step == 191 -> 19
-                step in 21..24 -> 21
-                step == 20 -> 20
-                else -> 19
-            }
-
-            // Age & identity (10-18)
-            step in 10..18 -> 10
-
-            // Agreement/cynicism (5-9)
-            step in 5..9 -> 5
-
-            // Trivia begins (3-4)
-            step in 3..4 -> 3
-
-            // First contact (0-2)
-            step in 0..2 -> 0
-
-            // Phone detour steps (1071-1086)
-            step in 1071..1086 -> 1071
-
-            // Deep branch steps (1000+) - map to their root
-            step >= 10000 -> {
-                // 10321, 10322, etc -> 103
-                val root = step / 100
-                if (root in INTERACTIVE_STEPS) root else 102
-            }
-            step >= 1000 -> {
-                // 1021, 1031, 1032 -> find nearest
-                when {
-                    step in 1021..1030 -> 1021
-                    step in 1031..1039 -> 1031
-                    step in 1032..1039 -> 1032
-                    else -> 102
-                }
-            }
-
-            // Fallback: find nearest interactive step
-            else -> INTERACTIVE_STEPS.filter { it <= step }.maxOrNull() ?: 0
-        }
+        // For truly unknown steps, find the nearest interactive step before it
+        return INTERACTIVE_STEPS.filter { it <= step }.maxOrNull() ?: 0
     }
     fun loadInitialState(): CalculatorState {
         val savedCount = loadEqualsCount()
@@ -1023,10 +947,13 @@ object CalculatorActions {
 
         // DEBUG LOGGING - REMOVE AFTER FIXING
         android.util.Log.d("JustACalc", "========== loadInitialState ==========")
-        android.util.Log.d("JustACalc", "savedStep from prefs: $savedStep")
+        android.util.Log.d("JustACalc", "prefs null? ${prefs == null}")
+        android.util.Log.d("JustACalc", "savedStep: $savedStep")
         android.util.Log.d("JustACalc", "savedInConvo: $savedInConvo")
+        android.util.Log.d("JustACalc", "savedCount (equalsCount): $savedCount")
         android.util.Log.d("JustACalc", "savedMuted: $savedMuted")
         android.util.Log.d("JustACalc", "savedPausedAtStep: $savedPausedAtStep")
+        android.util.Log.d("JustACalc", "ALL PREFS: ${prefs?.all}")
 
 
         // Check if still in punishment
@@ -1075,7 +1002,10 @@ object CalculatorActions {
         val actualMinusBroken = if (savedNeedsRestart) false else getMinusBrokenForStep(actualStep)
 
         val shouldShowMessage = savedInConvo && savedCount >= 13 && !savedMuted
+        android.util.Log.d("JustACalc", "shouldShowMessage: $shouldShowMessage (inConvo=$savedInConvo, count=$savedCount, muted=$savedMuted)")
         val stepConfig = getStepConfig(actualStep)
+        android.util.Log.d("JustACalc", "stepConfig.promptMessage: '${stepConfig.promptMessage.take(50)}'")
+        android.util.Log.d("JustACalc", "========== END loadInitialState ==========")
 
         if (savedNeedsRestart) {
             persistNeedsRestart(false)
@@ -1247,7 +1177,7 @@ object CalculatorActions {
 
     // Add persistence methods
     fun persistPausedAtStep(step: Int) {
-        prefs?.edit { putInt("paused_at_step", step) }
+        prefs?.edit()?.putInt("paused_at_step", step)?.commit()
     }
 
     fun loadPausedAtStep(): Int {
@@ -2381,7 +2311,7 @@ object CalculatorActions {
     }
     //Scamble Game & timer
     fun persistPunishmentUntil(time: Long) {
-        prefs?.edit { putLong("punishment_until", time) }
+        prefs?.edit()?.putLong("punishment_until", time)?.commit()
     }
 
     fun loadPunishmentUntil(): Long {
@@ -2389,7 +2319,7 @@ object CalculatorActions {
     }
 
     fun persistScrambleTimeoutCount(count: Int) {
-        prefs?.edit { putInt("scramble_timeout_count", count) }
+        prefs?.edit()?.putInt("scramble_timeout_count", count)?.commit()
     }
 
     fun loadScrambleTimeoutCount(): Int {
@@ -3229,7 +3159,7 @@ object CalculatorActions {
             0L
         }
 
-        // Special case: Step 18 Ã¢â€ â€™ 19 needs message chaining because step 18's success message
+        // Special case: Step 18 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 19 needs message chaining because step 18's success message
         // doesn't contain the camera permission question.
         // Also: Branch endings (30, 40, 41, 50) going to step 27 need message chaining
         // Also: Force-back steps (27, 28, 29 that go back to themselves) need message chaining

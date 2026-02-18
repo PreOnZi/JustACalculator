@@ -184,6 +184,8 @@ fun CalculatorScreen() {
                     CalculatorActions.persistConversationStep(stepToSave)
                     CalculatorActions.persistInConversation(currentState.inConversation)
                     CalculatorActions.persistPausedAtStep(stepToSave)
+                    CalculatorActions.persistEqualsCount(currentState.equalsCount)
+                    CalculatorActions.persistMuted(currentState.isMuted)
                     CalculatorActions.persistInvertedColors(currentState.invertedColors)
                     CalculatorActions.persistMinusDamaged(currentState.minusButtonDamaged)
                     CalculatorActions.persistMinusBroken(currentState.minusButtonBroken)
