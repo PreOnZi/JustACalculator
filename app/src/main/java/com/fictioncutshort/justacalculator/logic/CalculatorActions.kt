@@ -2729,6 +2729,12 @@ object CalculatorActions {
 
         // Special handling for age question (step 10)
         if (stepConfig.ageBasedBranching) {
+            // Guard: if nothing was actually typed, prompt for a number
+            if (enteredNumber == "0" || enteredNumber.isEmpty()) {
+                showMessage(state, "I'll need a number from you here. How old are you?")
+                state.value = state.value.copy(number1 = "0")
+                return
+            }
             val age = enteredNumber.toIntOrNull()
             if (age != null) {
                 val (ageMessage, nextStep) = when {

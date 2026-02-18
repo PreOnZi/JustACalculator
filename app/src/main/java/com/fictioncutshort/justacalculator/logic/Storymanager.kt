@@ -150,6 +150,11 @@ object StoryManager {
         if (state.value.minusButtonBroken) {
             return true // Button doesn't work
         }
+        // If this step uses age branching, -- means no number was given
+        if (config.ageBasedBranching) {
+            showMessage("I'll need a number from you here. How old are you?", state)
+            return true
+        }
 
         // Check for timeout
         if (System.currentTimeMillis() < state.value.timeoutUntil) {
