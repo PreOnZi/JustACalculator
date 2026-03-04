@@ -117,11 +117,18 @@ import com.fictioncutshort.justacalculator.util.rememberResponsiveDimensions
 import com.fictioncutshort.justacalculator.util.BezelBrown
 import com.fictioncutshort.justacalculator.util.BezelInverted
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import android.view.View
+import android.view.WindowManager
 
 
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         CalculatorActions.init(applicationContext)
         setContent {

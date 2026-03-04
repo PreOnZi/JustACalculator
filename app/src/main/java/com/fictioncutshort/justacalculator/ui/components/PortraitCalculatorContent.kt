@@ -44,6 +44,7 @@ fun PortraitCalculatorContent(
     Box(
         modifier = modifier
             .fillMaxSize()
+            .navigationBarsPadding()
             .padding(horizontal = dimensions.contentPadding)
     ) {
         // Mute button + spinner indicator - always present, button visible from step 19

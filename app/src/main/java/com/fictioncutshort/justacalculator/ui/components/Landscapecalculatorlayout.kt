@@ -42,6 +42,7 @@ fun LandscapeCalculatorContent(
     Row(
         modifier = modifier
             .fillMaxSize()
+            .navigationBarsPadding()
             .padding(horizontal = dimensions.contentPadding)
             .padding(top = 8.dp, bottom = 8.dp)
     ) {
