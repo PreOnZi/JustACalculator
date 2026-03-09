@@ -16,6 +16,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.fictioncutshort.justacalculator.MainActivity
+import com.fictioncutshort.justacalculator.R
 
 /**
  * Notifications.kt
@@ -114,7 +115,7 @@ fun sendReadyNotification(context: Context) {
     )
 
     val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-        .setSmallIcon(android.R.drawable.ic_dialog_info)
+        .setSmallIcon(R.drawable.ic_stat_name)
         .setContentTitle("Calculator")
         .setContentText("Hey Rad, I'm pretty sure I got it. Please click here to check!")
         .setPriority(NotificationCompat.PRIORITY_DEFAULT)

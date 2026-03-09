@@ -9,7 +9,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -152,10 +154,20 @@ fun MessageDisplay(
         (dimensions.screenHeight.value * 0.35f).dp
     }
 
+    val scrollState = rememberScrollState()
+
+    // Auto-scroll to the bottom as new characters are typed.
+    // We scroll to Int.MAX_VALUE because maxValue hasn't updated yet
+    // at the point LaunchedEffect fires (layout happens after).
+    // Compose clamps this to the actual maximum scroll position.
+    LaunchedEffect(message) {
+        scrollState.scrollTo(Int.MAX_VALUE)
+    }
+
     Box(
         modifier = modifier
             .heightIn(max = maxHeight)
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scrollState)
     ) {
         Column {
             Text(

@@ -403,6 +403,22 @@ val showPhoneOverlay: Boolean = false,
 
     /** True when donation/tip page is visible */
     val showDonationPage: Boolean = false,
+    /**
+     * True when the dormancy overlay is showing (static or RAD buttons).
+     * Set in MainActivity.onCreate based on DormancyManager.getCurrentPhase().
+     */
+    val showDormancy: Boolean = false,
+
+    /**
+     * Number of RAD buttons currently visible (0 = static only, 1–5 = buttons).
+     * Updated by DormancyTickHandler in MainActivity.
+     */
+    val dormancyRadVisible: Int = 0,
+
+    /**
+     * Which RAD buttons (by index 0–4) the user has already pressed.
+     */
+    val dormancyPressedButtons: Set<Int> = emptySet(),
 )
 
 /**

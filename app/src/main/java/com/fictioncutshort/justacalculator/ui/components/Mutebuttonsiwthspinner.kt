@@ -81,7 +81,7 @@ fun MuteButtonWithSpinner(
             shouldSpin = true
         } else {
             // Grace period before stopping - prevents flicker between messages
-            delay(500)
+            delay(1600)
             if (!currentAutoProgressing) {
                 shouldSpin = false
             }

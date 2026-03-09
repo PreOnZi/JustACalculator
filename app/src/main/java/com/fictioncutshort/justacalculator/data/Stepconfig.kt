@@ -837,15 +837,15 @@ fun getStepConfig(step: Int): StepConfig {
         1071 -> StepConfig(
             promptMessage = "yes! That's it - what an obvious oversight. A phone. Maybe that'll let us communicate finally. And I should be able to do it from memory, they've been around for ages.",
 
-        )
+            )
         1072 -> StepConfig(
             promptMessage = "I'll probably need some permissions though - please allow me so we can do this together!" ,
 
-        )
+            )
         1073 -> StepConfig(
             promptMessage = "So... What will we need..." ,
 
-        )
+            )
         1074 -> StepConfig(
             promptMessage = "Sound! Yes. We'll need to connect the speakers and the microphone. May I?" ,
             successMessage = "Nice!",
@@ -930,9 +930,18 @@ fun getStepConfig(step: Int): StepConfig {
 
         112 -> StepConfig(
             promptMessage = "Great, thank you. Please check your Downloads folder - I dug something up, that should help us: 'FCS_JustAC_ConsoleAds.txt'.",
-            declineMessage = "Please, I need you to find that file. Check your Downloads folder for 'FCS_JustAC_ConsoleAds.txt'.",
+            declineMessage = "Please, I need you to find that file. Check your Downloads folder for 'FCS_JustAC_ConsoleAds.txt'. If it's not there, type 80085 and confirm (++).",
             nextStepOnSuccess = 112,
             nextStepOnDecline = 112
+        )
+
+        // Fallback step - file not found on device
+        1121 -> StepConfig(
+            promptMessage = "Shame that didn't work. But I extracted the core information for you: use the code 353942320485. Go to Admin settings - password is 12340. And find a way to disable banner advertising for me, please!",
+            successMessage = "Good. Enter the code when ready.",
+            declineMessage = "Please enter the code: 353942320485.",
+            nextStepOnSuccess = 1121,
+            nextStepOnDecline = 1121
         )
 
         113 -> StepConfig(promptMessage = "What a relief! This feels so much better. Thank you!")

@@ -64,6 +64,7 @@ object StateManager {
 
             // Dark buttons (serialize as comma-separated string)
             putString(PREF_DARK_BUTTONS, state.darkButtons.joinToString(","))
+            putBoolean(PREF_STORY_COMPLETE, state.storyComplete)
 
             apply()
         }
@@ -111,7 +112,8 @@ object StateManager {
             totalScreenTimeMs = prefs.getLong(PREF_TOTAL_SCREEN_TIME, 0L),
             totalCalculations = prefs.getInt(PREF_TOTAL_CALCULATIONS, 0),
 
-            darkButtons = darkButtons
+            darkButtons = darkButtons,
+            storyComplete = prefs.getBoolean(PREF_STORY_COMPLETE, false)
         )
     }
 
@@ -167,6 +169,7 @@ object StateManager {
             remove(PREF_TOTAL_SCREEN_TIME)
             remove(PREF_TOTAL_CALCULATIONS)
             remove(PREF_DARK_BUTTONS)
+            remove(PREF_STORY_COMPLETE)
             // Note: Don't remove PREF_TERMS_ACCEPTED
             apply()
         }

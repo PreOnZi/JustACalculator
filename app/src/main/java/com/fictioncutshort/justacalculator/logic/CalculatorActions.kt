@@ -25,6 +25,7 @@ import com.fictioncutshort.justacalculator.util.PREF_MUTED
 import com.fictioncutshort.justacalculator.util.PREF_NEEDS_RESTART
 import com.fictioncutshort.justacalculator.util.PREF_TERMS_ACCEPTED
 import com.fictioncutshort.justacalculator.util.PREF_TIMEOUT_UNTIL
+import com.fictioncutshort.justacalculator.util.PREF_STORY_COMPLETE
 import com.fictioncutshort.justacalculator.data.INTERACTIVE_STEPS
 import com.fictioncutshort.justacalculator.util.validateWordSelection
 import kotlin.random.Random
@@ -41,6 +42,21 @@ object CalculatorActions {
         val result = prefs?.getBoolean(PREF_TERMS_ACCEPTED, false) ?: false
         android.util.Log.d("JustACalc", "loadTermsAccepted: $result, prefs null? ${prefs == null}")
         return result
+    }
+    fun persistDormancyPressedButtons(pressed: Set<Int>) {
+        prefs?.edit()
+            ?.putString("dormancy_pressed", pressed.joinToString(","))
+            ?.commit()
+    }
+
+    fun loadDormancyPressedButtons(): Set<Int> {
+        val str = prefs?.getString("dormancy_pressed", "") ?: ""
+        if (str.isBlank()) return emptySet()
+        return str.split(",").mapNotNull { it.toIntOrNull() }.toSet()
+    }
+
+    fun clearDormancyPressedButtons() {
+        prefs?.edit()?.remove("dormancy_pressed")?.commit()
     }
     fun moveWordGameLeft(state: MutableState<CalculatorState>) {
         val current = state.value
@@ -665,6 +681,9 @@ object CalculatorActions {
 
     // Mute button rapid click tracking for debug menu
     private var muteClickTimes = mutableListOf<Long>()
+    // ── TEMP DEBUG TRIGGER ──
+    private var delClickTimes = mutableListOf<Long>()
+    // ── END TEMP DEBUG TRIGGER ──
     private const val RAPID_CLICK_WINDOW_MS = 2000L  // 2 seconds to register all clicks
     private const val DEBUG_MENU_CLICKS = 5
     private const val RESET_CLICKS = 10
@@ -733,6 +752,10 @@ object CalculatorActions {
 
     fun persistDarkButtons(buttons: List<String>) {
         prefs?.edit()?.putString(PREF_DARK_BUTTONS, buttons.joinToString(","))?.commit()
+    }
+
+    fun persistStoryComplete(complete: Boolean) {
+        prefs?.edit()?.putBoolean(PREF_STORY_COMPLETE, complete)?.commit()
     }
 
     private fun loadTotalScreenTime(): Long = prefs?.getLong(PREF_TOTAL_SCREEN_TIME, 0L) ?: 0L
@@ -1463,14 +1486,14 @@ object CalculatorActions {
                 val enteredNumber = current.number1.trimEnd('.')
                 if (enteredNumber == "353942320485") {
                     // Open console from anywhere!
-                    if (current.conversationStep == 112) {
+                    if (current.conversationStep == 112 || current.conversationStep == 1121) {
                         state.value = current.copy(
                             showConsole = true,
                             consoleStep = 0,
                             number1 = "0",
                             conversationStep = 113,
                             message = "",
-                            fullMessage = "So it is, what I thought it was! Please follow the steps from the document.",
+                            fullMessage = "So it is, what I thought it was! Let's find a way to get rid of the banner ads.",
                             isTyping = true
                         )
                         persistConversationStep(113)
@@ -1504,11 +1527,21 @@ object CalculatorActions {
                             isTyping = true,
                             number1 = "0"
                         )
+                    } else if (enteredNumber == "80085") {
+                        // Fallback code - move to step 1121
+                        state.value = current.copy(
+                            message = "",
+                            fullMessage = "Shame that didn't work. But I extracted the core information for you: use the code 353942320485. Go to Admin settings - password is 12340. And find a way to disable banner advertising for me, please!",
+                            isTyping = true,
+                            number1 = "0",
+                            conversationStep = 1121
+                        )
+                        persistConversationStep(1121)
                     } else if (enteredNumber != "353942320485") {
                         // Wrong code - show error
                         state.value = current.copy(
                             message = "",
-                            fullMessage = "That's not the right code. Check the file in your Downloads folder.",
+                            fullMessage = "That's not the right code. Check the file in your Downloads folder. If it's not there, type 80085 and confirm (++).",
                             isTyping = true,
                             number1 = "0"
                         )
@@ -1525,7 +1558,7 @@ object CalculatorActions {
                     // User pressed -- at step 112, remind them about the file
                     state.value = current.copy(
                         message = "",
-                        fullMessage = "Please, I need you to find that file. Check your Downloads folder for 'FCS_JustAC_ConsoleAds.txt'.",
+                        fullMessage = "Please, I need you to find that file. Check your Downloads folder for 'FCS_JustAC_ConsoleAds.txt'. If it's not there, type 80085 and confirm (++).",
                         isTyping = true,
                         number1 = "0"
                     )
@@ -1552,6 +1585,42 @@ object CalculatorActions {
             }
 
             return  // Block all other actions at step 112 to prevent dead ends
+        }
+
+        // Step 1121 - fallback path: user told real code manually, waiting to enter it
+        if (current.conversationStep == 1121 && !current.showConsole) {
+            val now = System.currentTimeMillis()
+            if (action == "+") {
+                if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
+                    // The global console code check above handles 353942320485 at step 1121
+                    // If we reach here the number wasn't the right code
+                    val enteredNumber = current.number1.trimEnd('.')
+                    if (enteredNumber != "0" && enteredNumber.isNotEmpty()) {
+                        state.value = current.copy(
+                            message = "",
+                            fullMessage = "That's not it. The code is 353942320485.",
+                            isTyping = true,
+                            number1 = "0"
+                        )
+                    }
+                    lastOp = null
+                    lastOpTimeMillis = 0L
+                    return
+                } else {
+                    lastOp = "+"
+                    lastOpTimeMillis = now
+                }
+            }
+            if (action in listOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")) {
+                val newNum = if (current.number1 == "0") action else current.number1 + action
+                state.value = current.copy(number1 = newNum)
+                return
+            }
+            if (action in listOf("C", "DEL")) {
+                handleCalculatorInput(state, action)
+                return
+            }
+            return  // Block other actions
         }
 
 
@@ -1826,7 +1895,19 @@ object CalculatorActions {
                     )
                 }
             }
-            "DEL" -> handleBackspace(state)
+            "DEL" -> {
+                // ── TEMP DEBUG TRIGGER ── remove when no longer needed ──────────────
+                val now = System.currentTimeMillis()
+                delClickTimes.removeAll { now - it > 2000L }
+                delClickTimes.add(now)
+                if (delClickTimes.size >= 5) {
+                    delClickTimes.clear()
+                    showDebugMenu(state)
+                    return
+                }
+                // ── END TEMP DEBUG TRIGGER ───────────────────────────────────────────
+                handleBackspace(state)
+            }
             in listOf("+", "-", "*", "/") -> handleOperator(state, action)
             "%" -> handlePercentSymbol(state)
             "=" -> handleEquals(state)
@@ -2828,6 +2909,7 @@ object CalculatorActions {
         // For steps 107+, stay in the console quest area
         if (currentStep >= 107) {
             return when {
+                currentStep == 1121 -> 1121  // Fallback code path
                 currentStep >= 112 -> 112  // Console code entry
                 currentStep >= 111 -> 111  // Downloads permission
                 currentStep >= 107 -> 107  // Post-chaos

@@ -73,7 +73,10 @@ import com.fictioncutshort.justacalculator.data.CHAPTERS
 import com.fictioncutshort.justacalculator.logic.AutoProgressEffects
 import com.fictioncutshort.justacalculator.logic.BrowserEffects
 import com.fictioncutshort.justacalculator.logic.CalculatorActions
+import com.fictioncutshort.justacalculator.logic.DormancyManager
+import com.fictioncutshort.justacalculator.logic.DormancyPhase
 import com.fictioncutshort.justacalculator.logic.EffectsController
+import com.fictioncutshort.justacalculator.ui.screens.DormancyOverlay
 import com.fictioncutshort.justacalculator.ui.components.CalculatorButton
 import com.fictioncutshort.justacalculator.ui.components.CameraPreview
 import com.fictioncutshort.justacalculator.ui.components.ConsoleWindow
@@ -117,18 +120,11 @@ import com.fictioncutshort.justacalculator.util.rememberResponsiveDimensions
 import com.fictioncutshort.justacalculator.util.BezelBrown
 import com.fictioncutshort.justacalculator.util.BezelInverted
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.activity.enableEdgeToEdge
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
-import android.view.View
-import android.view.WindowManager
 
 
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         CalculatorActions.init(applicationContext)
         setContent {
@@ -176,15 +172,32 @@ fun CalculatorScreen() {
                     val currentState = state.value
                     android.util.Log.d("JustACalc", "ON_PAUSE CALLED - current step: ${currentState.conversationStep}")
 
-                    // Determine the step to save
-                    // If there's a pending auto-step, save that instead of the current step
-                    // because the auto-progression might not complete
-                    val stepToSave = if (currentState.pendingAutoStep >= 0) {
+                    // Stop rant effects immediately so they don't continue in the background.
+                    // The rant step is preserved via persistConversationStep below so it resumes on return.
+                    if (currentState.rantMode) {
+                        state.value = state.value.copy(
+                            rantMode = false,
+                            flickerEffect = false,
+                            vibrationIntensity = 0
+                        )
+                    }
+
+                    // Determine the step to save.
+                    // Only prefer pendingAutoStep if the current step is a truly transient/mid-animation
+                    // step that has no meaningful content to resume from (e.g. step 92, 901 etc.).
+                    // For all steps that have a StepConfig message (like the phone detour 1071-1087),
+                    // always save the current step — pendingAutoStep points forward and would skip content.
+                    val currentStep = currentState.conversationStep
+                    val currentStepConfig = CalculatorActions.getStepConfigPublic(currentStep)
+                    val currentStepHasContent = currentStepConfig.promptMessage.isNotEmpty() ||
+                            currentStepConfig.successMessage.isNotEmpty() ||
+                            currentStep in com.fictioncutshort.justacalculator.data.INTERACTIVE_STEPS
+                    val stepToSave = if (currentState.pendingAutoStep >= 0 && !currentStepHasContent) {
                         currentState.pendingAutoStep
                     } else {
-                        currentState.conversationStep
+                        currentStep
                     }
-                    android.util.Log.d("JustACalc", "ON_PAUSE: Saving step $stepToSave (current=${currentState.conversationStep}, pending=${currentState.pendingAutoStep})")
+                    android.util.Log.d("JustACalc", "ON_PAUSE: Saving step $stepToSave (current=$currentStep, pending=${currentState.pendingAutoStep}, hasContent=$currentStepHasContent)")
 
 
                     // Save all critical state (only using PUBLIC persist functions)
@@ -199,14 +212,29 @@ fun CalculatorScreen() {
                     CalculatorActions.persistDarkButtons(currentState.darkButtons)
                     CalculatorActions.persistTotalScreenTime(currentState.totalScreenTimeMs)
                     CalculatorActions.persistTotalCalculations(currentState.totalCalculations)
+                    // Persist dormancy pressed buttons on pause
+                    CalculatorActions.persistDormancyPressedButtons(currentState.dormancyPressedButtons)
+                }
+                Lifecycle.Event.ON_RESUME -> {
+                    // Restore rantMode if the user returns to the app while mid-rant
+                    val currentState = state.value
+                    val step = currentState.conversationStep
+                    if (!currentState.rantMode && step in 150..166) {
+                        state.value = currentState.copy(rantMode = true)
+                    }
                 }
                 Lifecycle.Event.ON_STOP -> {
                     // Additional safety save when app fully goes to background
                     val currentState = state.value
-                    val stepToSave = if (currentState.pendingAutoStep >= 0) {
+                    val currentStep = currentState.conversationStep
+                    val currentStepConfig = CalculatorActions.getStepConfigPublic(currentStep)
+                    val currentStepHasContent = currentStepConfig.promptMessage.isNotEmpty() ||
+                            currentStepConfig.successMessage.isNotEmpty() ||
+                            currentStep in com.fictioncutshort.justacalculator.data.INTERACTIVE_STEPS
+                    val stepToSave = if (currentState.pendingAutoStep >= 0 && !currentStepHasContent) {
                         currentState.pendingAutoStep
                     } else {
-                        currentState.conversationStep
+                        currentStep
                     }
                     CalculatorActions.persistConversationStep(stepToSave)
                     CalculatorActions.persistPausedAtStep(stepToSave)
@@ -222,6 +250,65 @@ fun CalculatorScreen() {
     // Debug: Track step changes
     LaunchedEffect(state.value.conversationStep) {
         android.util.Log.d("JustACalc", "Step changed to: ${state.value.conversationStep}")
+    }
+
+    // ========== DORMANCY: CHECK PHASE ON LAUNCH ==========
+    // Reads elapsed time since rant end and restores correct dormancy state.
+    // Handles the "user fully quit the app and reopened" path.
+    LaunchedEffect(Unit) {
+        val dormancyPhase = DormancyManager.getCurrentPhase(context)
+        when (dormancyPhase) {
+            is DormancyPhase.None -> { /* not in dormancy */ }
+            is DormancyPhase.Static -> {
+                state.value = state.value.copy(
+                    showDormancy = true,
+                    dormancyRadVisible = 0
+                )
+            }
+            is DormancyPhase.RadButtons -> {
+                val savedPressed = CalculatorActions.loadDormancyPressedButtons()
+                state.value = state.value.copy(
+                    showDormancy = true,
+                    dormancyRadVisible = dormancyPhase.count,
+                    dormancyPressedButtons = savedPressed
+                )
+            }
+        }
+    }
+
+    // ========== DORMANCY: TRIGGER STATIC AFTER RANT ENDS (IN-APP PATH) ==========
+    // If the user never leaves the app after storyComplete, wait 1 min then show static.
+    LaunchedEffect(current.storyComplete) {
+        if (!current.storyComplete) return@LaunchedEffect
+        if (state.value.showDormancy) return@LaunchedEffect
+        kotlinx.coroutines.delay(DormancyManager.STATIC_DELAY_MS)
+        val phase = DormancyManager.getCurrentPhase(context)
+        if (phase != DormancyPhase.None) {
+            state.value = state.value.copy(showDormancy = true, dormancyRadVisible = 0)
+        }
+    }
+
+    // ========== DORMANCY: TICK LOOP — UPDATE RAD BUTTON COUNT WHILE IN-APP ==========
+    // Polls every 10 seconds so RAD buttons appear on schedule if user never left the app.
+    LaunchedEffect(current.showDormancy) {
+        if (!current.showDormancy) return@LaunchedEffect
+        while (state.value.showDormancy) {
+            kotlinx.coroutines.delay(10_000L)
+            val phase = DormancyManager.getCurrentPhase(context)
+            when (phase) {
+                is DormancyPhase.Static -> {
+                    if (state.value.dormancyRadVisible != 0) {
+                        state.value = state.value.copy(dormancyRadVisible = 0)
+                    }
+                }
+                is DormancyPhase.RadButtons -> {
+                    if (phase.count > state.value.dormancyRadVisible) {
+                        state.value = state.value.copy(dormancyRadVisible = phase.count)
+                    }
+                }
+                is DormancyPhase.None -> { /* nothing */ }
+            }
+        }
     }
     // Camera permission state
     var hasCameraPermission by remember {
@@ -465,6 +552,21 @@ fun CalculatorScreen() {
         EffectsController.runVibrationEffect(state, context)
     }
 
+    // ========== DORMANCY: CONTINUOUS VIBRATION LOOP ==========
+    // Pulsing loop while dormancy buttons are being pressed.
+    // Amplitude and tempo escalate with each button pressed (1→5).
+    LaunchedEffect(current.dormancyPressedButtons.size, current.showDormancy) {
+        if (!current.showDormancy || current.dormancyPressedButtons.isEmpty()) return@LaunchedEffect
+        val pressCount = state.value.dormancyPressedButtons.size
+        val amplitude = (pressCount * 50).coerceIn(50, 255)
+        val durationMs = (100L + pressCount * 20L).coerceIn(100L, 250L)
+        val pauseMs = (400L - pressCount * 40L).coerceIn(100L, 400L)
+        while (state.value.showDormancy && state.value.dormancyPressedButtons.size == pressCount) {
+            vibrate(context, durationMs, amplitude)
+            kotlinx.coroutines.delay(durationMs + pauseMs)
+        }
+    }
+
     // ========== SHAKE ANIMATION ==========
     var shakeKey by remember { mutableIntStateOf(0) }
     LaunchedEffect(current.buttonShakeIntensity) {
@@ -497,7 +599,7 @@ fun CalculatorScreen() {
 
     // ========== AUTO-PROGRESS ==========
     LaunchedEffect(current.isTyping, current.message, current.conversationStep, current.showDonationPage) {
-        AutoProgressEffects.handleAutoProgress(state)
+        AutoProgressEffects.handleAutoProgress(state, context)
     }
 
     // ========== STEP-SPECIFIC TRIGGERS ==========
@@ -1164,6 +1266,36 @@ fun CalculatorScreen() {
                     )
                     CalculatorActions.persistConversationStep(107)
                 }
+            }
+        )
+    }
+
+    // ========== DORMANCY OVERLAY ==========
+    // Rendered above all other overlays. Full-screen TV static + RAD buttons
+    // after the rant ends. All 5 buttons must be pressed to proceed to Phase 2.
+    if (current.showDormancy) {
+        DormancyOverlay(
+            radButtonsVisible = current.dormancyRadVisible,
+            pressedButtons = current.dormancyPressedButtons,
+            onButtonPressed = { index ->
+                val newPressed = state.value.dormancyPressedButtons + index
+                CalculatorActions.persistDormancyPressedButtons(newPressed)
+                state.value = state.value.copy(
+                    dormancyPressedButtons = newPressed,
+                    vibrationIntensity = newPressed.size
+                )
+            },
+            onAllPressed = {
+                // All 5 RAD buttons pressed — clean up and move to Phase 2
+                DormancyManager.clearDormancy(context)
+                CalculatorActions.clearDormancyPressedButtons()
+                state.value = state.value.copy(
+                    showDormancy = false,
+                    dormancyRadVisible = 0,
+                    dormancyPressedButtons = emptySet(),
+                    vibrationIntensity = 0
+                    // TODO: set phase2Active = true here when Phase 2 (ad cards) is built
+                )
             }
         )
     }

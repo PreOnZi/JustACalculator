@@ -15,10 +15,10 @@
       </SelectionState>
       <SelectionState runConfigName="DefaultPreview">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2026-01-28T16:34:22.904754Z">
+        <DropdownSelection timestamp="2026-03-08T16:16:05.615004Z">
           <Target type="DEFAULT_BOOT">
             <handle>
-              <DeviceId pluginId="LocalEmulator" identifier="path=/Users/ondrejzika/.android/avd/7_inch_Tablet.avd" />
+              <DeviceId pluginId="PhysicalDevice" identifier="serial=RFCW10WHTQV" />
             </handle>
           </Target>
         </DropdownSelection>

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.rememberScrollState
@@ -88,17 +89,16 @@ fun ConsoleWindow(
         context = context
     )
 
-    // Calculate padding to position console in middle of screen
+    // Position console in the middle band — fixed height so it never covers buttons
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
-    val consoleTopPadding = (screenHeight * 0.25f).coerceAtLeast(150.dp)
-    val consoleBottomPadding = (screenHeight * 0.30f).coerceAtLeast(200.dp)
+    val consoleTopPadding = (screenHeight * 0.18f).coerceAtLeast(100.dp)
+    val consoleHeight = (screenHeight * 0.40f).coerceIn(180.dp, 300.dp)
 
     Box(
         modifier = modifier
             .fillMaxWidth()
             .padding(
                 top = consoleTopPadding + WindowInsets.statusBars.asPaddingValues().calculateTopPadding(),
-                bottom = consoleBottomPadding,
                 start = 12.dp,
                 end = 12.dp
             )
@@ -106,7 +106,8 @@ fun ConsoleWindow(
         // Console container with retro terminal styling
         Box(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                .height(consoleHeight)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color.Black)
                 .padding(2.dp)
@@ -374,7 +375,7 @@ private fun getConsoleMenuContent(
             | Camera access: Granted
             | Storage access: Granted
             | Notifications: Granted
-            | Contacts & phone: Not requested
+            | Contacts & phone: Granted
             |
             | 88. Back
             | 99. Exit console

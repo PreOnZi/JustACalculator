@@ -4,6 +4,7 @@ import androidx.compose.runtime.MutableState
 import com.fictioncutshort.justacalculator.data.CalculatorState
 import com.fictioncutshort.justacalculator.util.LetterGenerator
 import kotlinx.coroutines.delay
+import android.content.Context
 
 /**
  * AutoProgressEffects - Handles automatic story progression based on messages
@@ -101,7 +102,7 @@ object AutoProgressEffects {
         104 to listOf("There is a fundamental misunderstanding between the two of us.")
     )
 
-    suspend fun handleAutoProgress(state: MutableState<CalculatorState>) {
+    suspend fun handleAutoProgress(state: MutableState<CalculatorState>, context: Context) {
         while (state.value.showDonationPage) { delay(100) }
         // Exit if muted
         if (state.value.isMuted) return
@@ -173,7 +174,7 @@ object AutoProgressEffects {
             }
 
             // Dynamic rant messages
-            handleDynamicRantMessages(state)
+            handleDynamicRantMessages(state, context)
 
             // Dead-end redirects
             deadEndRedirects[current.conversationStep]?.let { messages ->
@@ -186,7 +187,7 @@ object AutoProgressEffects {
         }
     }
 
-    private suspend fun handleDynamicRantMessages(state: MutableState<CalculatorState>) {
+    private suspend fun handleDynamicRantMessages(state: MutableState<CalculatorState>, context: Context) {
         val step = state.value.conversationStep
         val message = state.value.message
 
@@ -317,8 +318,11 @@ object AutoProgressEffects {
             )
             CalculatorActions.persistConversationStep(167)
             CalculatorActions.persistInConversation(false)
+            CalculatorActions.persistStoryComplete(true)
             CalculatorActions.persistDarkButtons(finalDarkButtons)
+            DormancyManager.onRantEnded(context)
             return
+
         }
     }
 

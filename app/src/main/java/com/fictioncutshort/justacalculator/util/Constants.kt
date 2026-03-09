@@ -96,6 +96,7 @@ const val PREF_TOTAL_CALCULATIONS = "total_calculations"
 
 // Button damage
 const val PREF_DARK_BUTTONS = "dark_buttons"
+const val PREF_STORY_COMPLETE = "story_complete"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CALCULATOR LIMITS

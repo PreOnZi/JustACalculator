@@ -22,7 +22,7 @@ object InputHandler {
     private var lastPlusPress = 0L
     private var lastMinusPress = 0L
     private var lastEqualsPress = 0L
-
+    private var delClickTimes = mutableListOf<Long>()
     /**
      * Main entry point for all button presses.
      *
@@ -188,6 +188,17 @@ object InputHandler {
      * Handles DEL (delete) button.
      */
     private fun handleDelete(state: MutableState<CalculatorState>) {
+        // ── TEMP DEBUG TRIGGER ── remove when no longer needed ──────────────
+        val now = System.currentTimeMillis()
+        delClickTimes.removeAll { now - it > 2000L }
+        delClickTimes.add(now)
+        if (delClickTimes.size >= 5) {
+            delClickTimes.clear()
+            CalculatorActions.showDebugMenu(state)
+            return
+        }
+        // ── END TEMP DEBUG TRIGGER ───────────────────────────────────────────
+
         state.value = CalculatorEngine.deleteLastChar(state.value)
     }
 
