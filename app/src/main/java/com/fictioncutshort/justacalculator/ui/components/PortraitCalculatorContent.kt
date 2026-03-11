@@ -44,6 +44,7 @@ fun PortraitCalculatorContent(
     Box(
         modifier = modifier
             .fillMaxSize()
+            .background(Color.Transparent)
             .navigationBarsPadding()
             .padding(horizontal = dimensions.contentPadding)
     ) {
@@ -65,32 +66,26 @@ fun PortraitCalculatorContent(
                 .padding(top = 8.dp)
         )
 
+        // Message display - top left
+        if (current.message.isNotEmpty() && !current.isMuted) {
+            MessageDisplay(
+                message = current.message,
+                countdownTimer = current.countdownTimer,
+                conversationStep = current.conversationStep,
+                awaitingChoice = current.awaitingChoice,
+                textColor = textColor,
+                dimensions = dimensions,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(top = 8.dp, end = 50.dp)
+            )
+        }
+
         // Main content column (display + buttons)
-        // Message sits at top with weight(1f) — expands to fill available space but never crushes buttons/LCD
         Column(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.Bottom
         ) {
-            // Message area — takes all available space above LCD/buttons, scrollable if long
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(top = 8.dp, end = 50.dp)  // end padding clears mute button
-            ) {
-                if (current.message.isNotEmpty() && !current.isMuted) {
-                    MessageDisplay(
-                        message = current.message,
-                        countdownTimer = current.countdownTimer,
-                        conversationStep = current.conversationStep,
-                        awaitingChoice = current.awaitingChoice,
-                        textColor = textColor,
-                        dimensions = dimensions,
-                        modifier = Modifier.align(Alignment.TopStart)
-                    )
-                }
-            }
-
             // Calculator number display OR Camera OR Browser
             when {
                 current.cameraActive -> {
@@ -100,7 +95,7 @@ fun PortraitCalculatorContent(
                         lifecycleOwner = lifecycleOwner,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .weight(2f)
+                            .weight(1f)
                     )
                 }
                 current.showBrowser -> {
@@ -112,7 +107,7 @@ fun PortraitCalculatorContent(
                         dimensions = dimensions,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .weight(2f)
+                            .weight(1f)
                     )
                 }
                 else -> {
@@ -125,6 +120,7 @@ fun PortraitCalculatorContent(
                         dimensions = dimensions,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .weight(1f)
                             .padding(start = 8.dp, end = 8.dp, bottom = 16.dp)
                     )
                 }
@@ -173,6 +169,7 @@ private fun CameraViewWithFloatingDisplay(
 
     Box(
         modifier = modifier
+            .padding(top = topPadding, bottom = 8.dp)
     ) {
         CameraPreview(
             modifier = Modifier
@@ -207,7 +204,7 @@ private fun BrowserViewWithFloatingDisplay(
 
     Box(
         modifier = modifier
-            .padding(bottom = 8.dp)
+            .padding(top = topPadding, bottom = 8.dp)
     ) {
         // Browser container
         Box(

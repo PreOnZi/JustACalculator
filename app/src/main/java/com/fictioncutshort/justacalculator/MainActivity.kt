@@ -77,6 +77,7 @@ import com.fictioncutshort.justacalculator.logic.DormancyManager
 import com.fictioncutshort.justacalculator.logic.DormancyPhase
 import com.fictioncutshort.justacalculator.logic.EffectsController
 import com.fictioncutshort.justacalculator.ui.screens.DormancyOverlay
+import com.fictioncutshort.justacalculator.ui.screens.AdCardStack
 import com.fictioncutshort.justacalculator.ui.components.CalculatorButton
 import com.fictioncutshort.justacalculator.ui.components.CameraPreview
 import com.fictioncutshort.justacalculator.ui.components.ConsoleWindow
@@ -273,6 +274,10 @@ fun CalculatorScreen() {
                     dormancyPressedButtons = savedPressed
                 )
             }
+        }
+        // ── Restore ad card state if user closed app mid-Phase 2 ──
+        if (CalculatorActions.loadShowAdCards()) {
+            state.value = state.value.copy(showAdCards = true)
         }
     }
 
@@ -1269,7 +1274,17 @@ fun CalculatorScreen() {
             }
         )
     }
-
+    // ========== PHASE 2: AD CARD STACK ==========
+    // Full-screen ad cards → swipe 5 → stack collapses → pexeso memory game.
+    // Calculator is still rendered underneath in outline-only mode
+    // (PortraitCalculatorContent / LandscapeCalculatorLayout check showAdCards).
+    if (current.showAdCards) {
+        AdCardStack(
+            onPexesoComplete = {
+                CalculatorActions.clearShowAdCards()
+                state.value = state.value.copy(showAdCards = false)
+            }
+        )}
     // ========== DORMANCY OVERLAY ==========
     // Rendered above all other overlays. Full-screen TV static + RAD buttons
     // after the rant ends. All 5 buttons must be pressed to proceed to Phase 2.
@@ -1285,18 +1300,18 @@ fun CalculatorScreen() {
                     vibrationIntensity = newPressed.size
                 )
             },
-            onAllPressed = {
-                // All 5 RAD buttons pressed — clean up and move to Phase 2
-                DormancyManager.clearDormancy(context)
-                CalculatorActions.clearDormancyPressedButtons()
-                state.value = state.value.copy(
-                    showDormancy = false,
-                    dormancyRadVisible = 0,
-                    dormancyPressedButtons = emptySet(),
-                    vibrationIntensity = 0
-                    // TODO: set phase2Active = true here when Phase 2 (ad cards) is built
-                )
-            }
+
+                onAllPressed = {
+                    DormancyManager.clearDormancy(context)
+                    CalculatorActions.clearDormancyPressedButtons()
+                    state.value = state.value.copy(
+                        showDormancy = false,
+                        dormancyRadVisible = 0,
+                        dormancyPressedButtons = emptySet(),
+                        vibrationIntensity = 0,
+                        showAdCards = true
+                    )
+                }
         )
     }
 

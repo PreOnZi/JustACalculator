@@ -147,6 +147,18 @@ val CHAPTERS = listOf(
         startStep = 150,
         description = "Calculator's final monologue → Goodbye"
     ),
+    Chapter(
+        id = 18,
+        name = "Chapter D1: Dormancy Start",
+        startStep = -2,  // Special: simulates rant just ended → triggers notifications
+        description = "Rant ends → static screen → notifications fire"
+    ),
+    Chapter(
+        id = 19,
+        name = "Chapter D2: Ad Cards",
+        startStep = -3,  // Special: all 5 RAD buttons pre-pressed → shows ad card stack
+        description = "All RAD buttons done → Phase 2 card stack"
+    ),
 )
 
 /**

@@ -207,7 +207,7 @@ data class CalculatorState(
     // ═══════════════════════════════════════════════════════════════════════════
     // Phone Overlay Step 1071
     // ═══════════════════════════════════════════════════════════════════════════
-val showPhoneOverlay: Boolean = false,
+    val showPhoneOverlay: Boolean = false,
     val showTalkOverlay: Boolean = false,
     // ═══════════════════════════════════════════════════════════════════════════
     // WHACK-A-MOLE MINI-GAME - Button clicking game (steps 96-99)
@@ -408,6 +408,9 @@ val showPhoneOverlay: Boolean = false,
      * Set in MainActivity.onCreate based on DormancyManager.getCurrentPhase().
      */
     val showDormancy: Boolean = false,
+
+    /** True when the ad card stack overlay is showing (post-dormancy). */
+    val showAdCards: Boolean = false,
 
     /**
      * Number of RAD buttons currently visible (0 = static only, 1–5 = buttons).
