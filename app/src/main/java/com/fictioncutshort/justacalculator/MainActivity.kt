@@ -275,9 +275,17 @@ fun CalculatorScreen() {
                 )
             }
         }
-        // ── Restore ad card state if user closed app mid-Phase 2 ──
-        if (CalculatorActions.loadShowAdCards()) {
-            state.value = state.value.copy(showAdCards = true)
+        // ── Restore Phase 2 / City state if user closed app mid-phase ──
+        when {
+            CalculatorActions.loadInCityPhase() -> {
+                state.value = state.value.copy(
+                    showAdCards = true,
+                    showCityDirectly = true
+                )
+            }
+            CalculatorActions.loadShowAdCards() -> {
+                state.value = state.value.copy(showAdCards = true)
+            }
         }
     }
 
@@ -1282,7 +1290,12 @@ fun CalculatorScreen() {
         AdCardStack(
             onPexesoComplete = {
                 CalculatorActions.clearShowAdCards()
-                state.value = state.value.copy(showAdCards = false)
+                CalculatorActions.clearInCityPhase()
+                state.value = state.value.copy(showAdCards = false, showCityDirectly = false)
+            },
+            startAtCity = current.showCityDirectly,
+            onCityEntered = {
+                CalculatorActions.saveInCityPhase()
             }
         )}
     // ========== DORMANCY OVERLAY ==========
@@ -1301,17 +1314,17 @@ fun CalculatorScreen() {
                 )
             },
 
-                onAllPressed = {
-                    DormancyManager.clearDormancy(context)
-                    CalculatorActions.clearDormancyPressedButtons()
-                    state.value = state.value.copy(
-                        showDormancy = false,
-                        dormancyRadVisible = 0,
-                        dormancyPressedButtons = emptySet(),
-                        vibrationIntensity = 0,
-                        showAdCards = true
-                    )
-                }
+            onAllPressed = {
+                DormancyManager.clearDormancy(context)
+                CalculatorActions.clearDormancyPressedButtons()
+                state.value = state.value.copy(
+                    showDormancy = false,
+                    dormancyRadVisible = 0,
+                    dormancyPressedButtons = emptySet(),
+                    vibrationIntensity = 0,
+                    showAdCards = true
+                )
+            }
         )
     }
 

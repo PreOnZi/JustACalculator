@@ -411,6 +411,7 @@ data class CalculatorState(
 
     /** True when the ad card stack overlay is showing (post-dormancy). */
     val showAdCards: Boolean = false,
+    val showCityDirectly: Boolean = false,
 
     /**
      * Number of RAD buttons currently visible (0 = static only, 1–5 = buttons).

@@ -159,6 +159,12 @@ val CHAPTERS = listOf(
         startStep = -3,  // Special: all 5 RAD buttons pre-pressed → shows ad card stack
         description = "All RAD buttons done → Phase 2 card stack"
     ),
+    Chapter(
+        id = 20,
+        name = "Chapter D3: Calculator City",
+        startStep = -4,  // Special: skips straight to 3D city world
+        description = "Pexeso complete → 3D desolated city"
+    ),
 )
 
 /**

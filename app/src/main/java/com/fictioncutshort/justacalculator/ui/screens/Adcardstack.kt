@@ -63,7 +63,8 @@ import kotlin.random.Random
 enum class AdCardPhase {
     CARDS,       // Swiping through the 5 top cards
     COLLAPSING,  // Stack falls after card 5 swiped
-    PEXESO       // Memory game
+    PEXESO,      // Memory game
+    CITY         // 3D desolated calculator cityscape
 }
 
 // u2500u2500 Card data u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
@@ -132,16 +133,18 @@ private val retroThemes = RetroTheme.values()
 
 @Composable
 fun AdCardStack(
-    onPexesoComplete: () -> Unit,   // Called when pexeso is won u2014 story continues
+    onPexesoComplete: () -> Unit,   // Called when city phase ends — story continues
+    startAtCity: Boolean = false,
+    onCityEntered: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // u2500u2500 State u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
+    // ── State ────────────────────────────────────────────────────────────────
     val cards = remember { buildCardStack() }
-    var swipedCount by remember { mutableIntStateOf(0) }       // 0-5 cards swiped
-    var phase by remember { mutableStateOf(AdCardPhase.CARDS) }
+    var swipedCount by remember { mutableIntStateOf(0) }
+    var phase by remember { mutableStateOf(if (startAtCity) AdCardPhase.CITY else AdCardPhase.CARDS) }
 
     // Gyroscope tilt (x = roll, y = pitch)
     var tiltX by remember { mutableFloatStateOf(0f) }
@@ -157,7 +160,12 @@ fun AdCardStack(
     var pexesoMatched by remember { mutableStateOf<Set<Int>>(emptySet()) }
     var pexesoLocked by remember { mutableStateOf(false) }
 
-    // u2500u2500 Gyroscope sensor u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
+    // ── Persist city phase on enter ──────────────────────────────────────────
+    LaunchedEffect(phase) {
+        if (phase == AdCardPhase.CITY) onCityEntered()
+    }
+
+    // ── Gyroscope sensor ─────────────────────────────────────────────────────
     DisposableEffect(Unit) {
         val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
         val gyro = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
@@ -188,7 +196,7 @@ fun AdCardStack(
         onDispose { sensorManager.unregisterListener(listener) }
     }
 
-    // u2500u2500 Hint nudge loop: starts 2.5s after entering, repeats every 4s u2500u2500u2500u2500u2500u2500u2500u2500u2500
+    // ── Hint nudge loop ───────────────────────────────────────────────────────
     LaunchedEffect(swipedCount, phase) {
         if (phase != AdCardPhase.CARDS) return@LaunchedEffect
         delay(2500)
@@ -204,17 +212,17 @@ fun AdCardStack(
         }
     }
 
-    // u2500u2500 Collapse trigger u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
+    // ── Collapse trigger ──────────────────────────────────────────────────────
     LaunchedEffect(swipedCount) {
         if (swipedCount >= 5) {
             delay(600)
             phase = AdCardPhase.COLLAPSING
-            delay(1800) // let collapse animation play
+            delay(1800)
             phase = AdCardPhase.PEXESO
         }
     }
 
-    // u2500u2500 Root box (full screen) u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
+    // ── Root box ──────────────────────────────────────────────────────────────
     Box(
         modifier = modifier.fillMaxSize()
     ) {
@@ -255,7 +263,7 @@ fun AdCardStack(
                                 pexesoMatched = pexesoMatched + a + b
                                 if (pexesoMatched.size == pexesoCards.size) {
                                     delay(800)
-                                    onPexesoComplete()
+                                    phase = AdCardPhase.CITY
                                 }
                             }
                             pexesoFlipped = emptySet()
@@ -263,6 +271,10 @@ fun AdCardStack(
                         }
                     }
                 }
+            )
+
+            AdCardPhase.CITY -> CalculatorCityView(
+                modifier = Modifier.fillMaxSize()
             )
         }
     }

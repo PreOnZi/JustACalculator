@@ -53,6 +53,15 @@ object CalculatorActions {
     fun clearShowAdCards() {
         prefs?.edit()?.remove("show_ad_cards")?.commit()
     }
+
+    fun saveInCityPhase() {
+        prefs?.edit()?.putBoolean("in_city_phase", true)?.commit()
+    }
+    fun loadInCityPhase(): Boolean =
+        prefs?.getBoolean("in_city_phase", false) ?: false
+    fun clearInCityPhase() {
+        prefs?.edit()?.remove("in_city_phase")?.commit()
+    }
     fun loadDormancyPressedButtons(): Set<Int> {
         val str = prefs?.getString("dormancy_pressed", "") ?: ""
         if (str.isBlank()) return emptySet()
@@ -1258,8 +1267,22 @@ object CalculatorActions {
 
         // Special handling for Chapter D2 (Ad Cards)
         if (chapter.startStep == -3) {
+            clearInCityPhase()
             state.value = state.value.copy(
                 showAdCards = true,
+                showCityDirectly = false,
+                showDormancy = false,
+                showDebugMenu = false
+            )
+            return
+        }
+
+        // Special handling for Chapter D3 (Calculator City direct jump)
+        if (chapter.startStep == -4) {
+            saveInCityPhase()
+            state.value = state.value.copy(
+                showAdCards = true,
+                showCityDirectly = true,
                 showDormancy = false,
                 showDebugMenu = false
             )
@@ -3222,7 +3245,7 @@ object CalculatorActions {
             0L
         }
 
-        // Special case: Step 18 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 19 needs message chaining because step 18's success message
+        // Special case: Step 18 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ 19 needs message chaining because step 18's success message
         // doesn't contain the camera permission question.
         // Also: Branch endings (30, 40, 41, 50) going to step 27 need message chaining
         // Also: Force-back steps (27, 28, 29 that go back to themselves) need message chaining
