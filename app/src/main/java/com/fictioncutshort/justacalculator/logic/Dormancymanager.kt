@@ -143,7 +143,7 @@ object DormancyManager {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             try {
-                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pending)
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pending)
             } catch (e: Exception) {
                 android.util.Log.e("DormancyManager", "Failed to schedule notification $id: ${e.message}")
             }

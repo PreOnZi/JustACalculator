@@ -68,17 +68,7 @@ fun scheduleNotification(context: Context, delayMs: Long = 5000) {
     val triggerTime = System.currentTimeMillis() + delayMs
 
     try {
-        // Android 12+ requires checking permission for exact alarms
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (alarmManager.canScheduleExactAlarms()) {
-                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
-            } else {
-                // Fall back to inexact alarm if exact not allowed
-                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
-            }
-        } else {
-            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
-        }
+        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
     } catch (_: Exception) {
         // Last resort fallback - use Handler (only works while app is alive)
         Handler(Looper.getMainLooper()).postDelayed({
