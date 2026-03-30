@@ -78,6 +78,7 @@ import com.fictioncutshort.justacalculator.logic.DormancyPhase
 import com.fictioncutshort.justacalculator.logic.EffectsController
 import com.fictioncutshort.justacalculator.ui.screens.DormancyOverlay
 import com.fictioncutshort.justacalculator.ui.screens.AdCardStack
+import com.fictioncutshort.justacalculator.ui.screens.CalculatorCityView
 import com.fictioncutshort.justacalculator.ui.components.CalculatorButton
 import com.fictioncutshort.justacalculator.ui.components.CameraPreview
 import com.fictioncutshort.justacalculator.ui.components.ConsoleWindow
@@ -849,16 +850,20 @@ fun CalculatorScreen() {
         }
 
     } else {
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .background(backgroundColor)
                 .graphicsLayer {
                     translationX = tensionShakeOffset
                     translationY = tensionShakeOffset * 0.5f
-                },
-            contentAlignment = if (isTablet) Alignment.TopCenter else Alignment.TopStart
+                }
         ) {
+            TopBezelBar(invertedColors = current.invertedColors)
+            Box(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                contentAlignment = if (isTablet) Alignment.TopCenter else Alignment.TopStart
+            ) {
             // Word game replaces calculator buttons but keeps top section
             if (current.wordGameActive) {
                 Column(
@@ -866,18 +871,6 @@ fun CalculatorScreen() {
                         .then(if (isTablet) Modifier.widthIn(max = maxContentWidth) else Modifier.fillMaxWidth())
                         .fillMaxHeight()
                 ) {
-                    // Top bezel strip - retro dark brown (same as calculator)
-                    val statusBarPadding = WindowInsets.statusBars.asPaddingValues()
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height( statusBarPadding.calculateTopPadding())
-                            .background(
-                                if (current.invertedColors) Color(0xFF1A1A1A) else Color(
-                                    0xFF4A3728
-                                )
-                            )
-                    )
 
                     // Ad banner space (same as calculator)
                     if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) {
@@ -981,9 +974,6 @@ fun CalculatorScreen() {
                         .then(if (isTablet && !isLandscape) Modifier.widthIn(max = maxContentWidth) else Modifier.fillMaxWidth())
                         .fillMaxHeight()
                 ) {
-                    // Top bezel - just status bar height
-                    TopBezelBar(invertedColors = current.invertedColors)
-
                     // Ad banner
                     AdBanner(
                         showBanner = showAdBanner,
@@ -1026,7 +1016,7 @@ fun CalculatorScreen() {
                 }
 
 
-            }}
+            }}}
     }
     if (current.isMuted && current.inConversation) {
         PausedCalculatorOverlay(
@@ -1287,17 +1277,18 @@ fun CalculatorScreen() {
     // Calculator is still rendered underneath in outline-only mode
     // (PortraitCalculatorContent / LandscapeCalculatorLayout check showAdCards).
     if (current.showAdCards) {
-        AdCardStack(
-            onPexesoComplete = {
-                CalculatorActions.clearShowAdCards()
-                CalculatorActions.clearInCityPhase()
-                state.value = state.value.copy(showAdCards = false, showCityDirectly = false)
-            },
-            startAtCity = current.showCityDirectly,
-            onCityEntered = {
-                CalculatorActions.saveInCityPhase()
-            }
-        )}
+        if (current.showCityDirectly) {
+            CalculatorCityView(modifier = Modifier.fillMaxSize())
+        } else {
+            AdCardStack(
+                onPexesoComplete = {
+                    CalculatorActions.clearShowAdCards()
+                    CalculatorActions.clearInCityPhase()
+                    state.value = state.value.copy(showAdCards = false, showCityDirectly = false)
+                }
+            )
+        }
+    }
     // ========== DORMANCY OVERLAY ==========
     // Rendered above all other overlays. Full-screen TV static + RAD buttons
     // after the rant ends. All 5 buttons must be pressed to proceed to Phase 2.

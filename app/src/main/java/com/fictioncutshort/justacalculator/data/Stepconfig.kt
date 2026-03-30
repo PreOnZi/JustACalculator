@@ -130,7 +130,7 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         4 -> StepConfig(
-            promptMessage = "When did he start ruling Vietnam?",
+            promptMessage = "When did Minh Mang start ruling Vietnam?",
             successMessage = "Correct! I only met him briefly. Wasn't a maths guy really... This is fun, right? You can disagree, by the way - but I won't tell you how to do it. I don't like being disagreed with...",
             declineMessage = "Let's disagree.",
             wrongNumberPrefix = "Not quite. Try the internet - heard it's amazing.",

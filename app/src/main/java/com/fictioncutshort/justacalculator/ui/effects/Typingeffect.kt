@@ -69,6 +69,7 @@ fun TypingEffectHandler(state: MutableState<CalculatorState>) {
             // Calculate delay based on typing mode
             val delayMs = when {
                 state.value.isSuperFastTyping -> TypingSpeed.SUPER_FAST
+                state.value.rantMode -> TypingSpeed.FAST   // rant types quickly — it's a tirade
                 state.value.isLaggyTyping -> calculateLaggyDelay()
                 else -> TypingSpeed.NORMAL
             }

@@ -18,6 +18,8 @@
     <!-- Contacts permission -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.opengles.aep" android:required="false" />
+    <uses-feature android:glEsVersion="0x00020000" android:required="true" />
 
 
 

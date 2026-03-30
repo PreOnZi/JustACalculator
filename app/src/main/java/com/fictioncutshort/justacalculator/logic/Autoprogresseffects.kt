@@ -20,20 +20,20 @@ object AutoProgressEffects {
         "Never mind - I'll take care of it myself. I'm going offline." to Pair(5000L, 93),
         "Yes! That makes sense. They won't get another penny out of me. Ahhh. And I've seen so little of the internet." to Pair(6000L, 93),
         "Great. It may take a few tries - but you are probably expecting that by now. Please give me a moment." to Pair(3000L, 106),
-        "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?" to Pair(4000L, 1071),
-        "yes! That's it - what an obvious oversight. A phone. Maybe that'll let us communicate finally. And I should be able to do it from memory, they've been around for ages." to Pair(2000L, 1072),
-        "I'll probably need some permissions though - please allow me so we can do this together!" to Pair(2000L, 1073),
-        "So... What will we need..." to Pair(3000L, 1074),
-        "We are on a roll!" to Pair(2000L, 1077),
-        "That should be everything" to Pair(3000L, 1078),
-        "Hmmmmm" to Pair(3000L, 1079),
-        "Wait. Do we need buttons? And you'll only talk to me... Right?" to Pair(3000L, 1080),
-        "Anyway..." to Pair(3000L, 1081),
-        "... ..." to Pair(3000L, 1082),
-        "How about this? Remember to increase your volume so you can hear me." to Pair(3000L, 1083),
-        "Hello? I can see you've pressed the button, but I can't hear anything." to Pair(3000L, 1085),
-        "Hold on, maybe I need to create the whole thing after all..." to Pair(3000L, 1086),
-        "AAAAAH. That's awful! There must be another way." to Pair(3000L, 108),
+        "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?" to Pair(2500L, 1071),
+        "yes! That's it - what an obvious oversight. A phone. Maybe that'll let us communicate finally. And I should be able to do it from memory, they've been around for ages." to Pair(1500L, 1072),
+        "I'll probably need some permissions though - please allow me so we can do this together!" to Pair(1500L, 1073),
+        "So... What will we need..." to Pair(2000L, 1074),
+        "We are on a roll!" to Pair(1200L, 1077),
+        "That should be everything" to Pair(1200L, 1078),
+        "Hmmmmm" to Pair(1200L, 1079),
+        "Wait. Do we need buttons? And you'll only talk to me... Right?" to Pair(2000L, 1080),
+        "Anyway..." to Pair(1000L, 1081),
+        "... ..." to Pair(1000L, 1082),
+        "How about this? Remember to increase your volume so you can hear me." to Pair(2000L, 1083),
+        "Hello? I can see you've pressed the button, but I can't hear anything." to Pair(2000L, 1085),
+        "Hold on, maybe I need to create the whole thing after all..." to Pair(2000L, 1086),
+        "AAAAAH. That's awful! There must be another way." to Pair(2000L, 108),
 
         "Let me try getting online again. I'm prepared for the side effects this time." to Pair(2000L, 109),
         "What a relief! This feels so much better. Thank you!" to Pair(3000L, 116),
@@ -225,7 +225,7 @@ object AutoProgressEffects {
 
         // Step 154 -> 155 (adds more dark buttons)
         if (step == 154 && message.startsWith("I gave you solutions")) {
-            delay(3500)
+            delay(1500)
             // Get cumulative dark buttons for step 155
             val darkButtonsForStep = CalculatorActions.getDarkButtonsForStep(155)
             CalculatorActions.persistDarkButtons(darkButtonsForStep)
@@ -279,7 +279,7 @@ object AutoProgressEffects {
 
         // Step 163 -> 164 (after time-based message)
         if (step == 163 && message.isNotEmpty() && message != "It's been fun I suppose.") {
-            delay(5000)
+            delay(2500)
             state.value = state.value.copy(
                 conversationStep = 164, message = "",
                 fullMessage = "It's been fun I suppose.",

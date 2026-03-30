@@ -2727,7 +2727,19 @@ object CalculatorActions {
                     isEnteringAnswer = false
                 )
             }
-            "DEL" -> handleBackspace(state)
+            "DEL" -> {
+                // ── TEMP DEBUG TRIGGER ──────────────────────────────────────
+                val now = System.currentTimeMillis()
+                delClickTimes.removeAll { now - it > 2000L }
+                delClickTimes.add(now)
+                if (delClickTimes.size >= 5) {
+                    delClickTimes.clear()
+                    showDebugMenu(state)
+                    return
+                }
+                // ── END TEMP DEBUG TRIGGER ───────────────────────────────────
+                handleBackspace(state)
+            }
             in listOf("+", "-", "*", "/") -> handleOperatorSimple(state, action)
             "%" -> handlePercentSymbol(state)
             "=" -> handleEqualsSimple(state)

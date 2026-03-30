@@ -1,25 +1,24 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
-import android.content.Context
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
+import com.fictioncutshort.justacalculator.R
 import androidx.compose.animation.core.*
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -29,14 +28,14 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
-import kotlin.math.roundToInt
 import kotlin.math.sign
 import kotlin.random.Random
 
@@ -63,8 +62,7 @@ import kotlin.random.Random
 enum class AdCardPhase {
     CARDS,       // Swiping through the 5 top cards
     COLLAPSING,  // Stack falls after card 5 swiped
-    PEXESO,      // Memory game
-    CITY         // 3D desolated calculator cityscape
+    PEXESO       // Memory game
 }
 
 // u2500u2500 Card data u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
@@ -102,18 +100,42 @@ data class AdCard(
     val color: Color,
     val accentColor: Color,    // For retro border/trim
     val isSwipeable: Boolean,  // Only first 5 are swipeable
+    val imageRes: Int? = null, // Drawable res — null shows placeholder number
 )
 
 private fun buildCardStack(): List<AdCard> {
-    return (0 until 25).map { i ->
+    // ── Swipe-only cards (ids 0–4) → AdsPexeso_21 … AdsPexeso_25 ─────────────
+    val swipeImages = listOf(
+        R.drawable.adspexeso_21,
+        R.drawable.adspexeso_22,
+        R.drawable.adspexeso_23,
+        R.drawable.adspexeso_24,
+        R.drawable.adspexeso_25,
+    )
+    val swipeOnly = (0 until 5).map { i ->
         AdCard(
-            id = i,
-            number = i + 1,
-            color = CARD_COLORS[i % CARD_COLORS.size],
+            id          = i,
+            number      = i + 1,
+            color       = CARD_COLORS[i % CARD_COLORS.size],
             accentColor = CARD_COLORS[(i + 5) % CARD_COLORS.size],
-            isSwipeable = i < 5
+            isSwipeable = true,
+            imageRes    = swipeImages[i]
         )
     }
+
+    // ── Pexeso cards (ids 5–24) → AdsPexeso_1 … AdsPexeso_20 ────────────────
+    val pexeso = (0 until 20).map { i ->
+        AdCard(
+            id          = i + 5,
+            number      = i + 6,
+            color       = CARD_COLORS[i % CARD_COLORS.size],
+            accentColor = CARD_COLORS[(i + 5) % CARD_COLORS.size],
+            isSwipeable = false,
+            imageRes    = null  // assigned via PEXESO_PAIR_IMAGES
+        )
+    }
+
+    return swipeOnly + pexeso
 }
 
 // u2500u2500 Retro era visual themes (applied to card borders/decorations) u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
@@ -125,30 +147,93 @@ private enum class RetroTheme {
     GLITCH         // Offset color layers
 }
 
-private val retroThemes = RetroTheme.values()
+private val retroThemes = RetroTheme.entries.toTypedArray()
 
-// u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
+
+private const val PEEK_PX = 16f
+
+private data class CardDims(
+    val cardWPx:  Float,
+    val cardHPx:  Float,
+    val cellWPx:  Float,
+    val cellHPx:  Float,
+    val gridOffsetXPx: Float,
+    val gridOffsetYPx: Float,
+    val cellGapPx: Float,
+    val gridTopPaddingPx: Float,
+)
+
+private val LocalCardDims = staticCompositionLocalOf<CardDims> {
+    error("CardDims not provided")
+}
+
+private val AccelerateEasing = Easing { t -> t * t }
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN COMPOSABLE
-// u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CALCULATOR BACKGROUND (GREYSCALE)
+// Renders the real PortraitCalculatorContent composables directly, then applies
+// a greyscale ColorMatrix filter over the top. Pixel-perfect match guaranteed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TV STATIC NOISE  (copied from DormancyOverlay)
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun AdStaticNoise(modifier: Modifier = Modifier, darkened: Boolean = false) {
+    // Canvas-based: single draw call per frame instead of hundreds of Box composables
+    var tick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) { while (true) { delay(80); tick++ } }
+
+    val grayMin   = if (darkened) 5   else 60
+    val grayMax   = if (darkened) 55  else 200
+    val alphaBase = if (darkened) 0.6f else 0.1f
+    val alphaSpan = if (darkened) 0.3f else 0.7f
+
+    androidx.compose.foundation.Canvas(modifier = modifier.fillMaxSize()) {
+        val cellPx = 6.dp.toPx()
+        val cols = (size.width  / cellPx).toInt() + 1
+        val rows = (size.height / cellPx).toInt() + 1
+        val rng  = Random(tick * 7919L)
+
+        for (row in 0 until rows) {
+            for (col in 0 until cols) {
+                val gray  = rng.nextInt(grayMin, grayMax)
+                val alpha = rng.nextFloat() * alphaSpan + alphaBase
+                drawRect(
+                    color = Color(gray / 255f, gray / 255f, gray / 255f, alpha),
+                    topLeft = androidx.compose.ui.geometry.Offset(col * cellPx, row * cellPx),
+                    size = androidx.compose.ui.geometry.Size(cellPx, cellPx)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DamagedCalculatorBackground(modifier: Modifier = Modifier) {
+    // TEMP: static noise only, calculator hidden
+    Box(modifier = modifier.fillMaxSize().background(Color(0xFF0A0A0A))) {
+        AdStaticNoise(darkened = true)
+    }
+}
+
 
 @Composable
 fun AdCardStack(
-    onPexesoComplete: () -> Unit,   // Called when city phase ends — story continues
-    startAtCity: Boolean = false,
-    onCityEntered: () -> Unit = {},
+    onPexesoComplete: () -> Unit,   // Called when pexeso is won u2014 story continues
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // ── State ────────────────────────────────────────────────────────────────
+    // u2500u2500 State u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
     val cards = remember { buildCardStack() }
-    var swipedCount by remember { mutableIntStateOf(0) }
-    var phase by remember { mutableStateOf(if (startAtCity) AdCardPhase.CITY else AdCardPhase.CARDS) }
-
-    // Gyroscope tilt (x = roll, y = pitch)
-    var tiltX by remember { mutableFloatStateOf(0f) }
-    var tiltY by remember { mutableFloatStateOf(0f) }
+    var swipedCount by remember { mutableIntStateOf(0) }       // 0-5 cards swiped
+    var phase by remember { mutableStateOf(AdCardPhase.CARDS) }
 
     // Hint nudge: auto-nudges the top card left/right after 2s idle
     var hintNudgeTarget by remember { mutableFloatStateOf(0f) }
@@ -159,44 +244,10 @@ fun AdCardStack(
     var pexesoFlipped by remember { mutableStateOf<Set<Int>>(emptySet()) }
     var pexesoMatched by remember { mutableStateOf<Set<Int>>(emptySet()) }
     var pexesoLocked by remember { mutableStateOf(false) }
+    var pexesoEnlarged by remember { mutableStateOf<Int?>(null) }
+    var showPairReunion by remember { mutableStateOf(false) }
 
-    // ── Persist city phase on enter ──────────────────────────────────────────
-    LaunchedEffect(phase) {
-        if (phase == AdCardPhase.CITY) onCityEntered()
-    }
-
-    // ── Gyroscope sensor ─────────────────────────────────────────────────────
-    DisposableEffect(Unit) {
-        val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        val gyro = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-        val listener = object : SensorEventListener {
-            private val rotMatrix = FloatArray(9)
-            private val orientation = FloatArray(3)
-            private var baseAzimuth = Float.MAX_VALUE
-            private var basePitch = Float.MAX_VALUE
-
-            override fun onSensorChanged(event: SensorEvent) {
-                SensorManager.getRotationMatrixFromVector(rotMatrix, event.values)
-                SensorManager.getOrientation(rotMatrix, orientation)
-                val pitch = Math.toDegrees(orientation[1].toDouble()).toFloat()
-                val roll  = Math.toDegrees(orientation[2].toDouble()).toFloat()
-
-                if (baseAzimuth == Float.MAX_VALUE) {
-                    baseAzimuth = roll
-                    basePitch = pitch
-                }
-                tiltX = (roll - baseAzimuth).coerceIn(-30f, 30f)
-                tiltY = (pitch - basePitch).coerceIn(-30f, 30f)
-            }
-            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
-        }
-        gyro?.let {
-            sensorManager.registerListener(listener, it, SensorManager.SENSOR_DELAY_GAME)
-        }
-        onDispose { sensorManager.unregisterListener(listener) }
-    }
-
-    // ── Hint nudge loop ───────────────────────────────────────────────────────
+    // u2500u2500 Hint nudge loop: starts 2.5s after entering, repeats every 4s u2500u2500u2500u2500u2500u2500u2500u2500u2500
     LaunchedEffect(swipedCount, phase) {
         if (phase != AdCardPhase.CARDS) return@LaunchedEffect
         delay(2500)
@@ -212,108 +263,166 @@ fun AdCardStack(
         }
     }
 
-    // ── Collapse trigger ──────────────────────────────────────────────────────
+    // ── Collapse trigger + pexeso reveal transition
+    var pexesoReveal by remember { mutableFloatStateOf(0f) }
+    val pexesoRevealAnim by animateFloatAsState(
+        targetValue   = pexesoReveal,
+        animationSpec = tween(400),
+        label         = "pexesoReveal"
+    )
+
     LaunchedEffect(swipedCount) {
         if (swipedCount >= 5) {
-            delay(600)
             phase = AdCardPhase.COLLAPSING
-            delay(1800)
+            delay(1600)
             phase = AdCardPhase.PEXESO
+            pexesoReveal = 1f
         }
     }
 
-    // ── Root box ──────────────────────────────────────────────────────────────
-    Box(
-        modifier = modifier.fillMaxSize()
-    ) {
-        when (phase) {
-            AdCardPhase.CARDS -> CardStackScene(
-                cards = cards,
-                swipedCount = swipedCount,
-                tiltX = tiltX,
-                tiltY = tiltY,
-                hintNudgeTarget = hintNudgeTarget,
-                onSwiped = { swipedCount++ }
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val density    = androidx.compose.ui.platform.LocalDensity.current
+        val screenWPx  = with(density) { maxWidth.toPx() }
+        val screenHPx  = with(density) { maxHeight.toPx() }
+
+        val cardWPx = screenWPx * 0.90f
+        val cardHPx = cardWPx / 0.65f
+
+        val gapPx     = with(density) { 8.dp.toPx() }
+        val sidePadPx = with(density) { 16.dp.toPx() }
+        val headerPx  = with(density) { 100.dp.toPx() }
+        val gridW     = screenWPx - sidePadPx * 2
+        val cellWPx   = (gridW - gapPx * 3) / 4f
+        val cellHPx   = cellWPx / 0.7f
+
+        val dims = remember(screenWPx, screenHPx) {
+            CardDims(
+                cardWPx = cardWPx, cardHPx = cardHPx,
+                cellWPx = cellWPx, cellHPx = cellHPx,
+                gridOffsetXPx = sidePadPx - screenWPx / 2f,
+                gridOffsetYPx = headerPx  - screenHPx / 2f,
+                cellGapPx = gapPx, gridTopPaddingPx = headerPx
             )
+        }
 
-            AdCardPhase.COLLAPSING -> CollapseAnimation(
-                cards = cards,
-                tiltX = tiltX,
-                tiltY = tiltY
-            )
+        CompositionLocalProvider(LocalCardDims provides dims) {
+            Box(modifier = Modifier.fillMaxSize()) {
 
-            AdCardPhase.PEXESO -> PexesoGame(
-                cards = pexesoCards,
-                flipped = pexesoFlipped,
-                matched = pexesoMatched,
-                locked = pexesoLocked,
-                onCardFlip = { idx ->
-                    if (pexesoLocked) return@PexesoGame
-                    if (pexesoFlipped.contains(idx) || pexesoMatched.contains(idx)) return@PexesoGame
+                // ── Damaged calculator background — always visible ──
+                DamagedCalculatorBackground()
 
-                    val newFlipped = pexesoFlipped + idx
-                    pexesoFlipped = newFlipped
-
-                    if (newFlipped.size == 2) {
-                        pexesoLocked = true
-                        scope.launch {
-                            delay(900)
-                            val (a, b) = newFlipped.toList()
-                            if (pexesoCards[a].pairId == pexesoCards[b].pairId) {
-                                pexesoMatched = pexesoMatched + a + b
-                                if (pexesoMatched.size == pexesoCards.size) {
-                                    delay(800)
-                                    phase = AdCardPhase.CITY
+                // ── Back 20 cards always present (base layer) ──
+                // Visible during CARDS phase as depth behind the swipeable 5.
+                // Hidden during COLLAPSING (the animation owns them) and PEXESO.
+                if (phase == AdCardPhase.CARDS) {
+                    val backCards = cards.drop(5).reversed()
+                    val localDensity2 = androidx.compose.ui.platform.LocalDensity.current
+                    val bCardWDp = with(localDensity2) { dims.cardWPx.toDp() }
+                    val bCardHDp = with(localDensity2) { dims.cardHPx.toDp() }
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        backCards.forEachIndexed { bi, card ->
+                            key(card.id) {
+                                val depth = backCards.size - bi
+                                val peekY = minOf(depth * PEEK_PX, 5 * PEEK_PX)
+                                val baseAlpha = when {
+                                    depth <= 1 -> 0.50f
+                                    depth <= 2 -> 0.38f
+                                    else       -> 0.25f
                                 }
+                                Box(
+                                    modifier = Modifier
+                                        .size(bCardWDp, bCardHDp)
+                                        .graphicsLayer {
+                                            translationY = peekY
+                                            alpha = baseAlpha
+                                        }
+                                        .background(card.color)
+                                        .retroCardBorder(retroThemes[card.id % retroThemes.size], card.accentColor)
+                                )
                             }
-                            pexesoFlipped = emptySet()
-                            pexesoLocked = false
                         }
                     }
                 }
-            )
 
-            AdCardPhase.CITY -> CalculatorCityView(
-                modifier = Modifier.fillMaxSize()
-            )
+                when (phase) {
+                    AdCardPhase.CARDS -> CardStackScene(
+                        cards = cards, swipedCount = swipedCount,
+                        hintNudgeTarget = hintNudgeTarget,
+                        onSwiped = { swipedCount++ }
+                    )
+                    AdCardPhase.COLLAPSING -> CollapseIntoGridAnimation(
+                        adCards = cards, pexesoCards = pexesoCards,
+                    )
+                    AdCardPhase.PEXESO -> Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { alpha = pexesoRevealAnim }
+                    ) {
+                        PexesoGame(
+                            cards = pexesoCards,
+                            flipped = pexesoFlipped, matched = pexesoMatched,
+                            enlargedIdx = pexesoEnlarged,
+                            showReunion = showPairReunion,
+                            onReunionComplete = onPexesoComplete,
+                            onCardFlip = { idx ->
+                                if (pexesoLocked) return@PexesoGame
+                                if (pexesoMatched.contains(idx) || pexesoFlipped.contains(idx)) return@PexesoGame
+                                val newFlipped = pexesoFlipped + idx
+                                pexesoFlipped = newFlipped
+                                pexesoEnlarged = idx
+                                scope.launch {
+                                    delay(1200); pexesoEnlarged = null
+                                    if (newFlipped.size == 2) {
+                                        pexesoLocked = true; delay(300)
+                                        val (a, b) = newFlipped.toList()
+                                        if (pexesoCards[a].pairId == pexesoCards[b].pairId) {
+                                            pexesoMatched = pexesoMatched + a + b
+                                            if (pexesoMatched.size == pexesoCards.size) {
+                                                delay(800); showPairReunion = true
+                                            }
+                                        }
+                                        pexesoFlipped = emptySet(); pexesoLocked = false
+                                    }
+                                }
+                            }
+                        )
+                    }
+                }
+            }
         }
     }
 }
 
-// u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
-// CARD STACK SCENE
-// u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
+// ─────────────────────────────────────────────────────────────────────────────
+// CARD STACK SCENE  (swipe phase)
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun CardStackScene(
     cards: List<AdCard>,
     swipedCount: Int,
-    tiltX: Float,
-    tiltY: Float,
     hintNudgeTarget: Float,
     onSwiped: () -> Unit
 ) {
-    // Visible cards: top is [swipedCount], show up to 4 behind it
-    val visibleCards = cards.drop(swipedCount).take(5).reversed() // draw back-to-front
+    if (swipedCount >= 5) return
 
-    // Parallax intensity increases with each card swiped (instability)
-    // swipedCount 0 u2192 multiplier 0.12f; swipedCount 4 u2192 0.55f
-    val parallaxMultiplier = 0.12f + swipedCount * 0.10f
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        // Fixed slots 0–4: always in composition, never re-keyed on swipe
+        for (slot in 4 downTo 0) {
+            val card = cards[slot]
+            val depthOffset = slot - swipedCount
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        visibleCards.forEachIndexed { stackIndex, card ->
-            val isTop = stackIndex == visibleCards.size - 1
-            val depthOffset = (visibleCards.size - 1 - stackIndex) // 0 = top, 4 = back
-
-            CardLayer(
-                card = card,
-                depthOffset = depthOffset,
-                isTop = isTop,
-                parallaxX = tiltX * parallaxMultiplier * (depthOffset + 1),
-                parallaxY = tiltY * parallaxMultiplier * (depthOffset + 1),
-                hintNudgeTarget = if (isTop) hintNudgeTarget else 0f,
-                onSwiped = if (isTop) onSwiped else null
-            )
+            key(card.id) {
+                CardLayer(
+                    card            = card,
+                    depthOffset     = depthOffset,
+                    isTop           = depthOffset == 0,
+                    parallaxX       = 0f,
+                    parallaxY       = 0f,
+                    hintNudgeTarget = if (depthOffset == 0) hintNudgeTarget else 0f,
+                    onSwiped        = if (depthOffset == 0) onSwiped else null
+                )
+            }
         }
     }
 }
@@ -321,168 +430,145 @@ private fun CardStackScene(
 @Composable
 private fun CardLayer(
     card: AdCard,
-    depthOffset: Int,          // 0 = top card, 1 = one behind, etc.
-    isTop: Boolean,
-    parallaxX: Float,
-    parallaxY: Float,
+    depthOffset: Int, isTop: Boolean,
+    parallaxX: Float, parallaxY: Float,
     hintNudgeTarget: Float,
     onSwiped: (() -> Unit)?
 ) {
-    // Swipe drag state (only top card)
+    val dims    = LocalCardDims.current
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val cardWDp = with(density) { dims.cardWPx.toDp() }
+    val cardHDp = with(density) { dims.cardHPx.toDp() }
+
     var dragOffsetX by remember { mutableFloatStateOf(0f) }
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
-    var isDragging by remember { mutableStateOf(false) }
+    var isDragging  by remember { mutableStateOf(false) }
+    var isFlyingOff by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    // Hint nudge animation
     val nudgeAnim by animateFloatAsState(
-        targetValue = if (!isDragging) hintNudgeTarget else 0f,
+        targetValue  = if (!isDragging && !isFlyingOff) hintNudgeTarget else 0f,
         animationSpec = spring(dampingRatio = 0.5f, stiffness = 300f),
-        label = "nudge"
+        label        = "nudge"
     )
 
-    // Snap-back animation when released without completing swipe
-    val snapX by animateFloatAsState(
-        targetValue = if (!isDragging) 0f else dragOffsetX,
-        animationSpec = spring(dampingRatio = 0.7f, stiffness = 400f),
-        label = "snapX"
+    val animatedPeekY by animateFloatAsState(
+        targetValue   = maxOf(depthOffset, 0) * PEEK_PX,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 500f),
+        label         = "peek${card.id}"
     )
-
-    // Scale down cards behind top
-    val scaleForDepth = 1f - depthOffset * 0.04f
-    // Vertical offset so stack peeks below
-    val verticalPeek = (depthOffset * 10).dp
 
     Box(
         modifier = Modifier
-            .fillMaxSize()
-            .padding(top = verticalPeek)
+            .size(cardWDp, cardHDp)
             .graphicsLayer {
-                translationX = if (isTop) {
-                    (if (isDragging) dragOffsetX else snapX) + nudgeAnim + parallaxX
-                } else {
-                    parallaxX
+                translationX = when {
+                    isFlyingOff -> dragOffsetX + parallaxX
+                    isDragging  -> dragOffsetX + nudgeAnim + parallaxX
+                    else        -> nudgeAnim + parallaxX
                 }
-                translationY = if (isTop) {
-                    (if (isDragging) dragOffsetY else 0f) + parallaxY
-                } else {
-                    parallaxY
+                translationY = when {
+                    isDragging || isFlyingOff -> dragOffsetY + animatedPeekY + parallaxY
+                    else                      -> animatedPeekY + parallaxY
                 }
-                scaleX = scaleForDepth
-                scaleY = scaleForDepth
-                rotationZ = if (isTop && isDragging) dragOffsetX * 0.04f else 0f
-                alpha = if (depthOffset >= 4) 0.5f else 1f
+                rotationZ = if (isDragging || isFlyingOff) dragOffsetX * 0.03f else 0f
+                alpha = when {
+                    depthOffset < 0  -> 0f   // already swiped — invisible, stays in composition for fly-off
+                    isFlyingOff      -> 1f
+                    depthOffset == 0 -> 1f
+                    depthOffset == 1 -> 0.92f
+                    depthOffset == 2 -> 0.82f
+                    depthOffset == 3 -> 0.70f
+                    else             -> 0.55f
+                }
             }
             .then(
-                if (isTop && onSwiped != null) {
-                    Modifier.pointerInput(Unit) {
-                        detectDragGestures(
-                            onDragStart = { isDragging = true },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                dragOffsetX += dragAmount.x
-                                dragOffsetY += dragAmount.y
-                            },
-                            onDragEnd = {
-                                val swipeThreshold = 300f
-                                if (abs(dragOffsetX) > swipeThreshold) {
-                                    // Fling off screen
-                                    val dir = sign(dragOffsetX)
-                                    scope.launch {
-                                        // Quick fly-off
-                                        dragOffsetX = dir * 1200f
-                                        delay(300)
-                                        isDragging = false
-                                        dragOffsetX = 0f
-                                        dragOffsetY = 0f
-                                        onSwiped()
-                                    }
-                                } else {
-                                    isDragging = false
-                                    dragOffsetX = 0f
-                                    dragOffsetY = 0f
+                if (isTop && onSwiped != null) Modifier.pointerInput(card.id) {
+                    detectDragGestures(
+                        onDragStart = { isDragging = true },
+                        onDrag = { change, delta ->
+                            change.consume()
+                            dragOffsetX += delta.x; dragOffsetY += delta.y
+                        },
+                        onDragEnd = {
+                            if (abs(dragOffsetX) > 220f) {
+                                val dir = sign(dragOffsetX)
+                                isFlyingOff = true; isDragging = false
+                                scope.launch {
+                                    dragOffsetX = dir * 1600f; delay(300)
+                                    onSwiped()
+                                    isFlyingOff = false; dragOffsetX = 0f; dragOffsetY = 0f
                                 }
-                            },
-                            onDragCancel = {
-                                isDragging = false
-                                dragOffsetX = 0f
-                                dragOffsetY = 0f
+                            } else {
+                                isDragging = false; dragOffsetX = 0f; dragOffsetY = 0f
                             }
-                        )
-                    }
+                        },
+                        onDragCancel = {
+                            isDragging = false; dragOffsetX = 0f; dragOffsetY = 0f
+                        }
+                    )
                 } else Modifier
             ),
         contentAlignment = Alignment.Center
     ) {
-        AdCardFace(
-            card = card,
-            isTop = isTop,
-            swipeHint = isTop && depthOffset == 0
-        )
+        AdCardFace(card = card)
     }
 }
 
-// u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 // AD CARD FACE u2014 Placeholder visual
 // Each card: solid color background + large number + retro-styled border
 // u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
 @Composable
 private fun AdCardFace(
-    card: AdCard,
-    isTop: Boolean,
-    swipeHint: Boolean
+    card: AdCard
 ) {
     val theme = retroThemes[card.id % retroThemes.size]
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(card.color)
             .retroCardBorder(theme, card.accentColor),
         contentAlignment = Alignment.Center
     ) {
-        // Retro decoration layer
-        RetroDecoration(theme = theme, accentColor = card.accentColor, cardColor = card.color)
-
-        // Big placeholder number
-        Text(
-            text = card.number.toString(),
-            fontSize = 120.sp,
-            fontWeight = FontWeight.Black,
-            fontFamily = FontFamily.Monospace,
-            color = Color.White.copy(alpha = 0.9f),
-            textAlign = TextAlign.Center
-        )
-
-        // "AD PLACEHOLDER" label
-        Text(
-            text = "AD PLACEHOLDER",
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace,
-            color = Color.White.copy(alpha = 0.4f),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 40.dp)
-        )
-
-        // Swipe hint arrows on first card
-        if (swipeHint) {
-            Row(
+        if (card.imageRes != null) {
+            // Ad image fills the card — no background color, image fills edge to edge
+            androidx.compose.foundation.Image(
+                painter = painterResource(id = card.imageRes),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+            // Retro decoration overlay on top of image
+            RetroDecoration(theme = theme, accentColor = card.accentColor)
+        } else {
+            // Placeholder until images are assigned
+            RetroDecoration(theme = theme, accentColor = card.accentColor)
+            Text(
+                text = card.number.toString(),
+                fontSize = 120.sp,
+                fontWeight = FontWeight.Black,
+                fontFamily = FontFamily.Monospace,
+                color = Color.White.copy(alpha = 0.9f),
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = "AD PLACEHOLDER",
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                color = Color.White.copy(alpha = 0.4f),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 80.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Text("u2190 SWIPE u2192", fontSize = 14.sp, color = Color.White.copy(alpha = 0.6f),
-                    fontFamily = FontFamily.Monospace)
-            }
+                    .padding(bottom = 40.dp)
+            )
         }
+
+
     }
 }
 
 @Composable
-private fun RetroDecoration(theme: RetroTheme, accentColor: Color, cardColor: Color) {
+private fun RetroDecoration(theme: RetroTheme, accentColor: Color) {
     Box(modifier = Modifier.fillMaxSize()) {
         when (theme) {
             RetroTheme.WINDOWS_XP -> {
@@ -503,11 +589,11 @@ private fun RetroDecoration(theme: RetroTheme, accentColor: Color, cardColor: Co
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("ud83dudcc1 Advertisement", fontSize = 11.sp, color = Color.White,
+                        Text("📁 Advertisement", fontSize = 11.sp, color = Color.White,
                             fontFamily = FontFamily.Monospace)
                         // Window buttons
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            listOf("_","u25a1","u2715").forEach { btn ->
+                            listOf("_","□","✕").forEach { btn ->
                                 Box(
                                     modifier = Modifier
                                         .size(18.dp)
@@ -530,7 +616,7 @@ private fun RetroDecoration(theme: RetroTheme, accentColor: Color, cardColor: Co
                         .background(Color(0xFF1F3C88))
                 ) {
                     Text(
-                        "  u25b6 Start",
+                        "  ▶ Start",
                         fontSize = 12.sp, color = Color.White,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.align(Alignment.CenterStart).padding(start = 8.dp)
@@ -563,7 +649,7 @@ private fun RetroDecoration(theme: RetroTheme, accentColor: Color, cardColor: Co
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("9:41 AM", fontSize = 10.sp, color = Color.White, fontFamily = FontFamily.Monospace)
-                    Text("u2590u2590u2590u2590u2590 u1d42u1da6u1da0u1da6 ud83dudd0b", fontSize = 9.sp, color = Color.White)
+                    Text("▐▐▐▐▐ ᵂᶦᵠᶦ 🔋", fontSize = 9.sp, color = Color.White)
                 }
             }
 
@@ -637,8 +723,7 @@ private fun Modifier.retroCardBorder(theme: RetroTheme, accentColor: Color): Mod
         RetroTheme.WINDOWS_XP -> this.border(3.dp,
             Brush.linearGradient(listOf(Color.White.copy(0.6f), accentColor, Color(0xFF003087))),
             RoundedCornerShape(4.dp))
-        RetroTheme.IOS4 -> this.border(2.dp, Color.White.copy(alpha = 0.4f), RoundedCornerShape(20.dp))
-            .clip(RoundedCornerShape(20.dp))
+        RetroTheme.IOS4 -> this.border(2.dp, Color.White.copy(alpha = 0.4f))
         RetroTheme.WIN_2016 -> this.border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(0.dp))
         RetroTheme.MINIMALIST -> this.border(1.dp, Color.White.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
         RetroTheme.GLITCH -> this.border(2.dp, accentColor.copy(alpha = 0.8f), RoundedCornerShape(2.dp))
@@ -649,80 +734,103 @@ private fun Modifier.retroCardBorder(theme: RetroTheme, accentColor: Color): Mod
 // COLLAPSE ANIMATION u2014 remaining 20 cards fall after 5th swipe
 // u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
-@Composable
-private fun CollapseAnimation(
-    cards: List<AdCard>,
-    tiltX: Float,
-    tiltY: Float
-) {
-    // Animate all remaining cards cascading down with staggered offsets
-    val infiniteTransition = rememberInfiniteTransition(label = "collapse")
+// ─────────────────────────────────────────────────────────────────────────────
+// COLLAPSE ANIMATION
+// Cards fall straight "down" from the overhead camera's POV — they shrink
+// in place, land with a scatter, and stay there. Then black fades in.
+// ─────────────────────────────────────────────────────────────────────────────
 
-    // Overall scale zooms out (simulating camera pull-back)
-    val globalScale by animateFloatAsState(
-        targetValue = 0.1f,
-        animationSpec = tween(durationMillis = 1600, easing = FastOutSlowInEasing),
-        label = "zoomOut"
+@Composable
+private fun CollapseIntoGridAnimation(
+    adCards: List<AdCard>,
+    pexesoCards: List<PexesoCard>,
+) {
+    val dims = LocalCardDims.current
+    val collapseCards = adCards.drop(5)
+
+    val localDensity = androidx.compose.ui.platform.LocalDensity.current
+    val cardWDp = with(localDensity) { dims.cardWPx.toDp() }
+    val cardHDp = with(localDensity) { dims.cardHPx.toDp() }
+
+    var blackStart by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { delay(750); blackStart = true }
+    val blackAlpha by animateFloatAsState(
+        targetValue   = if (blackStart) 1f else 0f,
+        animationSpec = tween(600, easing = FastOutSlowInEasing),
+        label         = "blackFade"
     )
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black),
-        contentAlignment = Alignment.Center
-    ) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+
+        collapseCards.forEachIndexed { i, card ->
+            val rng = remember { Random(card.id * 37 + 11) }
+
+            val landOffsetX = remember { rng.nextFloat() * dims.cardWPx * 0.55f - dims.cardWPx * 0.275f }
+            val landOffsetY = remember { rng.nextFloat() * dims.cardHPx * 0.45f - dims.cardHPx * 0.225f }
+            val landRotZ    = remember { rng.nextFloat() * 12f - 6f }
+
+            val staggerMs = remember { ((collapseCards.size - 1 - i) * 25L) }
+            val duration  = remember { 500 + rng.nextInt(150) }
+
+            var started by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) { delay(staggerMs); started = true }
+
+            val p by animateFloatAsState(
+                targetValue   = if (started) 1f else 0f,
+                animationSpec = tween(duration, easing = FastOutSlowInEasing),
+                label         = "fall$i"
+            )
+
+            // Match pexeso card by position (collapseCards index == pexesoCards index after shuffle)
+            val pexesoCard = pexesoCards.getOrNull(i)
+            Box(
+                modifier = Modifier
+                    .size(cardWDp, cardHDp)
+                    .graphicsLayer {
+                        val sc = 1f - p * 0.75f
+                        scaleX = sc; scaleY = sc
+                        translationX = p * landOffsetX
+                        translationY = p * landOffsetY
+                        rotationZ    = p * landRotZ
+                        alpha = 1f
+                    }
+                    .background(pexesoCard?.color ?: card.color),
+                contentAlignment = Alignment.Center
+            ) {
+                if (pexesoCard?.imageRes != null) {
+                    androidx.compose.foundation.Image(
+                        painter = painterResource(id = pexesoCard.imageRes),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Text(
+                        text = pexesoCard?.symbol ?: card.number.toString(),
+                        fontSize = 28.sp,
+                        color = Color.White,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer {
-                    scaleX = globalScale
-                    scaleY = globalScale
-                }
-        ) {
-            cards.drop(5).forEachIndexed { i, card ->
-                val fallDelay = i * 60
-                var fallen by remember { mutableStateOf(false) }
-                LaunchedEffect(Unit) {
-                    delay(fallDelay.toLong())
-                    fallen = true
-                }
-                val fallY by animateFloatAsState(
-                    targetValue = if (fallen) 2000f else 0f,
-                    animationSpec = tween(800, easing = AccelerateInterpolatorEasing),
-                    label = "fall$i"
-                )
-                val fallRot by animateFloatAsState(
-                    targetValue = if (fallen) Random.nextFloat() * 60f - 30f else 0f,
-                    animationSpec = tween(800),
-                    label = "rot$i"
-                )
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            translationY = fallY + tiltY * 0.4f
-                            translationX = tiltX * 0.4f + i * 2f
-                            rotationZ = fallRot
-                            alpha = (1f - fallY / 2200f).coerceIn(0f, 1f)
-                        }
-                        .background(card.color)
-                )
-            }
-        }
+                .graphicsLayer { alpha = blackAlpha }
+                .background(Color.Black)
+        )
     }
 }
 
-private val AccelerateInterpolatorEasing = Easing { t -> t * t }
-
-// u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
-// PEXESO (MEMORY CARD GAME)
-// u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
-
 data class PexesoCard(
     val id: Int,
-    val pairId: Int,      // cards with same pairId are a pair
-    val color: Color,     // shown when face-up
-    val symbol: String    // emoji symbol shown when face-up
+    val pairId: Int,      // cards with same pairId are a match
+    val imageRes: Int?,   // face-up image — each card in the pair has its own
+    // Fallback color + symbol used until images are assigned
+    val color: Color,
+    val symbol: String
 )
 
 private val PEXESO_SYMBOLS = listOf("u2605","u25c6","u25b2","u25cf","u25a0","u2726","u2b1f","u2b21","u2b22","u2b23")
@@ -732,15 +840,45 @@ private val PEXESO_COLORS  = listOf(
     Color(0xFF4CAF50), Color(0xFFFF9800)
 )
 
+// ── Pexeso pair definitions ───────────────────────────────────────────────────
+// AdsPexeso_1.png … AdsPexeso_20.png → drawable names: adspexeso_1 … adspexeso_20
+// Pairs: (1,2), (3,4), (5,6), (7,8), (9,10), (11,12), (13,14), (15,16), (17,18), (19,20)
+// Each pair matches its own two cards — identity fixed, grid position shuffles each launch.
+private val PEXESO_PAIR_IMAGES: List<Pair<Int?, Int?>> = listOf(
+    Pair(R.drawable.adspexeso_1,  R.drawable.adspexeso_2),  // pair 0
+    Pair(R.drawable.adspexeso_3,  R.drawable.adspexeso_4),  // pair 1
+    Pair(R.drawable.adspexeso_5,  R.drawable.adspexeso_6),  // pair 2
+    Pair(R.drawable.adspexeso_7,  R.drawable.adspexeso_8),  // pair 3
+    Pair(R.drawable.adspexeso_9,  R.drawable.adspexeso_10), // pair 4
+    Pair(R.drawable.adspexeso_11, R.drawable.adspexeso_12), // pair 5
+    Pair(R.drawable.adspexeso_13, R.drawable.adspexeso_14), // pair 6
+    Pair(R.drawable.adspexeso_15, R.drawable.adspexeso_16), // pair 7
+    Pair(R.drawable.adspexeso_17, R.drawable.adspexeso_18), // pair 8
+    Pair(R.drawable.adspexeso_19, R.drawable.adspexeso_20), // pair 9
+)
+
 private fun buildPexesoGrid(): List<PexesoCard> {
-    // 4u00d75 grid = 20 cards = 10 pairs
-    val pairs = (0 until 10).flatMap { pairId ->
+    // Each pair produces 2 cards with their own image but the same pairId.
+    // Grid positions are shuffled fresh each launch — identity never changes.
+    val pairs = PEXESO_PAIR_IMAGES.flatMapIndexed { pairId, (imgA, imgB) ->
         listOf(
-            PexesoCard(pairId * 2, pairId, PEXESO_COLORS[pairId], PEXESO_SYMBOLS[pairId]),
-            PexesoCard(pairId * 2 + 1, pairId, PEXESO_COLORS[pairId], PEXESO_SYMBOLS[pairId])
+            PexesoCard(
+                id       = pairId * 2,
+                pairId   = pairId,
+                imageRes = imgA,
+                color    = PEXESO_COLORS[pairId],
+                symbol   = PEXESO_SYMBOLS[pairId]
+            ),
+            PexesoCard(
+                id       = pairId * 2 + 1,
+                pairId   = pairId,
+                imageRes = imgB,
+                color    = PEXESO_COLORS[pairId],
+                symbol   = PEXESO_SYMBOLS[pairId]
+            )
         )
     }
-    return pairs.shuffled()
+    return pairs.shuffled() // positions random each launch, identity fixed
 }
 
 @Composable
@@ -748,63 +886,220 @@ private fun PexesoGame(
     cards: List<PexesoCard>,
     flipped: Set<Int>,
     matched: Set<Int>,
-    locked: Boolean,
+    enlargedIdx: Int?,
+    showReunion: Boolean,
+    onReunionComplete: () -> Unit,
     onCardFlip: (Int) -> Unit
 ) {
     val matchedCount = matched.size / 2
     val totalPairs = cards.size / 2
 
-    Column(
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(Modifier.height(24.dp))
+
+            // Header
+            Text(
+                text = "MEMORY",
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Black,
+                fontFamily = FontFamily.Monospace,
+                color = Color.White,
+                letterSpacing = 6.sp
+            )
+
+            Text(
+                text = "$matchedCount / $totalPairs pairs found",
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                color = Color.White.copy(alpha = 0.5f),
+                modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
+            )
+
+            // 4u00d75 grid
+            val cols = 4
+            val rows = 5
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                (0 until rows).forEach { row ->
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        (0 until cols).forEach { col ->
+                            val idx = row * cols + col
+                            if (idx < cards.size) {
+                                val card = cards[idx]
+                                val isFaceUp = flipped.contains(idx) || matched.contains(idx)
+                                val isMatched = matched.contains(idx)
+                                PexesoCardCell(
+                                    card = card,
+                                    isFaceUp = isFaceUp,
+                                    isMatched = isMatched,
+                                    isEnlarged = enlargedIdx == idx,
+                                    onClick = { onCardFlip(idx) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            } else {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            }
+        } // end Column
+
+        // Enlarged card overlay — rendered over the grid in the outer Box
+        if (enlargedIdx != null && enlargedIdx < cards.size) {
+            val enlargedCard = cards[enlargedIdx]
+            val dims = LocalCardDims.current
+            val ld = androidx.compose.ui.platform.LocalDensity.current
+            val bigWDp = with(ld) { dims.cardWPx.toDp() }
+            val bigHDp = with(ld) { dims.cardHPx.toDp() }
+            val ea by animateFloatAsState(1f, tween(200), label = "enlA")
+            Box(
+                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = ea }
+                    .background(Color.Black.copy(0.55f))
+            )
+            Box(
+                modifier = Modifier
+                    .size(bigWDp, bigHDp)
+                    .align(Alignment.Center)
+                    .graphicsLayer { alpha = ea }
+                    .background(enlargedCard.color)
+                    .border(2.dp, Color.White.copy(0.6f)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (enlargedCard.imageRes != null) {
+                    androidx.compose.foundation.Image(
+                        painter = painterResource(id = enlargedCard.imageRes),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Text(
+                        text = enlargedCard.symbol,
+                        fontSize = 88.sp,
+                        color = Color.White,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
+    } // end outer Box
+
+    // Pair reunion overlay — shown after all pairs matched
+    if (showReunion) {
+        PairReunionOverlay(
+            cards = cards,
+            onComplete = onReunionComplete
+        )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAIR REUNION OVERLAY
+// After all pairs matched: cards animate into side-by-side pair rows,
+// hold for 20 seconds, then call onComplete.
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun PairReunionOverlay(
+    cards: List<PexesoCard>,
+    onComplete: () -> Unit
+) {
+    // Group cards by pairId, preserving pair order 0–9
+    val pairs = remember(cards) {
+        cards.groupBy { it.pairId }
+            .entries.sortedBy { it.key }
+            .map { it.value.sortedBy { c -> c.id } }
+    }
+
+    // Animate in, hold 20s, then call onComplete
+    var revealed by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(300)
+        revealed = true
+        delay(20_000)
+        onComplete()
+    }
+
+    val bgAlpha by animateFloatAsState(
+        targetValue = if (revealed) 1f else 0f,
+        animationSpec = tween(500),
+        label = "reunionBg"
+    )
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF121212))
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .graphicsLayer { alpha = bgAlpha }
+            .background(Color.Black)
     ) {
-        Spacer(Modifier.height(24.dp))
+        val scrollState = androidx.compose.foundation.rememberScrollState()
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(horizontal = 16.dp, vertical = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "ALL MATCHED",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Black,
+                fontFamily = FontFamily.Monospace,
+                color = Color.White,
+                letterSpacing = 4.sp,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
 
-        // Header
-        Text(
-            text = "MEMORY",
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Black,
-            fontFamily = FontFamily.Monospace,
-            color = Color.White,
-            letterSpacing = 6.sp
-        )
+            pairs.forEachIndexed { pairIdx, pair ->
+                val slideIn by animateFloatAsState(
+                    targetValue = if (revealed) 0f else 1f,
+                    animationSpec = tween(
+                        durationMillis = 400,
+                        delayMillis = pairIdx * 60,
+                        easing = FastOutSlowInEasing
+                    ),
+                    label = "slide$pairIdx"
+                )
 
-        Text(
-            text = "$matchedCount / $totalPairs pairs found",
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
-            color = Color.White.copy(alpha = 0.5f),
-            modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
-        )
-
-        // 4u00d75 grid
-        val cols = 4
-        val rows = 5
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            (0 until rows).forEach { row ->
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer { translationX = slideIn * 300f },
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    (0 until cols).forEach { col ->
-                        val idx = row * cols + col
-                        if (idx < cards.size) {
-                            val card = cards[idx]
-                            val isFaceUp = flipped.contains(idx) || matched.contains(idx)
-                            val isMatched = matched.contains(idx)
-                            PexesoCardCell(
-                                card = card,
-                                isFaceUp = isFaceUp,
-                                isMatched = isMatched,
-                                onClick = { onCardFlip(idx) },
-                                modifier = Modifier.weight(1f)
-                            )
-                        } else {
-                            Spacer(modifier = Modifier.weight(1f))
+                    pair.forEach { card ->
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .aspectRatio(0.7f)
+                                .background(card.color),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (card.imageRes != null) {
+                                androidx.compose.foundation.Image(
+                                    painter = painterResource(id = card.imageRes),
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                Text(
+                                    text = card.symbol,
+                                    fontSize = 22.sp,
+                                    color = Color.White,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
                         }
                     }
                 }
@@ -818,6 +1113,7 @@ private fun PexesoCardCell(
     card: PexesoCard,
     isFaceUp: Boolean,
     isMatched: Boolean,
+    isEnlarged: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -841,35 +1137,39 @@ private fun PexesoCardCell(
                 rotationY = rotation
                 cameraDistance = 12f * density
             }
-            .clip(RoundedCornerShape(8.dp))
             .background(if (rotation <= 90f) card.color else Color(0xFF2A2A2A))
             .border(
                 1.5.dp,
                 if (isMatched) Color.White.copy(alpha = 0.3f)
                 else if (isFaceUp) card.color
                 else Color(0xFF444444),
-                RoundedCornerShape(8.dp)
+                shape = RectangleShape
             )
-            .then(if (!isFaceUp && !isMatched) Modifier.pointerInput(Unit) {
-                detectDragGestures { _, _ -> } // consume to prevent parent scroll
-            } else Modifier)
-            .then(if (!isMatched) Modifier
-                .pointerInput(card.id) {
-                    detectDragGestures(
-                        onDragStart = { onClick() },
-                        onDrag = { _, _ -> }
-                    )
-                } else Modifier),
+            .zIndex(if (isEnlarged) 5f else 1f)
+            .then(
+                if (!isMatched) Modifier.pointerInput(card.id, isFaceUp) {
+                    detectTapGestures(onTap = { if (!isFaceUp) onClick() })
+                } else Modifier
+            ),
         contentAlignment = Alignment.Center
     ) {
         if (rotation <= 90f) {
-            // Face up: show symbol
-            Text(
-                text = card.symbol,
-                fontSize = 28.sp,
-                color = Color.White,
-                textAlign = TextAlign.Center
-            )
+            // Face up: show ad image if assigned, otherwise fallback symbol
+            if (card.imageRes != null) {
+                androidx.compose.foundation.Image(
+                    painter = painterResource(id = card.imageRes),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Text(
+                    text = card.symbol,
+                    fontSize = 28.sp,
+                    color = Color.White,
+                    textAlign = TextAlign.Center
+                )
+            }
         } else {
             // Face down: card back u2014 retro hatched pattern
             CardBack()

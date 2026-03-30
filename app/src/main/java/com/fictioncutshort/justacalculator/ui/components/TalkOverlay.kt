@@ -12,11 +12,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.tooling.preview.PreviewParameter
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fictioncutshort.justacalculator.util.AccentOrange
+import com.fictioncutshort.justacalculator.util.CalculatorDisplayFont
+import com.fictioncutshort.justacalculator.util.DarkText
 import com.fictioncutshort.justacalculator.util.RetroCream
 
 @Composable
@@ -31,43 +31,33 @@ fun TalkOverlay(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFF1a1a1a))  // Dark background
+            .background(RetroCream)
+            .statusBarsPadding()
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Add space at top to push message down
-            Spacer(modifier = Modifier.height(80.dp))
-            // Message display area at top (like calculator display)
-            Box(
+            // Message — no background box, calculator digital font
+            Text(
+                text = message,
+                color = DarkText,
+                fontSize = 18.sp,
+                fontFamily = CalculatorDisplayFont,
+                textAlign = TextAlign.Center,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp)
-                    .background(Color(0xFF2a2a2a), shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
-                    .padding(16.dp)
-            ) {
-                Text(
-                    text = message,
-                    color = RetroCream,
-                    fontSize = 18.sp,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
+                    .padding(horizontal = 24.dp, vertical = 24.dp)
+            )
 
             Spacer(modifier = Modifier.weight(1f))
 
-
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            // Round "Talk" button
+            // Round "Talk" button — orange like mute button
             Box(
                 modifier = Modifier
                     .size(150.dp)
                     .clip(CircleShape)
-                    .background(if (isHolding) AccentOrange else Color(0xFF4a4a4a))
+                    .background(if (isHolding) Color(0xFFBF6010) else AccentOrange)
                     .pointerInput(Unit) {
                         detectTapGestures(
                             onPress = {
@@ -83,9 +73,9 @@ fun TalkOverlay(
             ) {
                 Text(
                     text = "TALK",
-                    color = if (isHolding) Color.Black else RetroCream,
+                    color = Color.White,
                     fontSize = 24.sp,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                    fontFamily = CalculatorDisplayFont
                 )
             }
 
