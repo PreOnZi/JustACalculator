@@ -37,6 +37,9 @@ data class CalculatorState(
     /** Timestamp when timeout ends (calculator ignores input until then) */
     val timeoutUntil: Long = 0L,
 
+    /** If set (>= 0), auto-jump to this step when timeoutUntil expires */
+    val timeoutReturnStep: Int = -1,
+
     /** Timestamp when silent treatment ends (step 60 decline path) */
     val silentUntil: Long = 0L,
 // for mute button stopping the story
@@ -219,16 +222,16 @@ data class CalculatorState(
     /** Current button to click (e.g., "7", "+") */
     val whackAMoleTarget: String = "",
 
-    /** Buttons successfully clicked */
+    /** Number of successful hits */
     val whackAMoleScore: Int = 0,
 
-    /** Consecutive timeouts (misses) */
+    /** Consecutive misses (button disappeared without being clicked) */
     val whackAMoleMisses: Int = 0,
 
-    /** Wrong button clicks */
+    /** Wrong button clicks while a target is active */
     val whackAMoleWrongClicks: Int = 0,
 
-    /** Total errors (misses + wrong clicks) - 5 = game over */
+    /** Total errors across all types */
     val whackAMoleTotalErrors: Int = 0,
 
     /** Current round: 1 = first (15 hits), 2 = second (10 hits, faster) */

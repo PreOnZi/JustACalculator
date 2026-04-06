@@ -11,7 +11,11 @@ import android.view.MotionEvent
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,6 +25,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -98,23 +105,101 @@ private val DEBRIS_FP_L = listOf(
     floatArrayOf(500f,  520f, 430f, 46f),
 )
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DOOR INTERACTION — entry order, riddle data, proximity
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Required entry order — building 6 is visited twice
+private val ENTRY_ORDER = listOf(5, 3, 7, 1, 9, 6, 8, 2, 6)
+
+// Sentinel for the RAD / "mute" button door
+private const val RAD_DIGIT = -1
+
+private data class DoorInfo(val digit: Int, val cx: Float, val cz: Float, val face: Int)
+
+// Portrait-mode door positions (face: 0=S 1=N 2=E 3=W).
+// Chosen so no two adjacent buildings have facing doors.
+private val DOOR_INFOS = listOf(
+    DoorInfo(7, -300f, -200f, 3),  // W
+    DoorInfo(8, -100f, -200f, 1),  // N
+    DoorInfo(9,  100f, -200f, 2),  // E
+    DoorInfo(4, -300f,    0f, 0),  // S
+    DoorInfo(5, -100f,    0f, 2),  // E
+    DoorInfo(6,  100f,    0f, 1),  // N
+    DoorInfo(1, -300f,  200f, 2),  // E
+    DoorInfo(2, -100f,  200f, 1),  // N
+    DoorInfo(3,  100f,  200f, 3),  // W
+)
+// Landscape: same doors, buildings shifted +500 in X
+private val DOOR_INFOS_L = DOOR_INFOS.map { DoorInfo(it.digit, it.cx + 500f, it.cz, it.face) }
+
+// World-space point in front of a door (where player stands to trigger it)
+private fun doorApproachPos(d: DoorInfo): Pair<Float, Float> {
+    val mx = BW_V + 18f
+    val mz = BD_V + 18f
+    return when (d.face) {
+        0    -> Pair(d.cx, d.cz + mz)    // South door — approach from south
+        1    -> Pair(d.cx, d.cz - mz)    // North door — approach from north
+        2    -> Pair(d.cx + mx, d.cz)    // East door  — approach from east
+        else -> Pair(d.cx - mx, d.cz)    // West door  — approach from west
+    }
+}
+
+private enum class AnswerType { EXACT, OPEN, TIME_24H, YWDHMS }
+
+private data class Riddle(
+    val question: String,
+    val type: AnswerType,
+    val answer: String = "",       // expected string for EXACT type
+    val prefix: String = "",       // display prefix, e.g. "£"
+    val allowMinus: Boolean = false
+)
+
+private val DOOR_RIDDLES: Map<Int, Riddle> = mapOf(
+    1         to Riddle("When was the battle of Anjar?",
+                        AnswerType.EXACT, "1623", allowMinus = true),
+    2         to Riddle("Did you really read everything about me?\nDo you know your privacy?",
+                        AnswerType.EXACT, "113"),
+    3         to Riddle("There is an image in the store that hasn't made sense until now...",
+                        AnswerType.EXACT, "047"),
+    4         to Riddle("What is the time? In 24.", AnswerType.TIME_24H),
+    5         to Riddle("How many buildings are there?", AnswerType.EXACT, "21"),
+    6         to Riddle("How much do you think life is worth?", AnswerType.OPEN, prefix = "£"),
+    7         to Riddle("Back to the store.\nFor the sentence that doesn't quite fit...",
+                        AnswerType.EXACT, "0101"),
+    8         to Riddle("But if your credit score is under?!", AnswerType.EXACT, "600"),
+    9         to Riddle("How much time do we have left?", AnswerType.YWDHMS),
+    RAD_DIGIT to Riddle("From 1 to 10, how would you rate your stay in the city?",
+                        AnswerType.OPEN)
+)
+
 @Composable
 fun CalculatorCityView(modifier: Modifier = Modifier) {
 
     val renderer = remember { CityGLRenderer() }
     val context  = LocalContext.current
     val configuration = LocalConfiguration.current
-    val isLandscape   = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    // Mutable state so the game-loop coroutine always reads the current orientation
+    var isLandscape by remember { mutableStateOf(configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) }
+    SideEffect { isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE }
 
-    // Intro animation
-    val intro = remember { Animatable(0f) }
-    var introDone by remember { mutableStateOf(false) }
+    // Persist intro completion so it doesn't replay on rotation / remount
+    val cityPrefs = remember { context.getSharedPreferences("calc_city", android.content.Context.MODE_PRIVATE) }
+    val introAlreadyDone = remember { cityPrefs.getBoolean("intro_done", false) }
+    val intro = remember { Animatable(if (introAlreadyDone) 1f else 0f) }
+    var introDone by remember { mutableStateOf(introAlreadyDone) }
     LaunchedEffect(Unit) {
-        delay(500)
-        intro.animateTo(1f, tween(6000, easing = CubicBezierEasing(0.22f, 0f, 0.08f, 1f)))
-        renderer.buildingHeightScale = 2f
-        renderer.needsRebuild = true
-        introDone = true
+        if (!introDone) {
+            delay(500)
+            intro.animateTo(1f, tween(6000, easing = CubicBezierEasing(0.22f, 0f, 0.08f, 1f)))
+            renderer.buildingHeightScale = 2f
+            renderer.needsRebuild = true
+            introDone = true
+            cityPrefs.edit().putBoolean("intro_done", true).apply()
+        } else {
+            renderer.buildingHeightScale = 2f
+            renderer.needsRebuild = true
+        }
     }
 
     // Camera / player state (camera IS the player — first-person)
@@ -133,16 +218,64 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
     var flashAlpha by remember { mutableStateOf(0f) }
 
     var lavaShift  by remember { mutableStateOf(0f) }
-    var aerialBlend by remember { mutableStateOf(1f) }
+    var aerialBlend by remember { mutableStateOf(if (introAlreadyDone) 0f else 1f) }
+
+    // ── Door interaction state ────────────────────────────────────────────────
+    var doorPromptDigit  by remember { mutableStateOf<Int?>(null) }   // "Enter X?" dialog
+    var riddleDigit      by remember { mutableStateOf<Int?>(null) }   // riddle dialog
+    var riddleInput      by remember { mutableStateOf("") }
+    var entryProgress    by remember { mutableIntStateOf(0) }
+    // Per-door cooldown after "NO" — prevents immediate re-trigger
+    var doorCooldownDigit by remember { mutableStateOf<Int?>(null) }
+
+    // ── Building 1 minigame + bridge ──────────────────────────────────────────
+    val prefs = cityPrefs   // alias — same SharedPreferences instance
+    var towerDefenseCompleted by remember { mutableStateOf(prefs.getBoolean("td_b1_done", false)) }
+    var showTowerDefense by remember { mutableStateOf(false) }
+    var bridgePieces     by remember { mutableIntStateOf(0) }
+    var forceAerial      by remember { mutableStateOf(false) }
+
+    // Sync green door on first composition if already completed
+    LaunchedEffect(towerDefenseCompleted) {
+        if (towerDefenseCompleted) {
+            renderer.b1DoorGreen = true
+            renderer.needsRebuild = true
+        }
+    }
+
+    // Hold aerial view for 5 s after a building is completed
+    LaunchedEffect(forceAerial) {
+        if (forceAerial) {
+            delay(5000)
+            forceAerial = false
+        }
+    }
 
     // Fade aerial look → first-person over 2 s after intro ends
     LaunchedEffect(introDone) {
         if (introDone) {
-            repeat(120) {
-                delay(16)
-                aerialBlend = 1f - (it + 1f) / 120f
-                renderer.aerialBlend = aerialBlend
+            if (!introAlreadyDone) {
+                // Normal slow fade only on first ever entry
+                repeat(120) {
+                    delay(16)
+                    aerialBlend = 1f - (it + 1f) / 120f
+                    renderer.aerialBlend = aerialBlend
+                }
+            } else {
+                aerialBlend = 0f
+                renderer.aerialBlend = 0f
             }
+        }
+    }
+
+    // Keep renderer in sync with orientation; teleport player to safe start for new layout
+    LaunchedEffect(isLandscape) {
+        renderer.isLandscape = isLandscape
+        renderer.needsRebuild = true
+        if (introDone) {
+            pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
+            pZ = if (isLandscape) PLAYER_START_Z_L else PLAYER_START_Z
+            camYaw = 0f
         }
     }
 
@@ -156,6 +289,19 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
 
             if (introDone) {
                 renderer.fov = 82f
+
+                // ── Forced aerial pan (after building completion) ─────────────
+                if (forceAerial) {
+                    renderer.aerialMode = true
+                    renderer.fov        = 86f
+                    renderer.camX       = if (isLandscape) 150f else 0f
+                    renderer.camY       = if (isLandscape) 1100f else 1300f
+                    renderer.camZ       = if (isLandscape) 50f else -420f
+                    renderer.camPitch   = -90f
+                    renderer.introLookZ = renderer.camZ
+                    renderer.useLookAt  = false
+                    continue
+                }
 
                 // Yaw from joystick X; no pitch control (camera stays level)
                 camYaw += joyX * 3.0f
@@ -231,6 +377,31 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     pZ = if (isLandscape) PLAYER_START_Z_L else PLAYER_START_Z
                     camYaw = 0f
                     inLava = false
+                }
+
+                // ── Door proximity detection ──────────────────────────────────
+                if (doorPromptDigit == null && riddleDigit == null) {
+                    val infos = if (isLandscape) DOOR_INFOS_L else DOOR_INFOS
+
+                    // Any digit building triggers on approach
+                    for (door in infos) {
+                        val (ax, az) = doorApproachPos(door)
+                        val dsq = (pX - ax) * (pX - ax) + (pZ - az) * (pZ - az)
+                        if (doorCooldownDigit == door.digit && dsq > 70f * 70f) doorCooldownDigit = null
+                        if (dsq < 45f * 45f && doorCooldownDigit != door.digit) {
+                            val b1Done = door.digit == 1 && prefs.getBoolean("td_b1_done", false)
+                            if (!b1Done) doorPromptDigit = door.digit
+                            break
+                        }
+                    }
+
+                    // RAD button (portrait: inside lava zone; landscape: behind wall through gap)
+                    val rbx = if (isLandscape) -350f else 0f
+                    val rbz = if (isLandscape) -100f else -1150f
+                    val radDoorZ = rbz + 88f + 18f   // south face of cylinder + approach margin
+                    val rdSq = (pX - rbx) * (pX - rbx) + (pZ - radDoorZ) * (pZ - radDoorZ)
+                    if (doorCooldownDigit == RAD_DIGIT && rdSq > 70f * 70f) doorCooldownDigit = null
+                    if (rdSq < 45f * 45f && doorCooldownDigit != RAD_DIGIT) doorPromptDigit = RAD_DIGIT
                 }
 
                 // ── Camera: blend from intro orbit → first-person ─────────────
@@ -336,7 +507,7 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
             modifier = Modifier.fillMaxSize()
         )
 
-        if (introDone) {
+        if (introDone && !showTowerDefense && !forceAerial) {
             val screenW   = configuration.screenWidthDp
             val joySize   = (screenW * 0.30f).dp.coerceIn(110.dp, 160.dp)
 
@@ -360,6 +531,71 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color(0xFFFF2200).copy(alpha = flashAlpha))
+            )
+        }
+
+        // ── "Enter X?" prompt ─────────────────────────────────────────────────
+        if (!showTowerDefense && !forceAerial) {
+            doorPromptDigit?.let { digit ->
+                DoorPromptDialog(
+                    digit = digit,
+                    onYes = {
+                        doorPromptDigit = null
+                        riddleInput = ""
+                        riddleDigit = digit
+                    },
+                    onNo  = {
+                        doorCooldownDigit = digit
+                        doorPromptDigit = null
+                    }
+                )
+            }
+
+            // ── Riddle dialog ─────────────────────────────────────────────────
+            riddleDigit?.let { digit ->
+                val riddle = DOOR_RIDDLES[digit] ?: return@let
+                key(digit) {
+                    RiddleDialog(
+                        riddle        = riddle,
+                        digit         = digit,
+                        input         = riddleInput,
+                        onInputChange = { riddleInput = it },
+                        onSubmit      = {
+                            riddleDigit = null
+                            riddleInput = ""
+                            when {
+                                digit == 1 -> showTowerDefense = true   // launch minigame
+                                digit != RAD_DIGIT -> entryProgress++
+                            }
+                        },
+                        onDismiss     = {
+                            riddleDigit = null
+                            riddleInput = ""
+                        }
+                    )
+                }
+            }
+        }
+
+        // ── Building 1 tower-defense minigame ─────────────────────────────────
+        if (showTowerDefense) {
+            TowerDefenseGame(
+                onComplete = {
+                    showTowerDefense = false
+                    entryProgress++
+                    bridgePieces = (bridgePieces + 1).coerceAtMost(9)
+                    renderer.bridgePieces = bridgePieces
+                    towerDefenseCompleted = true
+                    prefs.edit().putBoolean("td_b1_done", true).apply()
+                    renderer.b1DoorGreen = true
+                    renderer.needsRebuild = true
+                    doorCooldownDigit = 1  // suppress immediate re-trigger on return
+                    // Teleport player back to start
+                    pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
+                    pZ = if (isLandscape) PLAYER_START_Z_L else PLAYER_START_Z
+                    camYaw = 0f
+                    forceAerial = true
+                }
             )
         }
     }
@@ -402,6 +638,343 @@ fun CityJoystick(modifier: Modifier = Modifier, joyDp: Dp = 114.dp, onJoy: (x: F
             val kx = cx + sx * or * 0.52f; val ky = cy + sy * or * 0.52f
             drawCircle(Color.White.copy(alpha = 0.50f), or * 0.36f, Offset(kx, ky))
             drawCircle(Color.White.copy(alpha = 0.75f), or * 0.36f, Offset(kx, ky), style = Stroke(1.4f))
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOOR PROMPT DIALOG
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun DoorPromptDialog(digit: Int, onYes: () -> Unit, onNo: () -> Unit) {
+    val label = if (digit == RAD_DIGIT) "MUTE" else digit.toString()
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.75f))
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ) { /* consume touches */ },
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .background(Color(0xFF111111), shape = RoundedCornerShape(4.dp))
+                .border(1.dp, Color(0xFF33FF66), shape = RoundedCornerShape(4.dp))
+                .padding(horizontal = 40.dp, vertical = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                ">>> ENTER [$label] ?",
+                color = Color(0xFF33FF66),
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                CityDialogButton("[ YES ]", Color(0xFFFF6600), onYes)
+                CityDialogButton("[ NO  ]", Color(0xFF2A2A2A), onNo)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CityDialogButton(label: String, bg: Color, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .background(bg, shape = RoundedCornerShape(3.dp))
+            .border(1.dp, Color(0xFF444444), shape = RoundedCornerShape(3.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 28.dp, vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, color = Color(0xFFEEEEEE), fontSize = 15.sp,
+            fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RIDDLE DIALOG
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun RiddleDialog(
+    riddle: Riddle,
+    digit: Int,
+    input: String,
+    onInputChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var wrongFlash by remember { mutableStateOf(false) }
+    val ywdState   = remember { mutableStateListOf("", "", "", "", "", "", "") }
+    var ywdActive  by remember { mutableIntStateOf(0) }
+
+    // Format digits as HH:MM for TIME_24H display
+    val timeDigits  = if (riddle.type == AnswerType.TIME_24H) input.filter { it.isDigit() }.take(4) else ""
+    val timeDisplay = when {
+        riddle.type != AnswerType.TIME_24H -> ""
+        timeDigits.length <= 2 -> timeDigits.padEnd(2, '_') + ":__"
+        else -> timeDigits.take(2) + ":" + timeDigits.drop(2).padEnd(2, '_')
+    }
+
+    fun handleKey(key: String) {
+        wrongFlash = false
+        when (riddle.type) {
+            AnswerType.YWDHMS -> {
+                if (key == "DEL") {
+                    ywdState[ywdActive] = ywdState[ywdActive].dropLast(1)
+                } else {
+                    if (ywdState[ywdActive].length < 5) ywdState[ywdActive] += key
+                }
+            }
+            AnswerType.TIME_24H -> {
+                val d = input.filter { it.isDigit() }
+                if (key == "DEL") onInputChange(d.dropLast(1))
+                else if (d.length < 4) onInputChange(d + key)
+            }
+            else -> {
+                when (key) {
+                    "DEL" -> onInputChange(input.dropLast(1))
+                    "-"   -> if (input.isEmpty()) onInputChange("-")
+                    else  -> onInputChange(input + key)
+                }
+            }
+        }
+    }
+
+    fun handleSubmit() {
+        when (riddle.type) {
+            AnswerType.EXACT -> {
+                if (input == riddle.answer) onSubmit()
+                else wrongFlash = true
+            }
+            AnswerType.TIME_24H -> {
+                if (input.filter { it.isDigit() }.length >= 4) onSubmit()
+                else wrongFlash = true
+            }
+            AnswerType.OPEN,
+            AnswerType.YWDHMS -> onSubmit()
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.72f))
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ) { /* consume */ },
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .background(Color(0xFF111111), shape = RoundedCornerShape(4.dp))
+                .border(1.dp, Color(0xFF33AA55), shape = RoundedCornerShape(4.dp))
+                .padding(20.dp)
+                .widthIn(min = 280.dp, max = 360.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Dismiss button
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Box(
+                    modifier = Modifier
+                        .clickable { onDismiss() }
+                        .padding(4.dp)
+                ) {
+                    Text("[X]", color = Color(0xFF55AA55), fontSize = 14.sp,
+                        fontFamily = FontFamily.Monospace)
+                }
+            }
+
+            // Question text — amber, like LCD backlight
+            Text(
+                riddle.question,
+                color = Color(0xFFFFCC44),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Normal,
+                fontFamily = FontFamily.Monospace,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            // Input area
+            when (riddle.type) {
+                AnswerType.YWDHMS -> {
+                    val unitLabels = listOf("Y", "M", "W", "D", "H", "m", "S")
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Row(horizontalArrangement = Arrangement.Center) {
+                            unitLabels.take(4).forEachIndexed { i, lbl ->
+                                YWDBox(lbl, ywdState[i], i == ywdActive) { ywdActive = i }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.Center) {
+                            unitLabels.drop(4).forEachIndexed { i, lbl ->
+                                YWDBox(lbl, ywdState[i + 4], i + 4 == ywdActive) { ywdActive = i + 4 }
+                            }
+                        }
+                    }
+                }
+                AnswerType.TIME_24H -> {
+                    Box(
+                        modifier = Modifier
+                            .background(Color(0xFF0D1A0D), shape = RoundedCornerShape(3.dp))
+                            .border(1.dp, Color(0xFF226633), shape = RoundedCornerShape(3.dp))
+                            .padding(horizontal = 28.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            timeDisplay,
+                            color = Color(0xFF33FF66),
+                            fontSize = 32.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = 4.sp
+                        )
+                    }
+                }
+                else -> {
+                    val displayed = buildString {
+                        if (riddle.prefix.isNotEmpty()) append(riddle.prefix).append(" ")
+                        append(if (input.isEmpty()) "" else input)
+                        append("_")
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF0D1A0D), shape = RoundedCornerShape(3.dp))
+                            .border(1.dp, Color(0xFF226633), shape = RoundedCornerShape(3.dp))
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            displayed,
+                            color = Color(0xFF33FF66),
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                    if (wrongFlash) {
+                        Text(
+                            "ERR: INCORRECT",
+                            color = Color(0xFFFF3300),
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(top = 5.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            MiniKeyboard(allowMinus = riddle.allowMinus, onKey = ::handleKey)
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ENTER / submit — orange like a calculator = key
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFFF6600), shape = RoundedCornerShape(3.dp))
+                    .clickable { handleSubmit() }
+                    .padding(vertical = 13.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("[ ENTER ]", color = Color.White, fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+            }
+        }
+    }
+}
+
+// ── YWDHMS input box ──────────────────────────────────────────────────────────
+
+@Composable
+private fun YWDBox(label: String, value: String, active: Boolean, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .padding(3.dp)
+            .clickable { onClick() },
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(label, color = Color(0xFF55AA55), fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace)
+        Box(
+            modifier = Modifier
+                .size(width = 38.dp, height = 38.dp)
+                .background(
+                    if (active) Color(0xFF0D2010) else Color(0xFF0A150A),
+                    shape = RoundedCornerShape(2.dp)
+                )
+                .border(
+                    width = if (active) 1.5.dp else 0.5.dp,
+                    color = if (active) Color(0xFF33FF66) else Color(0xFF224422),
+                    shape = RoundedCornerShape(2.dp)
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                value,
+                color = Color(0xFF33FF66),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+// ── Mini numeric keyboard ─────────────────────────────────────────────────────
+
+@Composable
+private fun MiniKeyboard(allowMinus: Boolean, onKey: (String) -> Unit) {
+    val rows = listOf(
+        listOf("7", "8", "9"),
+        listOf("4", "5", "6"),
+        listOf("1", "2", "3"),
+        listOf(if (allowMinus) "-" else "", "0", "⌫"),
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        for (row in rows) {
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                for (key in row) {
+                    if (key.isEmpty()) {
+                        Spacer(modifier = Modifier.size(width = 54.dp, height = 46.dp))
+                    } else {
+                        val isDelete = key == "⌫"
+                        Box(
+                            modifier = Modifier
+                                .size(width = 54.dp, height = 46.dp)
+                                .background(
+                                    if (isDelete) Color(0xFF2A1500) else Color(0xFF222222),
+                                    shape = RoundedCornerShape(3.dp)
+                                )
+                                .border(1.dp,
+                                    if (isDelete) Color(0xFF884400) else Color(0xFF333333),
+                                    shape = RoundedCornerShape(3.dp))
+                                .clickable { onKey(if (isDelete) "DEL" else key) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                key,
+                                color = if (isDelete) Color(0xFFFF6633) else Color(0xFFCCCCCC),
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

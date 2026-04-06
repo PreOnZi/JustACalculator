@@ -52,6 +52,8 @@ class CityGLRenderer : GLSurfaceView.Renderer {
     @Volatile var needsRebuild = false
     @Volatile var radAngle    = 0f      // degrees — drives the spinning arc ring on the RAD button
     @Volatile var isLandscape = false   // true when device is in landscape orientation
+    @Volatile var bridgePieces = 0      // 0-9: each completed building adds one bridge segment
+    @Volatile var b1DoorGreen = false   // true after Building 1 TD is completed
 
     private var prog=0; private var aPos=0; private var uMVP=0
     private var uCol=0; private var uFog=0; private var uAerial=0
@@ -122,16 +124,17 @@ class CityGLRenderer : GLSurfaceView.Renderer {
     private val BH = 280f
 
     // Interactive buildings: [digit, cx, cz, height, doorFace (0=S,1=N,2=E,3=W)]
+    // Door faces chosen so no two adjacent buildings ever face each other across a street.
     private val BUILDINGS = arrayOf(
-        floatArrayOf(7f, C1, RB, BH*1.08f, 2f),
-        floatArrayOf(8f, C2, RB, BH*1.32f, 3f),
-        floatArrayOf(9f, C3, RB, BH*0.92f, 0f),
-        floatArrayOf(4f, C1, RC, BH*1.02f, 0f),
-        floatArrayOf(5f, C2, RC, BH*1.25f, 1f),
-        floatArrayOf(6f, C3, RC, BH*0.96f, 2f),
-        floatArrayOf(1f, C1, RD, BH*1.05f, 1f),
-        floatArrayOf(2f, C2, RD, BH*1.14f, 3f),
-        floatArrayOf(3f, C3, RD, BH*0.89f, 0f),
+        floatArrayOf(7f, C1, RB, BH*1.08f, 3f),  // W
+        floatArrayOf(8f, C2, RB, BH*1.32f, 1f),  // N
+        floatArrayOf(9f, C3, RB, BH*0.92f, 2f),  // E
+        floatArrayOf(4f, C1, RC, BH*1.02f, 0f),  // S
+        floatArrayOf(5f, C2, RC, BH*1.25f, 2f),  // E
+        floatArrayOf(6f, C3, RC, BH*0.96f, 1f),  // N
+        floatArrayOf(1f, C1, RD, BH*1.05f, 2f),  // E
+        floatArrayOf(2f, C2, RD, BH*1.14f, 1f),  // N
+        floatArrayOf(3f, C3, RD, BH*0.89f, 3f),  // W
     )
 
     private val FUNCTION_BLDGS = arrayOf(
@@ -258,6 +261,7 @@ class CityGLRenderer : GLSurfaceView.Renderer {
         addGreenNorth()
         addRadButton(80f * buildingHeightScale)
         addDebris()
+        if (bridgePieces > 0) addBridge(bridgePieces)
     }
 
     // ── Landscape scene (horizontal orientation) ──────────────────────────────
@@ -272,15 +276,15 @@ class CityGLRenderer : GLSurfaceView.Renderer {
         val lRA = -400f; val lRB = -200f; val lRC = 0f; val lRD = 200f; val lRE = 400f
 
         val lBUILDINGS = arrayOf(
-            floatArrayOf(7f, lC1, lRB, BH*1.08f, 2f),
-            floatArrayOf(8f, lC2, lRB, BH*1.32f, 3f),
-            floatArrayOf(9f, lC3, lRB, BH*0.92f, 0f),
-            floatArrayOf(4f, lC1, lRC, BH*1.02f, 0f),
-            floatArrayOf(5f, lC2, lRC, BH*1.25f, 1f),
-            floatArrayOf(6f, lC3, lRC, BH*0.96f, 2f),
-            floatArrayOf(1f, lC1, lRD, BH*1.05f, 1f),
-            floatArrayOf(2f, lC2, lRD, BH*1.14f, 3f),
-            floatArrayOf(3f, lC3, lRD, BH*0.89f, 0f),
+            floatArrayOf(7f, lC1, lRB, BH*1.08f, 3f),  // W
+            floatArrayOf(8f, lC2, lRB, BH*1.32f, 1f),  // N
+            floatArrayOf(9f, lC3, lRB, BH*0.92f, 2f),  // E
+            floatArrayOf(4f, lC1, lRC, BH*1.02f, 0f),  // S
+            floatArrayOf(5f, lC2, lRC, BH*1.25f, 2f),  // E
+            floatArrayOf(6f, lC3, lRC, BH*0.96f, 1f),  // N
+            floatArrayOf(1f, lC1, lRD, BH*1.05f, 2f),  // E
+            floatArrayOf(2f, lC2, lRD, BH*1.14f, 1f),  // N
+            floatArrayOf(3f, lC3, lRD, BH*0.89f, 3f),  // W
         )
         val lFUNCTION_BLDGS = arrayOf(
             floatArrayOf(lC1, lRA, BH*0.65f),
@@ -505,13 +509,16 @@ class CityGLRenderer : GLSurfaceView.Renderer {
 
 
 
-        // Door recess — dark purple void
+        // Door recess — dark purple void (LCD green for Building 1 after TD complete)
         val dw = BW*0.30f; val dh = h*0.18f
+        val dr = if (label == "1" && b1DoorGreen) 0.10f else 0.12f
+        val dg = if (label == "1" && b1DoorGreen) 0.55f else 0.06f
+        val db = if (label == "1" && b1DoorGreen) 0.22f else 0.18f
         when (door) {
-            0 -> addQ(cx-dw,0f,z1+0.5f, cx+dw,0f,z1+0.5f, cx+dw,dh,z1+0.5f, cx-dw,dh,z1+0.5f, 0.12f,0.06f,0.18f, fog=0.05f)
-            1 -> addQ(cx+dw,0f,z0-0.5f, cx-dw,0f,z0-0.5f, cx-dw,dh,z0-0.5f, cx+dw,dh,z0-0.5f, 0.12f,0.06f,0.18f, fog=0.05f)
-            2 -> addQ(x1+0.5f,0f,cz+dw, x1+0.5f,0f,cz-dw, x1+0.5f,dh,cz-dw, x1+0.5f,dh,cz+dw, 0.12f,0.06f,0.18f, fog=0.05f)
-            3 -> addQ(x0-0.5f,0f,cz-dw, x0-0.5f,0f,cz+dw, x0-0.5f,dh,cz+dw, x0-0.5f,dh,cz-dw, 0.12f,0.06f,0.18f, fog=0.05f)
+            0 -> addQ(cx-dw,0f,z1+0.5f, cx+dw,0f,z1+0.5f, cx+dw,dh,z1+0.5f, cx-dw,dh,z1+0.5f, dr,dg,db, fog=0.05f)
+            1 -> addQ(cx+dw,0f,z0-0.5f, cx-dw,0f,z0-0.5f, cx-dw,dh,z0-0.5f, cx+dw,dh,z0-0.5f, dr,dg,db, fog=0.05f)
+            2 -> addQ(x1+0.5f,0f,cz+dw, x1+0.5f,0f,cz-dw, x1+0.5f,dh,cz-dw, x1+0.5f,dh,cz+dw, dr,dg,db, fog=0.05f)
+            3 -> addQ(x0-0.5f,0f,cz-dw, x0-0.5f,0f,cz+dw, x0-0.5f,dh,cz+dw, x0-0.5f,dh,cz-dw, dr,dg,db, fog=0.05f)
         }
 
         // Roof: dark brown background + 7-segment digit
@@ -1044,6 +1051,43 @@ class CityGLRenderer : GLSurfaceView.Renderer {
         val doorZ = bz + r0 + 0.5f   // just outside the south pole of the cylinder
         addQ(bx-dw, 0f, doorZ,  bx+dw, 0f, doorZ,  bx+dw, dh, doorZ,  bx-dw, dh, doorZ,
              0.12f, 0.06f, 0.18f, fog=fog)
+    }
+
+    // ── Bridge — one segment per completed building, spanning lava ───────────
+    // Starts at LAVA_S (just south of north buildings) and extends north in 9 pieces.
+    private fun addBridge(pieces: Int) {
+        val bw        = 22f          // half-width
+        val yDeck     = 5f           // deck height (above lava surface)
+        val yRail     = yDeck + 12f  // railing top
+        val zStart    = LAVA_S       // -512 (south edge of lava)
+        val pieceLen  = abs(LAVA_N - LAVA_S) / 9f  // ~40 units each
+
+        for (i in 0 until pieces.coerceAtMost(9)) {
+            val z0 = zStart - i * pieceLen          // more negative = further north
+            val z1 = z0 - pieceLen
+            val fog = 0.04f
+
+            // Deck (warm wood placeholder)
+            addQ(-bw, yDeck, z0,  bw, yDeck, z0,  bw, yDeck, z1,  -bw, yDeck, z1,
+                 0.68f, 0.52f, 0.28f, fog = fog)
+
+            // Left side beam
+            addQ(-bw, yDeck, z0,  -bw, yDeck, z1,  -bw, yRail, z1,  -bw, yRail, z0,
+                 0.50f, 0.38f, 0.18f, fog = fog)
+            // Right side beam
+            addQ(bw, yDeck, z1,  bw, yDeck, z0,  bw, yRail, z0,  bw, yRail, z1,
+                 0.50f, 0.38f, 0.18f, fog = fog)
+
+            // Plank seam lines across the deck
+            val planks = 5
+            for (p in 0..planks) {
+                val zp = z0 - (pieceLen / planks) * p
+                addL(-bw, yDeck + 0.8f, zp,  bw, yDeck + 0.8f, zp,  0.35f, 0.25f, 0.10f)
+            }
+            // Railing lines along the sides
+            addL(-bw, yRail, z0,  -bw, yRail, z1,  0.35f, 0.25f, 0.10f)
+            addL( bw, yRail, z0,   bw, yRail, z1,  0.35f, 0.25f, 0.10f)
+        }
     }
 
     private fun addTri(x0:Float,y0:Float,z0:Float, x1:Float,y1:Float,z1:Float,

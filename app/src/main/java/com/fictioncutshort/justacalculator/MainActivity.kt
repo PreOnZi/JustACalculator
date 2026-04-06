@@ -78,7 +78,6 @@ import com.fictioncutshort.justacalculator.logic.DormancyPhase
 import com.fictioncutshort.justacalculator.logic.EffectsController
 import com.fictioncutshort.justacalculator.ui.screens.DormancyOverlay
 import com.fictioncutshort.justacalculator.ui.screens.AdCardStack
-import com.fictioncutshort.justacalculator.ui.screens.CalculatorCityView
 import com.fictioncutshort.justacalculator.ui.components.CalculatorButton
 import com.fictioncutshort.justacalculator.ui.components.CameraPreview
 import com.fictioncutshort.justacalculator.ui.components.ConsoleWindow
@@ -1277,17 +1276,15 @@ fun CalculatorScreen() {
     // Calculator is still rendered underneath in outline-only mode
     // (PortraitCalculatorContent / LandscapeCalculatorLayout check showAdCards).
     if (current.showAdCards) {
-        if (current.showCityDirectly) {
-            CalculatorCityView(modifier = Modifier.fillMaxSize())
-        } else {
-            AdCardStack(
-                onPexesoComplete = {
-                    CalculatorActions.clearShowAdCards()
-                    CalculatorActions.clearInCityPhase()
-                    state.value = state.value.copy(showAdCards = false, showCityDirectly = false)
-                }
-            )
-        }
+        AdCardStack(
+            onPexesoComplete = {
+                CalculatorActions.clearShowAdCards()
+                CalculatorActions.clearInCityPhase()
+                state.value = state.value.copy(showAdCards = false, showCityDirectly = false)
+            },
+            startAtCity = current.showCityDirectly,
+            onCityEntered = { CalculatorActions.saveInCityPhase() }
+        )
     }
     // ========== DORMANCY OVERLAY ==========
     // Rendered above all other overlays. Full-screen TV static + RAD buttons

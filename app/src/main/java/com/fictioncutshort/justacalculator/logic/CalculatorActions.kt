@@ -683,6 +683,7 @@ object CalculatorActions {
         android.util.Log.d("JustACalc", "persistTermsAccepted called, prefs null? ${prefs == null}")
     }
     private var prefs: android.content.SharedPreferences? = null
+    private var appContext: android.content.Context? = null
 
     // Live state reference survives activity recreation (config changes)
     // since CalculatorActions is a singleton object in the app process
@@ -702,6 +703,7 @@ object CalculatorActions {
     private const val RESET_CLICKS = 10
 
     fun init(context: Context) {
+        appContext = context.applicationContext
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         android.util.Log.d("JustACalc", "init called, prefs initialized: ${prefs != null}, termsAccepted: ${loadTermsAccepted()}")
     }
@@ -1363,6 +1365,9 @@ object CalculatorActions {
         prefs?.edit {
             clear()
         }
+        // Clear city-specific prefs (intro state, TD completion)
+        appContext?.getSharedPreferences("calc_city", android.content.Context.MODE_PRIVATE)
+            ?.edit()?.clear()?.apply()
 
         // Reset to initial state
         state.value = CalculatorState(

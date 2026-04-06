@@ -107,6 +107,8 @@ fun CountdownTimerHandler(state: MutableState<CalculatorState>) {
  *
  * When the calculator gives the user a timeout (for wrong answers or
  * declining too much), this checks when the timeout expires.
+ * If the step has a timeoutReturnStep set, auto-jumps back to that step
+ * once the timer fires — preventing soft-locks on "ending" steps.
  */
 @Composable
 fun TimeoutHandler(state: MutableState<CalculatorState>) {
@@ -117,7 +119,29 @@ fun TimeoutHandler(state: MutableState<CalculatorState>) {
             val remainingTime = currentState.timeoutUntil - System.currentTimeMillis()
             if (remainingTime > 0) {
                 delay(remainingTime)
-                // Timeout expired - could show a message here
+            }
+            // Timeout expired - if there's a return step, jump to it
+            val returnStep = state.value.timeoutReturnStep
+            if (returnStep >= 0 && state.value.timeoutUntil > 0 &&
+                System.currentTimeMillis() >= state.value.timeoutUntil) {
+                val returnConfig = getStepConfig(returnStep)
+                state.value = state.value.copy(
+                    timeoutUntil = 0L,
+                    timeoutReturnStep = -1,
+                    conversationStep = returnStep,
+                    inConversation = true,
+                    awaitingNumber = returnConfig.awaitingNumber,
+                    awaitingChoice = returnConfig.awaitingChoice,
+                    validChoices = returnConfig.validChoices,
+                    expectedNumber = returnConfig.expectedNumber,
+                    isEnteringAnswer = false,
+                    message = "",
+                    fullMessage = returnConfig.promptMessage,
+                    isTyping = returnConfig.promptMessage.isNotEmpty()
+                )
+            } else {
+                // Old behaviour: just clear the timeout
+                state.value = state.value.copy(timeoutUntil = 0L)
             }
         }
     }

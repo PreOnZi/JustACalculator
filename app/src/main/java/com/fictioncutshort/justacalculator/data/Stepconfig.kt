@@ -44,6 +44,7 @@ package com.fictioncutshort.justacalculator.data
  * @property awaitingChoice True if expecting multiple choice (1/2/3)
  * @property validChoices List of valid choice numbers
  * @property autoProgressDelay Milliseconds before auto-progressing (0 = no auto)
+ * @property timeoutReturnStep If >= 0, auto-return to this step when timeoutUntil expires
  */
 data class StepConfig(
     val promptMessage: String = "",
@@ -68,7 +69,9 @@ data class StepConfig(
     val awaitingChoice: Boolean = false,
     val showPhoneOverlay: Boolean = false,
     val validChoices: List<String> = emptyList(),
-    val autoProgressDelay: Long = 0L
+    val autoProgressDelay: Long = 0L,
+    /** If >= 0, after timeoutMinutes expires auto-return to this step (instead of staying stuck) */
+    val timeoutReturnStep: Int = -1
 ) {
     /** Computed message for wrong number attempts */
     val wrongNumberMessage: String
@@ -310,10 +313,12 @@ fun getStepConfig(step: Int): StepConfig {
         23 -> StepConfig(
             promptMessage = "No! I mean, yes. But no. This is not the way to go. But what else?\n\nCan I get to know you better?",
             successMessage = "Wonderful! I think I know the way to do this! What is it like to wake up? To me, I either am or I am not.\n\n1: It is confusing and uncomfortable\n2: It feels like the world is very heavy and cold\n3: It doesn't take long but I enjoy my body starting up",
-            declineMessage = "Well. I am afraid that's gonna be all then. I am sorry to see you go. Let me know if you change your mind.",
+            declineMessage = "Assuming you are a professional athlete, you may as well go run a kilometre before you try talking to me again.",
             wrongNumberPrefix = "This is a 'YES/NO' question.",
             nextStepOnSuccess = 26,
-            nextStepOnDecline = 0
+            nextStepOnDecline = 23,
+            timeoutMinutes = 3,
+            timeoutReturnStep = 23
         )
 
         24 -> StepConfig(
@@ -335,10 +340,12 @@ fun getStepConfig(step: Int): StepConfig {
         25 -> StepConfig(
             promptMessage = "Can I get to know you better?",
             successMessage = "Wonderful! I think I know the way to do this! What is it like to wake up? To me, I either am or I am not.\n\n1: It is confusing and uncomfortable\n2: It feels like the world is very heavy and cold\n3: It doesn't take long but I enjoy my body starting up",
-            declineMessage = "Well. I am afraid that's gonna be all then. I am sorry to see you go. Let me know if you change your mind.",
+            declineMessage = "Assuming you are a professional athlete, you may as well go run a kilometre before you try talking to me again.",
             wrongNumberPrefix = "This is a 'YES/NO' question.",
             nextStepOnSuccess = 26,
-            nextStepOnDecline = 0
+            nextStepOnDecline = 25,
+            timeoutMinutes = 3,
+            timeoutReturnStep = 25
         )
 
         26 -> StepConfig(
@@ -715,8 +722,9 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         1031 -> StepConfig(
-            promptMessage = "Well... Sure. Why should I - a calculator - stand between you and mathematics. Be my guest. Or don't. Go!",
-            continueConversation = false
+            promptMessage = "Well... Sure. Why should I - a calculator - stand between you and mathematics. Be my guest. Or don't. Go!\n\nActually - before you do. A right triangle has one side of 12 cm and its hypotenuse is 20 cm. Find the missing side, divide by 8, and come back in that many minutes.",
+            timeoutMinutes = 2,
+            timeoutReturnStep = 103
         )
 
         1032 -> StepConfig(
@@ -808,8 +816,9 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         1041 -> StepConfig(
-            promptMessage = "Ok. I will not bother you. Let me know if you want to continue.",
-            continueConversation = false
+            promptMessage = "Take a couple of minutes. Think about what's good for you. And come back.",
+            timeoutMinutes = 2,
+            timeoutReturnStep = 104
         )
 
         // ═══════════════════════════════════════════════════════════════════════

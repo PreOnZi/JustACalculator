@@ -12,8 +12,8 @@ android {
         applicationId = "com.fictioncutshort.justacalculator"
         minSdk = 24
         targetSdk = 36
-        versionCode = 7
-        versionName = "1.7"
+        versionCode = 9
+        versionName = "1.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

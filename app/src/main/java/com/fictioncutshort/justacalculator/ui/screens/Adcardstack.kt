@@ -36,6 +36,10 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.sqrt
+import kotlin.math.PI
 import kotlin.math.sign
 import kotlin.random.Random
 
@@ -62,7 +66,9 @@ import kotlin.random.Random
 enum class AdCardPhase {
     CARDS,       // Swiping through the 5 top cards
     COLLAPSING,  // Stack falls after card 5 swiped
-    PEXESO       // Memory game
+    PEXESO,      // Memory game
+    TUNNEL,      // Warp-through transition → city
+    CITY         // 3-D calculator cityscape
 }
 
 // u2500u2500 Card data u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
@@ -224,7 +230,9 @@ private fun DamagedCalculatorBackground(modifier: Modifier = Modifier) {
 
 @Composable
 fun AdCardStack(
-    onPexesoComplete: () -> Unit,   // Called when pexeso is won u2014 story continues
+    onPexesoComplete: () -> Unit,   // Reserved for when the full experience ends
+    startAtCity: Boolean = false,
+    onCityEntered: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -233,7 +241,12 @@ fun AdCardStack(
     // u2500u2500 State u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
     val cards = remember { buildCardStack() }
     var swipedCount by remember { mutableIntStateOf(0) }       // 0-5 cards swiped
-    var phase by remember { mutableStateOf(AdCardPhase.CARDS) }
+    var phase by remember { mutableStateOf(if (startAtCity) AdCardPhase.CITY else AdCardPhase.CARDS) }
+
+    // Persist city phase on entry
+    LaunchedEffect(phase) {
+        if (phase == AdCardPhase.CITY) onCityEntered()
+    }
 
     // Hint nudge: auto-nudges the top card left/right after 2s idle
     var hintNudgeTarget by remember { mutableFloatStateOf(0f) }
@@ -353,6 +366,12 @@ fun AdCardStack(
                     AdCardPhase.COLLAPSING -> CollapseIntoGridAnimation(
                         adCards = cards, pexesoCards = pexesoCards,
                     )
+                    AdCardPhase.TUNNEL -> WarpTunnel(
+                        onComplete = { phase = AdCardPhase.CITY }
+                    )
+                    AdCardPhase.CITY -> CalculatorCityView(
+                        modifier = Modifier.fillMaxSize()
+                    )
                     AdCardPhase.PEXESO -> Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -363,7 +382,7 @@ fun AdCardStack(
                             flipped = pexesoFlipped, matched = pexesoMatched,
                             enlargedIdx = pexesoEnlarged,
                             showReunion = showPairReunion,
-                            onReunionComplete = onPexesoComplete,
+                            onReunionComplete = { phase = AdCardPhase.TUNNEL },
                             onCardFlip = { idx ->
                                 if (pexesoLocked) return@PexesoGame
                                 if (pexesoMatched.contains(idx) || pexesoFlipped.contains(idx)) return@PexesoGame
@@ -389,6 +408,95 @@ fun AdCardStack(
                     }
                 }
             }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WARP TUNNEL TRANSITION
+// Plays between pexeso end and city start:
+//   1. White flash (simulates zooming through the card grid)
+//   2. Dark tunnel with warp stars rushing outward (~2.5 s)
+//   3. City fades in underneath as tunnel fades out (~0.7 s)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun WarpTunnel(onComplete: () -> Unit) {
+    var tick by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) { while (true) { delay(16L); tick++ } }
+
+    // Timing (ticks × 16 ms each)
+    val FLASH_END  = 22L   // 352 ms — white flash fades out
+    val WARP_END   = 185L  // 2.96 s — warp stars end, city starts fading in
+    val TOTAL      = 230L  // 3.68 s — tunnel gone, city fully visible
+
+    LaunchedEffect(Unit) {
+        delay(TOTAL * 16L + 80L)
+        onComplete()
+    }
+
+    val flashAlpha = if (tick <= FLASH_END)
+        1f - tick.toFloat() / FLASH_END.toFloat() else 0f
+
+    val cityAlpha = if (tick > WARP_END)
+        ((tick - WARP_END).toFloat() / (TOTAL - WARP_END).toFloat()).coerceIn(0f, 1f) else 0f
+
+    val tunnelAlpha = (1f - cityAlpha).coerceIn(0f, 1f)
+
+    // Pre-warm the city compositor a little before it becomes visible
+    var showCity by remember { mutableStateOf(false) }
+    LaunchedEffect(tick) { if (tick >= WARP_END - 15L && !showCity) showCity = true }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+
+        // ── City underneath (fades in as tunnel fades out) ────────────────────
+        if (showCity) {
+            CalculatorCityView(
+                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = cityAlpha }
+            )
+        }
+
+        // ── Warp-star canvas ──────────────────────────────────────────────────
+        if (tunnelAlpha > 0.01f) {
+            androidx.compose.foundation.Canvas(
+                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = tunnelAlpha }
+            ) {
+                drawRect(Color.Black)
+
+                val cx = size.width  / 2f
+                val cy = size.height / 2f
+                val maxR = sqrt(cx * cx + cy * cy)
+                val warpTick = (tick - FLASH_END).coerceAtLeast(0L)
+
+                for (i in 0 until 200) {
+                    val rng   = Random(i * 7919L)
+                    val angle = rng.nextFloat() * 2f * PI.toFloat()
+                    val speed = rng.nextFloat() * 13f + 5f
+                    val off   = rng.nextFloat() * maxR * 0.35f
+
+                    val r     = (off + warpTick * speed) % maxR
+                    val rPrev = (off + (warpTick - 1).coerceAtLeast(0L) * speed) % maxR
+                    if (r < rPrev) continue   // wrapped — skip this frame
+
+                    val cosA = cos(angle.toDouble()).toFloat()
+                    val sinA = sin(angle.toDouble()).toFloat()
+                    val brightness = (r / maxR).coerceIn(0.1f, 1f)
+
+                    drawLine(
+                        color = Color(1f, 1f, brightness * 0.6f + 0.4f, brightness * 0.8f + 0.2f),
+                        start = androidx.compose.ui.geometry.Offset(cx + rPrev * cosA, cy + rPrev * sinA),
+                        end   = androidx.compose.ui.geometry.Offset(cx + r * cosA, cy + r * sinA),
+                        strokeWidth = brightness * 3.5f + 0.5f
+                    )
+                }
+            }
+        }
+
+        // ── White flash (zoom-through feel) ───────────────────────────────────
+        if (flashAlpha > 0.01f) {
+            Box(modifier = Modifier
+                .fillMaxSize()
+                .background(Color.White.copy(alpha = flashAlpha.coerceIn(0f, 1f))))
         }
     }
 }
