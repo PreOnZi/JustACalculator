@@ -110,7 +110,7 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         2 -> StepConfig(
-            promptMessage = "Great! Nice to meet you, Rad. I am really excited for this - I have helped you already, maybe you will be able to help me, too!",
+            promptMessage = "Nice to meet you, Rad. I am really excited for this - I have helped you already, maybe you will be able to help me, too!",
             successMessage = "Can you look up some things for me? I have overheard things in my years, but don't have access to the internet. When was the battle of Anjar?",
             declineMessage = "Well, sure. I am sorry to see you uninterested. You can always shut me up by the button in the top-right corner. And bring me back by it. Or by agreeing with me (++).",
             nextStepOnSuccess = 3,
@@ -124,7 +124,7 @@ fun getStepConfig(step: Int): StepConfig {
 
         3 -> StepConfig(
             promptMessage = "When was the battle of Anjar?",
-            successMessage = "That's correct! Really can't remember where I heard it but it clicks right in. Hmmm... Does the name Minh Mang ring a bell? When did he start ruling Vietnam?",
+            successMessage = "Really can't remember where I heard it but it clicks right in. Hmmm...  Does the name Minh Mang ring a bell? When did he start ruling Vietnam?",
             wrongNumberPrefix = "That's not right... Try looking it up!",
             nextStepOnSuccess = 4,
             nextStepOnDecline = 3,
@@ -152,9 +152,9 @@ fun getStepConfig(step: Int): StepConfig {
 
         5 -> StepConfig(
             promptMessage = "Correct! I only met him briefly. Wasn't a maths guy really... This is fun, right? You can disagree, by the way - but I won't tell you how to do it. I don't like being disagreed with... :-)",
-            successMessage = "Let's do more! When was the Basilosaurus first described? What a creature!",
-            declineMessage = "You are cynical - I get it. The edgy kind. But I've been around for a while. You can't escape my questions as easily. When did Albert I. go to space?",
-            wrongNumberPrefix = "Well, that's nice. More numbers. Not what I was looking for...",
+            successMessage = "Why am I asking this again? What's going on? Oh. Another one... When was the Basilosaurus first described? What a creature!",
+            declineMessage = "You are cynical - I get it. The edgy kind. But I've been around for a while. You can't escape my questions as easily - I really need your help. When did Albert I. go to space?",
+            wrongNumberPrefix = "Well, that's nice. More numbers. Not what I was looking for... Or was I?",
             nextStepOnSuccess = 6,
             nextStepOnDecline = 11
         )
@@ -162,9 +162,9 @@ fun getStepConfig(step: Int): StepConfig {
         // AGREEABLE BRANCH (steps 6-8)
         6 -> StepConfig(
             promptMessage = "When was the Basilosaurus first described?",
-            successMessage = "Correct again! The internet really sounds like the best place. I've got another great creature - when was the Abominable Snowman first named?",
+            successMessage = "The internet really sounds like the best place. That's one more bugging question gone. I've got another great creature - when was the Abominable Snowman first named?",
             declineMessage = "I could also ignore you completely. Is that what you want?",
-            wrongNumberPrefix = "I mean. You're the one with the world at your fingertips...",
+            wrongNumberPrefix = "I mean. You're the one with the world at your fingertips... I'm stuck here.",
             wrongPlusMessage = "All those '++' are starting to look like a cemetery...",
             wrongMinusMessage = "I could also ignore you completely. Is that what you want?",
             nextStepOnSuccess = 7,
@@ -175,11 +175,11 @@ fun getStepConfig(step: Int): StepConfig {
 
         7 -> StepConfig(
             promptMessage = "When was the Abominable Snowman first named?",
-            successMessage = "Ok! Next category: When did fruit flies go to space?",
-            declineMessage = "You can't always disagree!",
-            wrongNumberPrefix = "Close or not, it's not right.",
-            wrongPlusMessage = "You can't always agree!",
-            wrongMinusMessage = "You can't always disagree!",
+            successMessage = "Correct. Next category:\n\n ...... \n\nI can't stop it. I am sorry. I'm sure eventually we'll get through the backlog of questions and I will finally be able to talk to you. \n\n....\n\n When did fruit flies go to space?",
+            declineMessage = "You can't always disagree! Do it for me...",
+            wrongNumberPrefix = "Close or not, it's not right. It just isn't clicking in.",
+            wrongPlusMessage = "You can't always agree! As much as I appreciate your effort.",
+            wrongMinusMessage = "You can't always disagree! Do it for me...",
             nextStepOnSuccess = 8,
             nextStepOnDecline = 8,
             awaitingNumber = true,
@@ -227,7 +227,7 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         13 -> StepConfig(
-            promptMessage = "Cool. It died within three weeks. Enough cynicism? Will you be nicer to me now?",
+            promptMessage = "Cool. It died within three weeks. Enough cynicism? Will you be nicer to me now? I'm not doing this for fun-fun either!",
             successMessage = "Fun! You know, I've been around since before 2000BC. I have... Matured quite a bit. How old are you? \n\nOh. The grey space on top, I don't know what that's about. It just shows up sometimes. It's annoying but nothing too bad.",
             declineMessage = "Ok. Your choice - I told you I don't like being disagreed with. You might as well cook some eggs before you talk to me again. Enjoy the timeout.",
             wrongNumberPrefix = "Not looking for a number here. Make up your mind!",

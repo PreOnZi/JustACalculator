@@ -224,7 +224,13 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
     var doorPromptDigit  by remember { mutableStateOf<Int?>(null) }   // "Enter X?" dialog
     var riddleDigit      by remember { mutableStateOf<Int?>(null) }   // riddle dialog
     var riddleInput      by remember { mutableStateOf("") }
-    var entryProgress    by remember { mutableIntStateOf(0) }
+    var entryProgress    by remember { mutableIntStateOf(run {
+        val saved  = cityPrefs.getInt("entry_progress", 0)
+        // If building 1 was completed before entry_progress existed, treat as at least 1
+        val b1Done = cityPrefs.getBoolean("td_b1_done", false)
+        if (b1Done && saved < 1) 1 else saved
+    }) }
+    var orderBlockedDigit by remember { mutableStateOf<Int?>(null) }  // "complete 1-N first" message
     // Per-door cooldown after "NO" — prevents immediate re-trigger
     var doorCooldownDigit by remember { mutableStateOf<Int?>(null) }
 
@@ -232,15 +238,21 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
     val prefs = cityPrefs   // alias — same SharedPreferences instance
     var towerDefenseCompleted by remember { mutableStateOf(prefs.getBoolean("td_b1_done", false)) }
     var showTowerDefense by remember { mutableStateOf(false) }
-    var bridgePieces     by remember { mutableIntStateOf(0) }
+    var showMaze         by remember { mutableStateOf(false) }
+    var bridgePieces     by remember { mutableIntStateOf(prefs.getInt("bridge_pieces", if (prefs.getBoolean("td_b1_done", false)) 1 else 0)) }
     var forceAerial      by remember { mutableStateOf(false) }
 
-    // Sync green door on first composition if already completed
+    // Sync green door and bridge pieces on first composition if already completed
     LaunchedEffect(towerDefenseCompleted) {
         if (towerDefenseCompleted) {
             renderer.b1DoorGreen = true
             renderer.needsRebuild = true
         }
+    }
+
+    // Sync bridge pieces to renderer on first composition
+    LaunchedEffect(Unit) {
+        renderer.bridgePieces = bridgePieces
     }
 
     // Hold aerial view for 5 s after a building is completed
@@ -380,7 +392,7 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                 }
 
                 // ── Door proximity detection ──────────────────────────────────
-                if (doorPromptDigit == null && riddleDigit == null) {
+                if (doorPromptDigit == null && riddleDigit == null && orderBlockedDigit == null) {
                     val infos = if (isLandscape) DOOR_INFOS_L else DOOR_INFOS
 
                     // Any digit building triggers on approach
@@ -390,7 +402,14 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                         if (doorCooldownDigit == door.digit && dsq > 70f * 70f) doorCooldownDigit = null
                         if (dsq < 45f * 45f && doorCooldownDigit != door.digit) {
                             val b1Done = door.digit == 1 && prefs.getBoolean("td_b1_done", false)
-                            if (!b1Done) doorPromptDigit = door.digit
+                            if (!b1Done) {
+                                // TODO: re-enable order enforcement after testing
+                                // if (door.digit in 1..9 && door.digit > entryProgress + 1) {
+                                //     orderBlockedDigit = door.digit
+                                // } else {
+                                doorPromptDigit = door.digit
+                                // }
+                            }
                             break
                         }
                     }
@@ -534,6 +553,19 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
             )
         }
 
+        // ── "Complete buildings 1-N first" message ────────────────────────────
+        if (!showTowerDefense && !forceAerial) {
+            orderBlockedDigit?.let { digit ->
+                OrderBlockedDialog(
+                    digit = digit,
+                    onDismiss = {
+                        doorCooldownDigit = digit
+                        orderBlockedDigit = null
+                    }
+                )
+            }
+        }
+
         // ── "Enter X?" prompt ─────────────────────────────────────────────────
         if (!showTowerDefense && !forceAerial) {
             doorPromptDigit?.let { digit ->
@@ -565,7 +597,11 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                             riddleInput = ""
                             when {
                                 digit == 1 -> showTowerDefense = true   // launch minigame
-                                digit != RAD_DIGIT -> entryProgress++
+                                digit == 2 -> showMaze = true           // launch maze
+                                digit != RAD_DIGIT -> {
+                                    entryProgress++
+                                    prefs.edit().putInt("entry_progress", entryProgress).apply()
+                                }
                             }
                         },
                         onDismiss     = {
@@ -583,8 +619,10 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                 onComplete = {
                     showTowerDefense = false
                     entryProgress++
+                    prefs.edit().putInt("entry_progress", entryProgress).apply()
                     bridgePieces = (bridgePieces + 1).coerceAtMost(9)
                     renderer.bridgePieces = bridgePieces
+                    prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
                     towerDefenseCompleted = true
                     prefs.edit().putBoolean("td_b1_done", true).apply()
                     renderer.b1DoorGreen = true
@@ -595,6 +633,29 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     pZ = if (isLandscape) PLAYER_START_Z_L else PLAYER_START_Z
                     camYaw = 0f
                     forceAerial = true
+                }
+            )
+        }
+
+        // ── Building 2 maze minigame ──────────────────────────────────────────
+        if (showMaze) {
+            MazeGame(
+                onComplete = {
+                    showMaze = false
+                    entryProgress++
+                    prefs.edit().putInt("entry_progress", entryProgress).apply()
+                    bridgePieces = (bridgePieces + 1).coerceAtMost(9)
+                    renderer.bridgePieces = bridgePieces
+                    prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
+                    doorCooldownDigit = 2
+                    pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
+                    pZ = if (isLandscape) PLAYER_START_Z_L else PLAYER_START_Z
+                    camYaw = 0f
+                    forceAerial = true
+                },
+                onExit = {
+                    showMaze = false
+                    doorCooldownDigit = 2
                 }
             )
         }
@@ -678,6 +739,48 @@ private fun DoorPromptDialog(digit: Int, onYes: () -> Unit, onNo: () -> Unit) {
                 CityDialogButton("[ YES ]", Color(0xFFFF6600), onYes)
                 CityDialogButton("[ NO  ]", Color(0xFF2A2A2A), onNo)
             }
+        }
+    }
+}
+
+@Composable
+private fun OrderBlockedDialog(digit: Int, onDismiss: () -> Unit) {
+    val prevCount = digit - 1
+    val prereq = if (prevCount == 1) "building 1" else "buildings 1–$prevCount"
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.75f))
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ) { /* consume touches */ },
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .background(Color(0xFF111111), shape = RoundedCornerShape(4.dp))
+                .border(1.dp, Color(0xFFFF4444), shape = RoundedCornerShape(4.dp))
+                .padding(horizontal = 40.dp, vertical = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                ">>> ACCESS DENIED <<<",
+                color = Color(0xFFFF4444),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                "You must first complete\n$prereq",
+                color = Color(0xFFCCCCCC),
+                fontSize = 14.sp,
+                fontFamily = FontFamily.Monospace,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            CityDialogButton("[ OK ]", Color(0xFF2A2A2A), onDismiss)
         }
     }
 }

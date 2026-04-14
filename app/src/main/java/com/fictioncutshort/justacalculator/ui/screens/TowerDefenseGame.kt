@@ -6,6 +6,7 @@ import android.media.AudioAttributes
 import android.media.SoundPool
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -498,7 +499,8 @@ private fun TDLevelScreen(
     }
 
     // ── Layout ────────────────────────────────────────────────────────────────
-    val brainFill = (def.lives - lives).toFloat() / def.lives.toFloat()
+    // Cumulative fill — never resets between waves or levels
+    val brainFill = (enemiesReached.toFloat() / 20f).coerceIn(0f, 1f)
     val isLandscape = LocalConfiguration.current.orientation ==
             android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
@@ -710,13 +712,14 @@ private fun TDTypeBtn(
     label: String, img: ImageBitmap, cost: Int,
     active: Boolean, onClick: () -> Unit
 ) {
-    val bg = if (active) Color(0xFF222222) else Color(0xFFDDDDDD)
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.pointerInput(Unit) { detectTapGestures { onClick() } }
     ) {
         Box(
-            Modifier.size(58.dp).background(bg, CircleShape),
+            Modifier.size(58.dp)
+                .background(Color.White, CircleShape)
+                .then(if (active) Modifier.border(3.dp, Color(0xFFFFCC00), CircleShape) else Modifier),
             contentAlignment = Alignment.Center
         ) {
             Canvas(Modifier.fillMaxSize()) {
@@ -729,9 +732,9 @@ private fun TDTypeBtn(
                     dstSize   = IntSize(hw * 2, hh * 2))
             }
         }
-        Text("\$$cost", color = if (active) Color(0xFF222222) else Color(0xFF666666),
+        Text("\$$cost", color = if (active) Color(0xFFFFCC00) else Color(0xFF888888),
             fontSize = 10.sp, textAlign = TextAlign.Center)
-        Text(label, color = if (active) Color(0xFF222222) else Color(0xFF888888),
+        Text(label, color = if (active) Color.White else Color(0xFF666666),
             fontSize = 9.sp, textAlign = TextAlign.Center)
     }
 }
