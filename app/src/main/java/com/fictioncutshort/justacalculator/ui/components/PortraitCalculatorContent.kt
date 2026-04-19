@@ -81,108 +81,73 @@ fun PortraitCalculatorContent(
             )
         }
 
-        // Main content column (display + buttons)
+        // Main content column
         Column(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.Bottom
         ) {
-            // Calculator number display OR Camera OR Browser
-            when {
-                current.cameraActive -> {
-                    CameraViewWithFloatingDisplay(
-                        displayText = displayText,
-                        dimensions = dimensions,
-                        lifecycleOwner = lifecycleOwner,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                    )
+            if (current.cameraActive) {
+                // Top quarter stays clear for the message/talk overlay.
+                // Camera fills the remaining three quarters above the keyboard area.
+                Spacer(Modifier.weight(1f))
+                CameraPreview(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(3f),
+                    lifecycleOwner = lifecycleOwner,
+                    useFrontCamera = current.cameraUseFrontCamera
+                )
+            } else {
+                // Normal display + keyboard
+                when {
+                    current.showBrowser -> {
+                        BrowserViewWithFloatingDisplay(
+                            displayText = displayText,
+                            browserSearchText = current.browserSearchText,
+                            browserShowWikipedia = current.browserShowWikipedia,
+                            browserShowError = current.browserShowError,
+                            dimensions = dimensions,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                        )
+                    }
+                    else -> {
+                        CalculatorLcdDisplay(
+                            displayText = displayText,
+                            operationHistory = current.operationHistory,
+                            isReadyForNewOperation = current.isReadyForNewOperation,
+                            invertedColors = current.invertedColors,
+                            dimensions = dimensions,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .padding(start = 8.dp, end = 8.dp, bottom = 16.dp)
+                        )
+                    }
                 }
-                current.showBrowser -> {
-                    BrowserViewWithFloatingDisplay(
-                        displayText = displayText,
-                        browserSearchText = current.browserSearchText,
-                        browserShowWikipedia = current.browserShowWikipedia,
-                        browserShowError = current.browserShowError,
-                        dimensions = dimensions,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                    )
-                }
-                else -> {
-                    // Normal LCD display
-                    CalculatorLcdDisplay(
-                        displayText = displayText,
-                        operationHistory = current.operationHistory,
-                        isReadyForNewOperation = current.isReadyForNewOperation,
-                        invertedColors = current.invertedColors,
-                        dimensions = dimensions,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .padding(start = 8.dp, end = 8.dp, bottom = 16.dp)
-                    )
-                }
+                RadButton(
+                    visible = current.radButtonVisible,
+                    allButtonsRad = current.allButtonsRad,
+                    dimensions = dimensions
+                )
+                CalculatorButtonGrid(
+                    buttonLayout = buttonLayout,
+                    dimensions = dimensions,
+                    shakeIntensity = currentShakeIntensity,
+                    invertedColors = current.invertedColors,
+                    minusButtonDamaged = current.minusButtonDamaged,
+                    minusButtonBroken = current.minusButtonBroken,
+                    flickeringButton = current.flickeringButton,
+                    darkButtons = current.darkButtons,
+                    allButtonsRad = current.allButtonsRad,
+                    rantMode = current.rantMode,
+                    onButtonClick = { symbol ->
+                        CalculatorActions.handleInput(state, symbol)
+                    }
+                )
             }
-
-            // RAD button (appears at certain story points)
-            RadButton(
-                visible = current.radButtonVisible,
-                allButtonsRad = current.allButtonsRad,
-                dimensions = dimensions
-            )
-
-            // Calculator buttons
-            CalculatorButtonGrid(
-                buttonLayout = buttonLayout,
-                dimensions = dimensions,
-                shakeIntensity = currentShakeIntensity,
-                invertedColors = current.invertedColors,
-                minusButtonDamaged = current.minusButtonDamaged,
-                minusButtonBroken = current.minusButtonBroken,
-                flickeringButton = current.flickeringButton,
-                darkButtons = current.darkButtons,
-                allButtonsRad = current.allButtonsRad,
-                rantMode = current.rantMode,
-                onButtonClick = { symbol ->
-                    CalculatorActions.handleInput(state, symbol)
-                }
-            )
         }
-    }
-}
-
-// ---
-// CAMERA VIEW COMPONENT
-// ---
-
-@Composable
-private fun CameraViewWithFloatingDisplay(
-    displayText: String,
-    dimensions: ResponsiveDimensions,
-    lifecycleOwner: LifecycleOwner,
-    modifier: Modifier = Modifier
-) {
-    // Calculate top padding based on screen height to leave room for messages
-    val topPadding = (dimensions.screenHeight.value * 0.22f).dp.coerceIn(120.dp, 200.dp)
-
-    Box(
-        modifier = modifier
-            .padding(top = topPadding, bottom = 8.dp)
-    ) {
-        CameraPreview(
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(12.dp)),
-            lifecycleOwner = lifecycleOwner
-        )
-
-        // Floating calculator display over camera
-        FloatingDisplay(
-            displayText = displayText,
-            modifier = Modifier.align(Alignment.BottomEnd)
-        )
     }
 }
 

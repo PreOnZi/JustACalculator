@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -239,6 +240,8 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
     var towerDefenseCompleted by remember { mutableStateOf(prefs.getBoolean("td_b1_done", false)) }
     var showTowerDefense by remember { mutableStateOf(false) }
     var showMaze         by remember { mutableStateOf(false) }
+    var showTankGame     by rememberSaveable { mutableStateOf(false) }
+    var tankGameCompleted by remember { mutableStateOf(prefs.getBoolean("td_b3_done", false)) }
     var bridgePieces     by remember { mutableIntStateOf(prefs.getInt("bridge_pieces", if (prefs.getBoolean("td_b1_done", false)) 1 else 0)) }
     var forceAerial      by remember { mutableStateOf(false) }
 
@@ -246,6 +249,12 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
     LaunchedEffect(towerDefenseCompleted) {
         if (towerDefenseCompleted) {
             renderer.b1DoorGreen = true
+            renderer.needsRebuild = true
+        }
+    }
+    LaunchedEffect(tankGameCompleted) {
+        if (tankGameCompleted) {
+            renderer.b3DoorGreen = true
             renderer.needsRebuild = true
         }
     }
@@ -598,6 +607,7 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                             when {
                                 digit == 1 -> showTowerDefense = true   // launch minigame
                                 digit == 2 -> showMaze = true           // launch maze
+                                digit == 3 -> showTankGame = true       // launch tank game
                                 digit != RAD_DIGIT -> {
                                     entryProgress++
                                     prefs.edit().putInt("entry_progress", entryProgress).apply()
@@ -647,6 +657,8 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     bridgePieces = (bridgePieces + 1).coerceAtMost(9)
                     renderer.bridgePieces = bridgePieces
                     prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
+                    renderer.b2DoorGreen = true
+                    renderer.needsRebuild = true
                     doorCooldownDigit = 2
                     pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
                     pZ = if (isLandscape) PLAYER_START_Z_L else PLAYER_START_Z
@@ -656,6 +668,33 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                 onExit = {
                     showMaze = false
                     doorCooldownDigit = 2
+                }
+            )
+        }
+
+        // ── Building 3 tank game ──────────────────────────────────────────────
+        if (showTankGame) {
+            TankGame(
+                onComplete = {
+                    showTankGame = false
+                    tankGameCompleted = true
+                    prefs.edit().putBoolean("td_b3_done", true).apply()
+                    entryProgress++
+                    prefs.edit().putInt("entry_progress", entryProgress).apply()
+                    bridgePieces = (bridgePieces + 1).coerceAtMost(9)
+                    renderer.bridgePieces = bridgePieces
+                    prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
+                    renderer.b3DoorGreen = true
+                    renderer.needsRebuild = true
+                    doorCooldownDigit = 3
+                    pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
+                    pZ = if (isLandscape) PLAYER_START_Z_L else PLAYER_START_Z
+                    camYaw = 0f
+                    forceAerial = true
+                },
+                onExit = {
+                    showTankGame = false
+                    doorCooldownDigit = 3
                 }
             )
         }

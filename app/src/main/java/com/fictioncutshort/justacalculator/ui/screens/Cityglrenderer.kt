@@ -54,6 +54,8 @@ class CityGLRenderer : GLSurfaceView.Renderer {
     @Volatile var isLandscape = false   // true when device is in landscape orientation
     @Volatile var bridgePieces = 0      // 0-9: each completed building adds one bridge segment
     @Volatile var b1DoorGreen = false   // true after Building 1 TD is completed
+    @Volatile var b2DoorGreen = false   // true after Building 2 maze is completed
+    @Volatile var b3DoorGreen = false   // true after Building 3 tank game is completed
 
     private var prog=0; private var aPos=0; private var uMVP=0
     private var uCol=0; private var uFog=0; private var uAerial=0
@@ -511,9 +513,10 @@ class CityGLRenderer : GLSurfaceView.Renderer {
 
         // Door recess — dark purple void (LCD green for Building 1 after TD complete)
         val dw = BW*0.30f; val dh = h*0.18f
-        val dr = if (label == "1" && b1DoorGreen) 0.10f else 0.12f
-        val dg = if (label == "1" && b1DoorGreen) 0.55f else 0.06f
-        val db = if (label == "1" && b1DoorGreen) 0.22f else 0.18f
+        val doorGreen = (label == "1" && b1DoorGreen) || (label == "2" && b2DoorGreen)
+        val dr = if (doorGreen) 0.10f else 0.12f
+        val dg = if (doorGreen) 0.55f else 0.06f
+        val db = if (doorGreen) 0.22f else 0.18f
         when (door) {
             0 -> addQ(cx-dw,0f,z1+0.5f, cx+dw,0f,z1+0.5f, cx+dw,dh,z1+0.5f, cx-dw,dh,z1+0.5f, dr,dg,db, fog=0.05f)
             1 -> addQ(cx+dw,0f,z0-0.5f, cx-dw,0f,z0-0.5f, cx-dw,dh,z0-0.5f, cx+dw,dh,z0-0.5f, dr,dg,db, fog=0.05f)

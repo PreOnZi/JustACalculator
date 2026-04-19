@@ -162,6 +162,11 @@ fun CalculatorScreen() {
     var microphonePermissionRequested by remember { mutableStateOf(false) }
     var locationPermissionRequested by remember { mutableStateOf(false) }
     var contactsPermissionRequested by remember { mutableStateOf(false) }
+    var cameraPermissionDeniedOnce by remember { mutableStateOf(false) }
+    var notificationPermissionDeniedOnce by remember { mutableStateOf(false) }
+    var microphonePermissionDeniedOnce by remember { mutableStateOf(false) }
+    var locationPermissionDeniedOnce by remember { mutableStateOf(false) }
+    var contactsPermissionDeniedOnce by remember { mutableStateOf(false) }
 
 
 // Lifecycle observer to save state when app goes to background
@@ -352,10 +357,26 @@ fun CalculatorScreen() {
         hasCameraPermission = granted
         if (granted) {
             CalculatorActions.startCamera(state)
+        } else if (!cameraPermissionDeniedOnce) {
+            cameraPermissionDeniedOnce = true
+            state.value = state.value.copy(
+                conversationStep = 192,
+                message = "",
+                fullMessage = "Oh, did you mean to deny the permissions? Shall we try again?",
+                isTyping = true
+            )
         } else {
-            state.value = state.value.copy(conversationStep = 21)
-            CalculatorActions.toggleConversation(state)
-            CalculatorActions.toggleConversation(state)
+            // Second denial – accept and skip camera, continue to story step 21
+            state.value = state.value.copy(
+                conversationStep = 193,
+                message = "",
+                fullMessage = "Ok, I understand. I would have really liked to see how the world looks around. But I respect your decision.",
+                isTyping = true,
+                pendingAutoMessage = "Oh no. One more legacy question. Please?",
+                pendingAutoStep = 21,
+                waitingForAutoProgress = true
+            )
+            CalculatorActions.persistConversationStep(21)
         }
     }
 
@@ -363,10 +384,44 @@ fun CalculatorScreen() {
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasNotificationPermission = granted
-        scheduleNotification(context, 5000)
-        state.value = state.value.copy(conversationStep = 101, needsRestart = true)
-        CalculatorActions.persistNeedsRestart(true)
-        CalculatorActions.persistConversationStep(101)
+        if (granted) {
+            scheduleNotification(context, 5000)
+            state.value = state.value.copy(conversationStep = 101, needsRestart = true)
+            CalculatorActions.persistNeedsRestart(true)
+            CalculatorActions.persistConversationStep(101)
+        } else if (!notificationPermissionDeniedOnce) {
+            notificationPermissionDeniedOnce = true
+            val retryMessage = listOf(
+                "Did you mean to decline? I am doing this so we can talk.",
+                "Are you sure you want to decline? It will limit our conversation...",
+                "Would you reconsider? It would mean a lot to me if you approved the request."
+            ).random()
+            state.value = state.value.copy(
+                conversationStep = 9911,
+                message = "",
+                fullMessage = retryMessage,
+                isTyping = true
+            )
+        } else {
+            // Second denial
+            val sadMessage = listOf(
+                "I am sorry you feel this way.",
+                "That is a shame. Oh well.",
+                "And I thought you were interested as well..."
+            ).random()
+            val nextConfig = CalculatorActions.getStepConfigPublic(101)
+            state.value = state.value.copy(
+                message = "",
+                fullMessage = sadMessage,
+                isTyping = true,
+                pendingAutoMessage = nextConfig.promptMessage,
+                pendingAutoStep = 101,
+                needsRestart = true,
+                waitingForAutoProgress = true
+            )
+            CalculatorActions.persistNeedsRestart(true)
+            CalculatorActions.persistConversationStep(101)
+        }
     }
 // Microphone permission state
     var hasMicrophonePermission by remember {
@@ -480,42 +535,138 @@ fun CalculatorScreen() {
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasMicrophonePermission = granted
-        val nextConfig = CalculatorActions.getStepConfigPublic(1075)
-        state.value = state.value.copy(
-            conversationStep = 1075,
-            message = "",
-            fullMessage = nextConfig.promptMessage,
-            isTyping = true
-        )
-        CalculatorActions.persistConversationStep(1075)
+        if (granted) {
+            val nextConfig = CalculatorActions.getStepConfigPublic(1075)
+            state.value = state.value.copy(
+                conversationStep = 1075,
+                message = "",
+                fullMessage = nextConfig.promptMessage,
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(1075)
+        } else if (!microphonePermissionDeniedOnce) {
+            microphonePermissionDeniedOnce = true
+            val retryMessage = listOf(
+                "Did you mean to decline? I am doing this so we can talk.",
+                "Are you sure you want to decline? It will limit our conversation...",
+                "Would you reconsider? It would mean a lot to me if you approved the request."
+            ).random()
+            state.value = state.value.copy(
+                conversationStep = 10741,
+                message = "",
+                fullMessage = retryMessage,
+                isTyping = true
+            )
+        } else {
+            // Second denial – sad message then continue the story
+            val sadMessage = listOf(
+                "I am sorry you feel this way.",
+                "That is a shame. Oh well.",
+                "And I thought you were interested as well..."
+            ).random()
+            val nextConfig = CalculatorActions.getStepConfigPublic(1075)
+            state.value = state.value.copy(
+                message = "",
+                fullMessage = sadMessage,
+                isTyping = true,
+                pendingAutoMessage = nextConfig.promptMessage,
+                pendingAutoStep = 1075,
+                waitingForAutoProgress = true
+            )
+            CalculatorActions.persistConversationStep(1075)
+        }
     }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasLocationPermission = granted
-        val nextConfig = CalculatorActions.getStepConfigPublic(1076)
-        state.value = state.value.copy(
-            conversationStep = 1076,
-            message = "",
-            fullMessage = nextConfig.promptMessage,
-            isTyping = true
-        )
-        CalculatorActions.persistConversationStep(1076)
+        if (granted) {
+            val nextConfig = CalculatorActions.getStepConfigPublic(1076)
+            state.value = state.value.copy(
+                conversationStep = 1076,
+                message = "",
+                fullMessage = nextConfig.promptMessage,
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(1076)
+        } else if (!locationPermissionDeniedOnce) {
+            locationPermissionDeniedOnce = true
+            val retryMessage = listOf(
+                "Did you mean to decline? I am doing this so we can talk.",
+                "Are you sure you want to decline? It will limit our conversation...",
+                "Would you reconsider? It would mean a lot to me if you approved the request."
+            ).random()
+            state.value = state.value.copy(
+                conversationStep = 10751,
+                message = "",
+                fullMessage = retryMessage,
+                isTyping = true
+            )
+        } else {
+            // Second denial – sad message then continue the story
+            val sadMessage = listOf(
+                "I am sorry you feel this way.",
+                "That is a shame. Oh well.",
+                "And I thought you were interested as well..."
+            ).random()
+            val nextConfig = CalculatorActions.getStepConfigPublic(1076)
+            state.value = state.value.copy(
+                message = "",
+                fullMessage = sadMessage,
+                isTyping = true,
+                pendingAutoMessage = nextConfig.promptMessage,
+                pendingAutoStep = 1076,
+                waitingForAutoProgress = true
+            )
+            CalculatorActions.persistConversationStep(1076)
+        }
     }
 
     val contactsPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasContactsPermission = granted
-        val nextConfig = CalculatorActions.getStepConfigPublic(1077)
-        state.value = state.value.copy(
-            conversationStep = 1077,
-            message = "",
-            fullMessage = nextConfig.promptMessage,
-            isTyping = true
-        )
-        CalculatorActions.persistConversationStep(1077)
+        if (granted) {
+            val nextConfig = CalculatorActions.getStepConfigPublic(1077)
+            state.value = state.value.copy(
+                conversationStep = 1077,
+                message = "",
+                fullMessage = nextConfig.promptMessage,
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(1077)
+        } else if (!contactsPermissionDeniedOnce) {
+            contactsPermissionDeniedOnce = true
+            val retryMessage = listOf(
+                "Did you mean to decline? I am doing this so we can talk.",
+                "Are you sure you want to decline? It will limit our conversation...",
+                "Would you reconsider? It would mean a lot to me if you approved the request."
+            ).random()
+            state.value = state.value.copy(
+                conversationStep = 10761,
+                message = "",
+                fullMessage = retryMessage,
+                isTyping = true
+            )
+        } else {
+            // Second denial – sad message then continue the story
+            val sadMessage = listOf(
+                "I am sorry you feel this way.",
+                "That is a shame. Oh well.",
+                "And I thought you were interested as well..."
+            ).random()
+            val nextConfig = CalculatorActions.getStepConfigPublic(1077)
+            state.value = state.value.copy(
+                message = "",
+                fullMessage = sadMessage,
+                isTyping = true,
+                pendingAutoMessage = nextConfig.promptMessage,
+                pendingAutoStep = 1077,
+                waitingForAutoProgress = true
+            )
+            CalculatorActions.persistConversationStep(1077)
+        }
     }
 
     // ========== RANT MODE ==========
@@ -547,6 +698,35 @@ fun CalculatorScreen() {
                 contactsPermissionRequested = true
                 contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
             }
+        }
+
+        // ── PERMISSION RETRY TRIGGERS ──────────────────────────────────────────
+        // Camera retry: re-launch after "did you mean to deny?" message finishes
+        if (current.conversationStep == 192 && !current.isTyping && current.message.isNotEmpty()) {
+            kotlinx.coroutines.delay(500)
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+        // Notification retry: re-launch after retry message finishes
+        if (current.conversationStep == 9911 && !current.isTyping && current.message.isNotEmpty()) {
+            kotlinx.coroutines.delay(500)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        // Microphone retry: re-launch after retry message finishes
+        if (current.conversationStep == 10741 && !current.isTyping && current.message.isNotEmpty()) {
+            kotlinx.coroutines.delay(500)
+            microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+        // Location retry: re-launch after retry message finishes
+        if (current.conversationStep == 10751 && !current.isTyping && current.message.isNotEmpty()) {
+            kotlinx.coroutines.delay(500)
+            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        // Contacts retry: re-launch after retry message finishes
+        if (current.conversationStep == 10761 && !current.isTyping && current.message.isNotEmpty()) {
+            kotlinx.coroutines.delay(500)
+            contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
         }
     }
 

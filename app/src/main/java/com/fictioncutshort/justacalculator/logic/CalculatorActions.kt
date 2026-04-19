@@ -36,7 +36,8 @@ object CalculatorActions {
     private const val PREF_DARK_BUTTONS = "dark_buttons"
     private const val MAX_DIGITS = 12
     private const val ABSURDLY_LARGE_THRESHOLD = 1_000_000_000_000.0
-    private const val CAMERA_TIMEOUT_MS = 8000L  // 8 seconds
+    private const val CAMERA_TIMEOUT_MS = 8000L  // 8 seconds total
+    private const val CAMERA_SWITCH_MS = 4000L   // Switch to front camera at 4 seconds
     private fun loadTermsAccepted(): Boolean {
         val result = prefs?.getBoolean(PREF_TERMS_ACCEPTED, false) ?: false
         android.util.Log.d("JustACalc", "loadTermsAccepted: $result, prefs null? ${prefs == null}")
@@ -1390,8 +1391,47 @@ object CalculatorActions {
         val current = state.value
         state.value = current.copy(
             cameraActive = true,
-            cameraTimerStart = System.currentTimeMillis()
+            cameraTimerStart = System.currentTimeMillis(),
+            cameraUseFrontCamera = false,
+            cameraHasSwitched = false
         )
+    }
+
+    /**
+     * Switch to front camera only (no message yet).
+     * Does NOT change cameraTimerStart so the monitoring coroutine is not cancelled.
+     * The "Oh, hi, Rad!" greeting is sent after a 1.5s pause by monitorCameraTimeout.
+     */
+    fun switchCameraToFront(state: MutableState<CalculatorState>) {
+        val current = state.value
+        state.value = current.copy(
+            cameraUseFrontCamera = true,
+            cameraHasSwitched = true
+        )
+    }
+
+    /**
+     * Show "Oh, hi, Rad!" greeting after camera switches to front.
+     */
+    fun showCameraGreeting(state: MutableState<CalculatorState>) {
+        val current = state.value
+        state.value = current.copy(
+            message = "",
+            fullMessage = "Oh, hi, Rad!",
+            isTyping = true
+        )
+    }
+
+    /**
+     * Check if camera has reached the mid-point for front-camera switch (4 seconds elapsed)
+     */
+    fun checkCameraMidpoint(state: MutableState<CalculatorState>): Boolean {
+        val current = state.value
+        if (current.cameraActive && current.cameraTimerStart > 0 && !current.cameraHasSwitched) {
+            val elapsed = System.currentTimeMillis() - current.cameraTimerStart
+            return elapsed >= CAMERA_SWITCH_MS
+        }
+        return false
     }
 
     /**

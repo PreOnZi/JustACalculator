@@ -105,6 +105,12 @@ data class CalculatorState(
     /** Timestamp when camera was opened (for timeout calculation) */
     val cameraTimerStart: Long = 0L,
 
+    /** True after the mid-point switch from rear to front camera */
+    val cameraUseFrontCamera: Boolean = false,
+
+    /** True once the mid-point camera switch has already happened (prevents re-triggering) */
+    val cameraHasSwitched: Boolean = false,
+
     // ═══════════════════════════════════════════════════════════════════════════
     // BROWSER ANIMATION - Fake browser/Wikipedia display
     // ═══════════════════════════════════════════════════════════════════════════

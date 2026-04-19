@@ -88,6 +88,13 @@ FictionCutShort
  */
 @RequiresApi(Build.VERSION_CODES.Q)
 private fun createSecretFileMediaStore(context: Context, content: String): Boolean {
+    // Bail out early if external storage isn't mounted — MediaStore inserts will
+    // silently fail or produce unreadable entries on unmounted volumes.
+    if (Environment.getExternalStorageState() != Environment.MEDIA_MOUNTED) {
+        Log.w(TAG, "External storage not mounted, skipping MediaStore attempt")
+        return createSecretFileFallback(context, content)
+    }
+
     val resolver = context.contentResolver
 
     // ── Step 1: Clean up any pending/stale entries we own ──────────────────
@@ -178,7 +185,32 @@ private fun createSecretFileMediaStore(context: Context, content: String): Boole
             Log.w(TAG, "IS_PENDING update failed (file may still be OK): ${e.message}")
         }
 
-        Log.d(TAG, "Secret file created successfully via MediaStore: $uri")
+        // Verify the entry is actually visible and non-empty by re-querying it.
+        // On some OEM devices the media scanner doesn't surface the file in the
+        // Downloads app even though the insert succeeded — returning false here
+        // lets the caller show the share-intent fallback instead.
+        val verifyProjection = arrayOf(MediaStore.Downloads._ID, MediaStore.Downloads.SIZE)
+        val verified = try {
+            resolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                verifyProjection,
+                "${MediaStore.Downloads._ID} = ?",
+                arrayOf(uri.lastPathSegment),
+                null
+            )?.use { cur ->
+                cur.moveToFirst() && cur.getLong(cur.getColumnIndexOrThrow(MediaStore.Downloads.SIZE)) > 0
+            } ?: false
+        } catch (e: Exception) {
+            Log.w(TAG, "Post-write verification query failed: ${e.message}")
+            false
+        }
+
+        if (!verified) {
+            Log.w(TAG, "MediaStore entry not visible after write — falling back to share intent path")
+            return createSecretFileFallback(context, content)
+        }
+
+        Log.d(TAG, "Secret file created and verified via MediaStore: $uri")
         true
 
     } catch (e: Exception) {

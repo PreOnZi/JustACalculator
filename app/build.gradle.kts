@@ -65,6 +65,9 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 
+    // 3D model viewer for key examination overlay
+    implementation("io.github.sceneview:sceneview:2.2.1")
+
     // CameraX dependencies - using Kotlin DSL syntax
     val cameraxVersion = "1.5.1"
     implementation("androidx.camera:camera-core:$cameraxVersion")

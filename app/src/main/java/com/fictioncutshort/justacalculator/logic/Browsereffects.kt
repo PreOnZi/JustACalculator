@@ -1,6 +1,7 @@
 package com.fictioncutshort.justacalculator.logic
 
 import android.content.Context
+import android.content.Intent
 import androidx.compose.runtime.MutableState
 import com.fictioncutshort.justacalculator.data.CalculatorState
 import kotlinx.coroutines.delay
@@ -392,11 +393,42 @@ Sharp CS-10A - 25KG
         val fileCreated = createSecretFile(context)
         delay(500)
 
+        if (!fileCreated) {
+            // File didn't land in Downloads — share the instructions as plain text so
+            // the user can save them wherever they like (notes, email, etc.)
+            val instructions = """Just a Calculator — console instructions
+
+Enter the console code: 353942320485 then confirm (++)
+
+Once in the console:
+  Admin settings (2++) → enter code 12340
+  Connectivity (4++) → Advertising (2++) → Disable banners (2++)
+
+Navigation: 88++ = back  |  99++ = exit console
+
+Return to the app when done."""
+
+            try {
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "Calculator console instructions")
+                    putExtra(Intent.EXTRA_TEXT, instructions)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(
+                    Intent.createChooser(shareIntent, "Save instructions").apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                )
+            } catch (e: Exception) {
+                android.util.Log.e("Calculator", "Share intent failed: ${e.message}")
+            }
+        }
+
         val message = if (fileCreated) {
             "Great, thank you! Please check your Downloads folder - I dug up something that might be of interest: 'FCS_JustAC_ConsoleAds.txt'."
         } else {
-            // Fallback: show the code directly if file creation failed
-            "Great, thank you! I tried to save a file but something went wrong. Here's what you need: Enter 353942320485 and confirm with ++. Then go to Admin (2++), enter 12340, then Connectivity (4++), Advertising (2++), Disable (2++)."
+            "Great, thank you! I couldn't save the file to Downloads on your device, so I've sent the instructions your way instead. Come back when you're ready."
         }
 
         state.value = state.value.copy(

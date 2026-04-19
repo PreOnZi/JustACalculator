@@ -33,7 +33,9 @@ object EffectsController {
                 step in 150..166 ||
                 step == 191 ||
                 step == 20 ||
-                step in listOf(901, 911, 912, 913, 1171, 1172)
+                step in listOf(901, 911, 912, 913, 1171, 1172) ||
+                // Permission retry/denial steps – auto-progress while showing dialogue
+                step in listOf(192, 193, 9911, 10741, 10751, 10761)
     }
 
     // =====================================================================
@@ -88,8 +90,7 @@ object EffectsController {
                 audioHandler?.playTypingClick()
 
                 state.value = state.value.copy(
-                    message = fullText.substring(0, i),
-                    isLaggyTyping = if (i == fullText.length) false else state.value.isLaggyTyping
+                    message = fullText.substring(0, i)
                 )
             }
 
@@ -107,6 +108,7 @@ object EffectsController {
 
             state.value = state.value.copy(
                 isTyping = false,
+                isLaggyTyping = false,
                 isSuperFastTyping = false,
                 waitingForAutoProgress = willAutoProgress
             )
@@ -264,7 +266,17 @@ object EffectsController {
     suspend fun monitorCameraTimeout(state: MutableState<CalculatorState>) {
         if (state.value.cameraActive && state.value.cameraTimerStart > 0) {
             while (state.value.cameraActive && state.value.cameraTimerStart > 0) {
-                delay(500)
+                delay(200)
+                // Check mid-point: switch to front camera, then greet after a short pause
+                if (CalculatorActions.checkCameraMidpoint(state)) {
+                    CalculatorActions.switchCameraToFront(state)
+                    delay(1500)
+                    // Only greet if camera is still active and already switched
+                    if (state.value.cameraActive && state.value.cameraHasSwitched) {
+                        CalculatorActions.showCameraGreeting(state)
+                    }
+                }
+                // Check full timeout: "I've seen enough..."
                 if (CalculatorActions.checkCameraTimeout(state)) {
                     CalculatorActions.stopCamera(state, timedOut = true, closeCamera = false)
                     break
