@@ -22,7 +22,9 @@ object EffectsController {
     // =====================================================================
 
     fun isInAutoProgressSequence(step: Int): Boolean {
-        return step in 81..88 ||
+        return step in 700..703 ||
+                step == 79 || step == 80 ||
+                step in 81..88 ||
                 step in 92..95 ||
                 step == 100 ||
                 step in 105..110 ||
@@ -62,7 +64,7 @@ object EffectsController {
         context: Context,
         audioHandler: TalkAudioHandler? = null
     ) {
-        while (state.value.showDonationPage) {
+        while (state.value.showDonationPage || state.value.showAdCards) {
             delay(100)
         }
 
@@ -95,10 +97,11 @@ object EffectsController {
             }
 
             val readingPause = when {
-                state.value.isSuperFastTyping -> 2000L
-                fullText.length > 200 -> 4000L
-                fullText.length > 100 -> 3000L
-                else -> 2500L
+                state.value.isSuperFastTyping -> 0L
+                fullText.length > 200 -> 800L
+                fullText.length > 100 -> 600L
+                fullText.length > 40  -> 400L
+                else -> 300L
             }
             delay(readingPause)
 
@@ -122,6 +125,7 @@ object EffectsController {
     suspend fun handlePendingAutoMessage(state: MutableState<CalculatorState>) {
         val current = state.value
         if (!current.isTyping && current.pendingAutoMessage.isNotEmpty() && current.message.isNotEmpty()) {
+            if (current.showDonationPage || current.showAdCards) return
             delay(1500)
             CalculatorActions.handlePendingAutoMessage(state)
         }
@@ -503,7 +507,7 @@ object EffectsController {
                 state.value = state.value.copy(
                     whackAMoleActive = false, whackAMoleTarget = "", flickeringButton = "", browserPhase = 0,
                     conversationStep = 982, message = "",
-                    fullMessage = "Peculiar! Maybe I need to work on it on my own for a moment. Can you please switch me off and allow me to let you know when it's done?",
+                    fullMessage = "Peculiar! Maybe I need to work on it on my own for a moment. Can you please allow me to let you know when it's done, then switch me off?",
                     isTyping = true
                 )
                 CalculatorActions.persistConversationStep(982)

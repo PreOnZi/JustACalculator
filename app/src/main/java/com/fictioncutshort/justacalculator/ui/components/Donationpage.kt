@@ -75,7 +75,7 @@ fun DonationLandingPage(
                 elevation = ButtonDefaults.buttonElevation(defaultElevation = 6.dp)
             ) {
                 Text(
-                    text = "Send money to a stranger\nover the internet",
+                    text = "5* on the Play Store sounds\nreally nice. Would you do that for me?",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,

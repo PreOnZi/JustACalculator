@@ -9,11 +9,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -91,34 +93,38 @@ fun AdBanner(
             when {
                 postChaosAdPhase == 1 -> {
                     Text(
-                        text = "âœ¨ UNLOCK YOUR POTENTIAL TODAY! âœ¨",
+                        text = "\u2728 UNLOCK YOUR POTENTIAL TODAY! \u2728",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = Color.White,
+                        fontFamily = FontFamily.Default
                     )
                 }
                 postChaosAdPhase == 2 -> {
                     Text(
-                        text = "ðŸš€ LIMITED TIME OFFER - ACT NOW! ðŸš€",
+                        text = "\uD83D\uDE80 LIMITED TIME OFFER - ACT NOW! \uD83D\uDE80",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = Color.White,
+                        fontFamily = FontFamily.Default
                     )
                 }
                 adAnimationPhase == 1 -> {
                     Text(
-                        text = "ðŸŽ‰ YOU WON! Click here! ðŸŽ‰",
+                        text = "\uD83C\uDF89 YOU WON! Click here! \uD83C\uDF89",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = Color.White,
+                        fontFamily = FontFamily.Default
                     )
                 }
                 adAnimationPhase == 2 -> {
                     Text(
-                        text = "ðŸ’° EARN $500/DAY FROM HOME! ðŸ’°",
+                        text = "\uD83D\uDCB0 EARN $500/DAY FROM HOME! \uD83D\uDCB0",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = Color.White,
+                        fontFamily = FontFamily.Default
                     )
                 }
                 // else: empty gray banner
@@ -149,13 +155,18 @@ fun MessageDisplay(
     val maxHeight = if (dimensions.isLandscape) {
         (dimensions.screenHeight.value * 0.6f).dp
     } else {
-        (dimensions.screenHeight.value * 0.35f).dp
+        (dimensions.screenHeight.value * 0.25f).dp
+    }
+
+    val scrollState = rememberScrollState()
+    LaunchedEffect(message) {
+        scrollState.scrollTo(scrollState.maxValue)
     }
 
     Box(
         modifier = modifier
             .heightIn(max = maxHeight)
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scrollState)
     ) {
         Column {
             Text(

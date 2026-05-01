@@ -53,7 +53,7 @@ object CameraHandler {
             fullMessage = "I've seen enough, struggling to process everything! Thank you.",
             isTyping = true,
             isLaggyTyping = true,
-            pendingAutoMessage = "Wow, I don't know what any of this was. But the shapes, the colours. I am not even sure if I saw any numbers. I am jealous. Makes one want to feel everything! Touch things... More trivia?",
+            pendingAutoMessage = "Wow, I don't know what any of this was. But the shapes, the colours. I am not even sure if I saw any numbers. I am jealous. Makes one want to feel everything! Touch things... Oh no. One more legacy question. Please?",
             pendingAutoStep = 21,
             waitingForAutoProgress = true
         )

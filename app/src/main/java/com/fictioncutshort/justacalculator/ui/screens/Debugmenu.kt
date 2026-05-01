@@ -92,7 +92,7 @@ fun DebugMenu(
                 CHAPTERS.forEach { chapter ->
                     ChapterButton(
                         chapter = chapter,
-                        isCompleted = currentStep >= chapter.startStep,
+                        isCompleted = chapter.startStep >= 0 && currentStep > chapter.startStep,
                         onClick = { onJumpToChapter(chapter) }
                     )
                 }

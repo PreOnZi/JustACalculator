@@ -243,9 +243,13 @@ fun AdCardStack(
     var swipedCount by remember { mutableIntStateOf(0) }       // 0-5 cards swiped
     var phase by remember { mutableStateOf(if (startAtCity) AdCardPhase.CITY else AdCardPhase.CARDS) }
 
-    // Persist city phase on entry
+    // Persist city phase only when transitioning into it, not on initial composition
+    var previousPhase by remember { mutableStateOf(phase) }
     LaunchedEffect(phase) {
-        if (phase == AdCardPhase.CITY) onCityEntered()
+        if (phase == AdCardPhase.CITY && previousPhase != AdCardPhase.CITY) {
+            onCityEntered()
+        }
+        previousPhase = phase
     }
 
     // Hint nudge: auto-nudges the top card left/right after 2s idle

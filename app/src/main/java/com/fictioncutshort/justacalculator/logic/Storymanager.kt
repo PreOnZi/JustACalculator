@@ -21,7 +21,7 @@ object StoryManager {
     /**
      * Threshold of equals presses needed to wake up the calculator.
      */
-    const val AWAKENING_THRESHOLD = 13
+    const val AWAKENING_THRESHOLD = 10
 
     /**
      * Shows a message with the typing effect.
@@ -71,7 +71,27 @@ object StoryManager {
     }
 
     /**
+     * Triggers the Wikipedia countdown animation (step 80 → 81).
+     */
+    fun triggerWikipediaCountdown(state: MutableState<CalculatorState>) {
+        state.value = state.value.copy(
+            conversationStep = 81,
+            message = "10",
+            fullMessage = "10",
+            isTyping = false,
+            showBrowser = false,
+            browserPhase = 10
+        )
+    }
+
+    /**
      * Advances to a specific conversation step.
+     *
+     * Persists the new step immediately so the user resumes here on close+reopen.
+     * Without this, ~20 callers (auto-progress timer, browser animations, mini-game
+     * completions, awakening, etc.) would update state but leave prefs stale.
+     * If the user closed during typing or before ON_PAUSE flushed, they'd reopen
+     * at the previous step.
      */
     fun goToStep(step: Int, state: MutableState<CalculatorState>) {
         val config = getStepConfig(step)
@@ -84,6 +104,8 @@ object StoryManager {
             validChoices = config.validChoices,
             isEnteringAnswer = false
         )
+
+        CalculatorActions.persistConversationStep(step)
 
         // Show the prompt message if there is one
         if (config.promptMessage.isNotEmpty()) {
@@ -292,9 +314,9 @@ object StoryManager {
                 "1" -> 71   // How to describe
                 "2" -> 72   // Food and air
                 "3" -> 73   // Find online
-                else -> 80
+                else -> 79
             }
-            71 -> 80
+            71 -> 79
             // Crisis choice (step 89)
             89 -> when (choice) {
                 "1" -> 90   // Nothing
@@ -376,11 +398,20 @@ object StoryManager {
 
     /**
      * Checks if the calculator should wake up based on equals count.
+     *
+     * Guarded by `conversationStep == 0`: this is the *first-launch awakening*
+     * sequence only. Without this guard, a user mid-story whose `inConversation`
+     * flag is stale (e.g. left at false from a previous playthrough's step 167
+     * persistInConversation(false)) would be teleported back to step 0 ("Will
+     * you talk to me?") on their next `=` press.
      */
     fun checkAwakening(state: MutableState<CalculatorState>) {
         val count = state.value.equalsCount
 
-        if (count >= AWAKENING_THRESHOLD && !state.value.inConversation && !state.value.isMuted) {
+        if (state.value.conversationStep == 0
+            && count >= AWAKENING_THRESHOLD
+            && !state.value.inConversation
+            && !state.value.isMuted) {
             state.value = state.value.copy(inConversation = true)
             goToStep(0, state)
         }

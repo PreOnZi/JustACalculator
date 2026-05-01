@@ -102,6 +102,7 @@ import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
 import com.fictioncutshort.justacalculator.ui.components.PausedCalculatorOverlay
 import com.fictioncutshort.justacalculator.ui.components.TalkOverlay
+import com.fictioncutshort.justacalculator.ui.components.HomeScreenOverlay
 import com.fictioncutshort.justacalculator.ui.components.PhoneOverlay
 import androidx.compose.runtime.DisposableEffect
 import androidx.lifecycle.Lifecycle
@@ -126,13 +127,23 @@ import androidx.compose.runtime.saveable.rememberSaveable
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        android.util.Log.d("JustACalc", "🟢 MainActivity.onCreate START — savedInstanceState=${savedInstanceState != null}")
         super.onCreate(savedInstanceState)
         CalculatorActions.init(applicationContext)
+        android.util.Log.d("JustACalc", "🟢 MainActivity.onCreate AFTER init")
         setContent {
             MaterialTheme {
                 CalculatorScreen()
             }
         }
+        android.util.Log.d("JustACalc", "🟢 MainActivity.onCreate END")
+    }
+
+    override fun onDestroy() {
+        android.util.Log.d("JustACalc", "🔴 MainActivity.onDestroy")
+        super.onDestroy()
+        // Clear singleton state so a fresh activity always reloads from SharedPreferences
+        CalculatorActions.liveState = null
     }
 }
 
@@ -159,6 +170,8 @@ fun CalculatorScreen() {
     val current = state.value
     var showTermsScreen by rememberSaveable { mutableStateOf(!CalculatorActions.loadTermsAcceptedPublic()) }
     var showTermsPopup by remember { mutableStateOf(false) }
+    var termsPolicyViewed by remember { mutableStateOf(false) }
+    var showTermsWarning by remember { mutableStateOf(false) }
     var microphonePermissionRequested by remember { mutableStateOf(false) }
     var locationPermissionRequested by remember { mutableStateOf(false) }
     var contactsPermissionRequested by remember { mutableStateOf(false) }
@@ -258,38 +271,84 @@ fun CalculatorScreen() {
         android.util.Log.d("JustACalc", "Step changed to: ${state.value.conversationStep}")
     }
 
-    // ========== DORMANCY: CHECK PHASE ON LAUNCH ==========
-    // Reads elapsed time since rant end and restores correct dormancy state.
-    // Handles the "user fully quit the app and reopened" path.
+    // ========== POST-STORY OVERLAY RESTORATION ==========
+    // Restores dormancy / ad-card / city overlays *only* when the user is in a
+    // legitimate post-story state. Otherwise, all stale post-story state is
+    // purged so it cannot bleed into a pre-story session.
+    //
+    // ROOT CAUSE THIS GUARDS:
+    // Several pre-story branch steps share number-space with post-story
+    // (901, 911-913, 971, 981, 982, 991, 992 are all > 167). The
+    // `rant_end_timestamp`, `in_city_phase`, and `td_b1_done` flags are sticky
+    // across sessions. A user who finished the game once and then revisits the
+    // whack-a-mole flow (via debug-jump or by replaying) would otherwise have
+    // those flags re-route them into the city overlay on app reopen.
     LaunchedEffect(Unit) {
-        val dormancyPhase = DormancyManager.getCurrentPhase(context)
-        when (dormancyPhase) {
-            is DormancyPhase.None -> { /* not in dormancy */ }
-            is DormancyPhase.Static -> {
-                state.value = state.value.copy(
-                    showDormancy = true,
-                    dormancyRadVisible = 0
-                )
+        val needsRestartInPrefs = CalculatorActions.loadNeedsRestart()
+        val currentStepOnLaunch = state.value.conversationStep
+        val inCityPhaseInPrefs = CalculatorActions.loadInCityPhase()
+        val storyCompleteInPrefs = CalculatorActions.loadStoryComplete()
+        val showAdCardsInPrefs = CalculatorActions.loadShowAdCards()
+
+        // Pre-story branch/repair steps that share number-space with post-story.
+        val preStoryBranchSteps = setOf(
+            101, 102, 191, 192, 193,                  // camera + post-restart prompts
+            901, 911, 912, 913,                       // crisis blackout / browser
+            971, 981, 982,                            // whack-a-mole rounds
+            991, 992, 9911                            // close-app + notification retry
+        )
+
+        val postStorySafe = storyCompleteInPrefs
+            && !needsRestartInPrefs
+            && currentStepOnLaunch >= 167
+            && currentStepOnLaunch !in preStoryBranchSteps
+
+        if (postStorySafe) {
+            // Dormancy restoration: only if the rant-end timestamp is set and
+            // enough time has elapsed.
+            val dormancyPhase = DormancyManager.getCurrentPhase(context)
+            when (dormancyPhase) {
+                is DormancyPhase.None -> { /* not in dormancy */ }
+                is DormancyPhase.Static -> {
+                    state.value = state.value.copy(
+                        showDormancy = true,
+                        dormancyRadVisible = 0
+                    )
+                }
+                is DormancyPhase.RadButtons -> {
+                    val savedPressed = CalculatorActions.loadDormancyPressedButtons()
+                    state.value = state.value.copy(
+                        showDormancy = true,
+                        dormancyRadVisible = dormancyPhase.count,
+                        dormancyPressedButtons = savedPressed
+                    )
+                }
             }
-            is DormancyPhase.RadButtons -> {
-                val savedPressed = CalculatorActions.loadDormancyPressedButtons()
-                state.value = state.value.copy(
-                    showDormancy = true,
-                    dormancyRadVisible = dormancyPhase.count,
-                    dormancyPressedButtons = savedPressed
-                )
+            // City / ad-card restoration: only if the user was actually mid-phase.
+            when {
+                inCityPhaseInPrefs -> {
+                    state.value = state.value.copy(
+                        showAdCards = true,
+                        showCityDirectly = true
+                    )
+                }
+                showAdCardsInPrefs -> {
+                    state.value = state.value.copy(showAdCards = true)
+                }
             }
-        }
-        // ── Restore Phase 2 / City state if user closed app mid-phase ──
-        when {
-            CalculatorActions.loadInCityPhase() -> {
+        } else {
+            // Pre-story or repair-sequence: purge every sticky post-story flag
+            // so a previous playthrough cannot bleed into the current session.
+            DormancyManager.clearDormancy(context)
+            CalculatorActions.clearDormancyPressedButtons()
+            CalculatorActions.clearInCityPhase()
+            CalculatorActions.clearShowAdCards()
+            if (state.value.showAdCards || state.value.showCityDirectly || state.value.showDormancy) {
                 state.value = state.value.copy(
-                    showAdCards = true,
-                    showCityDirectly = true
+                    showAdCards = false,
+                    showCityDirectly = false,
+                    showDormancy = false
                 )
-            }
-            CalculatorActions.loadShowAdCards() -> {
-                state.value = state.value.copy(showAdCards = true)
             }
         }
     }
@@ -357,6 +416,11 @@ fun CalculatorScreen() {
         hasCameraPermission = granted
         if (granted) {
             CalculatorActions.startCamera(state)
+            // Step back to 191 (camera-active placeholder) so the step-192 retry
+            // LaunchedEffect (keyed on conversationStep/message/isTyping) never re-fires
+            // the permission dialog while the camera is running.
+            state.value = state.value.copy(conversationStep = 191)
+            CalculatorActions.persistConversationStep(191)
         } else if (!cameraPermissionDeniedOnce) {
             cameraPermissionDeniedOnce = true
             state.value = state.value.copy(
@@ -386,9 +450,11 @@ fun CalculatorScreen() {
         hasNotificationPermission = granted
         if (granted) {
             scheduleNotification(context, 5000)
-            state.value = state.value.copy(conversationStep = 101, needsRestart = true)
+            state.value = state.value.copy(conversationStep = 101, needsRestart = true, showAdCards = false, showCityDirectly = false, showDormancy = false)
+            CalculatorActions.clearInCityPhase()
             CalculatorActions.persistNeedsRestart(true)
             CalculatorActions.persistConversationStep(101)
+            CalculatorActions.persistInConversation(true)
         } else if (!notificationPermissionDeniedOnce) {
             notificationPermissionDeniedOnce = true
             val retryMessage = listOf(
@@ -417,8 +483,12 @@ fun CalculatorScreen() {
                 pendingAutoMessage = nextConfig.promptMessage,
                 pendingAutoStep = 101,
                 needsRestart = true,
-                waitingForAutoProgress = true
+                waitingForAutoProgress = true,
+                showAdCards = false,
+                showCityDirectly = false,
+                showDormancy = false
             )
+            CalculatorActions.clearInCityPhase()
             CalculatorActions.persistNeedsRestart(true)
             CalculatorActions.persistConversationStep(101)
         }
@@ -510,16 +580,21 @@ fun CalculatorScreen() {
         }
         if (current.conversationStep == 991) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
+                state.value = state.value.copy(showAdCards = false, showCityDirectly = false, showDormancy = false)
+                CalculatorActions.clearInCityPhase()
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             } else {
                 scheduleNotification(context, 30000)  // 30 seconds instead of 5
-                state.value = state.value.copy(conversationStep = 101, needsRestart = true)
+                state.value = state.value.copy(conversationStep = 101, needsRestart = true, showAdCards = false, showCityDirectly = false, showDormancy = false)
+                CalculatorActions.clearInCityPhase()
                 CalculatorActions.persistNeedsRestart(true)
                 CalculatorActions.persistConversationStep(101)
+                CalculatorActions.persistInConversation(true)
             }
         }
         if (current.conversationStep == 992) {
-            state.value = state.value.copy(conversationStep = 101, needsRestart = true)
+            state.value = state.value.copy(conversationStep = 101, needsRestart = true, showAdCards = false, showCityDirectly = false, showDormancy = false)
+            CalculatorActions.clearInCityPhase()
             CalculatorActions.persistNeedsRestart(true)
             CalculatorActions.persistConversationStep(101)
         }
@@ -702,7 +777,7 @@ fun CalculatorScreen() {
 
         // ── PERMISSION RETRY TRIGGERS ──────────────────────────────────────────
         // Camera retry: re-launch after "did you mean to deny?" message finishes
-        if (current.conversationStep == 192 && !current.isTyping && current.message.isNotEmpty()) {
+        if (current.conversationStep == 192 && !current.isTyping && current.message.isNotEmpty() && !current.cameraActive) {
             kotlinx.coroutines.delay(500)
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
@@ -824,6 +899,7 @@ fun CalculatorScreen() {
             state.value = state.value.copy(
                 showPhoneOverlay = false,
                 showTalkOverlay = false,
+                showHomeScreenOverlay = false,
                 conversationStep = 108
             )
             // Load step 108's message
@@ -915,7 +991,10 @@ fun CalculatorScreen() {
 
                 // Terms and Conditions Button
                 Button(
-                    onClick = { showTermsPopup = true },
+                    onClick = {
+                        termsPolicyViewed = true
+                        showTermsPopup = true
+                    },
                     modifier = Modifier
                         .width(130.dp)
                         .height(45.dp),
@@ -938,9 +1017,12 @@ fun CalculatorScreen() {
                 // Accept & Continue Button
                 Button(
                     onClick = {
-                        CalculatorActions.persistTermsAccepted()
-                        showTermsScreen = false
-
+                        if (termsPolicyViewed) {
+                            CalculatorActions.persistTermsAccepted()
+                            showTermsScreen = false
+                        } else {
+                            showTermsWarning = true
+                        }
                     },
                     modifier = Modifier
                         .width(200.dp)
@@ -996,14 +1078,39 @@ fun CalculatorScreen() {
                                         "We don't want it, we do not look at it, we are certainly not collecting it and we could not be further from selling it.\n\n" +
                                         "This app does not collect, store, or transmit any personal data. \n\n" +
                                         "That is our promise.\n\n" +
-                                        "Because to really take advantage of the calculator... Do what it tells you!",
+                                        "Because to really take advantage of the calculator... Do what it tells you!\n\n" +
+                                        "For more comprehensive privacy policy please follow the link below:",
                                 fontSize = 14.sp,
                                 color = Color(0xFF2D2D2D),
                                 textAlign = TextAlign.Center,
                                 lineHeight = 20.sp
                             )
 
-                            Spacer(modifier = Modifier.height(24.dp))
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            val context = LocalContext.current
+                            Button(
+                                onClick = {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://preonzi.github.io/JustAPrivacyPolicy/"))
+                                    context.startActivity(intent)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(44.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = AccentOrange,
+                                    contentColor = Color.White
+                                )
+                            ) {
+                                Text(
+                                    text = "Full Privacy Policy",
+                                    fontSize = 13.sp,
+                                    fontFamily = CalculatorDisplayFont
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
 
                             Button(
                                 onClick = { showTermsPopup = false },
@@ -1021,6 +1128,77 @@ fun CalculatorScreen() {
                                     fontSize = 14.sp,
                                     fontFamily = CalculatorDisplayFont
                                 )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Warning dialog when accepting without reading policy
+            if (showTermsWarning) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.7f))
+                        .clickable { showTermsWarning = false },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.85f)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(RetroCream)
+                            .clickable(enabled = false) {}
+                            .padding(24.dp)
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "Just a moment",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = CalculatorDisplayFont,
+                                color = AccentOrange,
+                                modifier = Modifier.padding(bottom = 12.dp)
+                            )
+                            Text(
+                                text = "We strongly encourage you to review the privacy policy before continuing.",
+                                fontSize = 14.sp,
+                                color = Color(0xFF2D2D2D),
+                                textAlign = TextAlign.Center,
+                                lineHeight = 20.sp
+                            )
+                            Spacer(modifier = Modifier.height(24.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Button(
+                                    onClick = {
+                                        showTermsWarning = false
+                                        termsPolicyViewed = true
+                                        showTermsPopup = true
+                                    },
+                                    modifier = Modifier.weight(1f).height(44.dp),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF6B6B6B),
+                                        contentColor = Color.White
+                                    )
+                                ) {
+                                    Text("View Policy", fontSize = 12.sp, fontFamily = CalculatorDisplayFont)
+                                }
+                                Button(
+                                    onClick = {
+                                        showTermsWarning = false
+                                        CalculatorActions.persistTermsAccepted()
+                                        showTermsScreen = false
+                                    },
+                                    modifier = Modifier.weight(1f).height(44.dp),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = AccentOrange,
+                                        contentColor = Color.White
+                                    )
+                                ) {
+                                    Text("Continue", fontSize = 12.sp, fontFamily = CalculatorDisplayFont)
+                                }
                             }
                         }
                     }
@@ -1292,7 +1470,7 @@ fun CalculatorScreen() {
                 talkAudioHandler.stopRealtimeEcho()
                 talkAudioHandler.playStaticSound {
                     // After static finishes, progress the story
-                    val nextMessage = "Hello? I can see you've pressed the button, but I can't hear anything."
+                    val nextMessage = "I can see you've pressed the button, but I can't hear anything."
                     state.value = state.value.copy(
                         message = "",
                         fullMessage = nextMessage,
@@ -1303,7 +1481,11 @@ fun CalculatorScreen() {
         )
     }
 
-// PhoneOverlay
+// PhoneOverlay (rotary dial)
+    // Used at step 1083 (after permissions) — plays the white-noise static when the
+    // dial is released, then routes to step 1084 ("Hello? I can see you've pressed
+    // the button, but I can't hear anything."). After step 1084 → 1085 → user lands
+    // on step 1086 which shows the new HomeScreenOverlay instead of this dial.
     if (current.showPhoneOverlay) {
         PhoneOverlay(
             message = current.message,
@@ -1312,16 +1494,41 @@ fun CalculatorScreen() {
             },
             onButtonHoldEnd = {
                 talkAudioHandler.stopRealtimeEcho()
-                talkAudioHandler.playFeedbackSqueal {
-                    // Show the message but DON'T hide the overlay yet
+                talkAudioHandler.playStaticSound {
+                    // After static finishes, hide the dial and progress to step 1084.
                     state.value = state.value.copy(
+                        showPhoneOverlay = false,
                         message = "",
-                        fullMessage = "AAAAAH. That's awful! There must be another way.",
+                        fullMessage = "I can see you've pressed the button, but I can't hear anything.",
                         isTyping = true,
-                        conversationStep = 1087
+                        conversationStep = 1084
                     )
-                    CalculatorActions.persistConversationStep(1087)
+                    CalculatorActions.persistConversationStep(1084)
                 }
+            }
+        )
+    }
+    // HomeScreenOverlay (phone home screen — step 1086)
+    // Shown after the rotary dial fails and the calculator says "Hold on, maybe
+    // I need to create the whole thing after all..." (step 1085). Currently
+    // static visual layout — interactivity to be wired up later.
+    if (current.showHomeScreenOverlay) {
+        HomeScreenOverlay(
+            audioHandler = talkAudioHandler,
+            onIconClick = { iconName ->
+                android.util.Log.d("JustACalc", "HomeScreen icon tapped: $iconName")
+            },
+            onReturnToCalculator = {
+                // Tapping the return icon ends the phone-detour and resumes the
+                // story at step 108 ("Let me try getting online again…").
+                state.value = state.value.copy(
+                    showHomeScreenOverlay = false,
+                    conversationStep = 108,
+                    message = "",
+                    fullMessage = "Let me try getting online again. I'm prepared for the side effects this time.",
+                    isTyping = true
+                )
+                CalculatorActions.persistConversationStep(108)
             }
         )
     }
@@ -1379,12 +1586,14 @@ fun CalculatorScreen() {
         current.awaitingNumber,
         current.conversationStep
     ) {
+        val stepHasAutoProgress = CalculatorActions.getStepConfigPublic(current.conversationStep).autoProgressDelay > 0L
         val shouldShowSpinner = (
                 current.isTyping ||
+                        stepHasAutoProgress ||
                         ((current.waitingForAutoProgress || current.pendingAutoStep >= 0) &&
                                 !current.awaitingChoice && !current.awaitingNumber)
                 ) &&
-                (current.conversationStep < 167 || current.conversationStep in 1070..1087) &&
+                (current.conversationStep < 167 || current.conversationStep in 700..703 || current.conversationStep in 1070..1087) &&
                 !current.showDonationPage
 
         if (shouldShowSpinner) {
@@ -1396,8 +1605,10 @@ fun CalculatorScreen() {
             // Delay before turning off to prevent flicker
             kotlinx.coroutines.delay(600)  // Longer than any transition gap
             // Check again after delay - only turn off if still shouldn't show
+            val stillStepHasAutoProgress = CalculatorActions.getStepConfigPublic(state.value.conversationStep).autoProgressDelay > 0L
             val stillShouldHide = !(
                     state.value.isTyping ||
+                            stillStepHasAutoProgress ||
                             ((state.value.waitingForAutoProgress || state.value.pendingAutoStep >= 0) &&
                                     !state.value.awaitingChoice && !state.value.awaitingNumber)
                     )
@@ -1540,7 +1751,7 @@ fun CalculatorScreen() {
                                 .fillMaxWidth()
                                 .padding(vertical = 4.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (current.conversationStep >= chapter.startStep)
+                                containerColor = if (chapter.startStep >= 0 && current.conversationStep > chapter.startStep)
                                     AccentOrange else Color(0xFFE0E0E0)
                             ),
                             shape = RoundedCornerShape(8.dp)
@@ -1553,13 +1764,13 @@ fun CalculatorScreen() {
                                     text = chapter.name,
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (current.conversationStep >= chapter.startStep)
+                                    color = if (chapter.startStep >= 0 && current.conversationStep > chapter.startStep)
                                         Color.White else Color.DarkGray
                                 )
                                 Text(
                                     text = "Step ${chapter.startStep}: ${chapter.description}",
                                     fontSize = 10.sp,
-                                    color = if (current.conversationStep >= chapter.startStep)
+                                    color = if (chapter.startStep >= 0 && current.conversationStep > chapter.startStep)
                                         Color.White.copy(alpha = 0.8f) else Color.Gray
                                 )
                             }

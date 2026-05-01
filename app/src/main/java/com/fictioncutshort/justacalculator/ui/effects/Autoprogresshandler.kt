@@ -5,6 +5,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import com.fictioncutshort.justacalculator.data.CalculatorState
 import com.fictioncutshort.justacalculator.data.getStepConfig
+import com.fictioncutshort.justacalculator.logic.CalculatorActions
 import com.fictioncutshort.justacalculator.logic.StoryManager
 import kotlinx.coroutines.delay
 
@@ -60,8 +61,13 @@ fun AutoProgressHandler(state: MutableState<CalculatorState>) {
                     isEnteringAnswer = false,
                     fullMessage = config.promptMessage,
                     message = "",
-                    isTyping = config.promptMessage.isNotEmpty()
+                    isTyping = config.promptMessage.isNotEmpty(),
+                    showTalkOverlay = config.showTalkOverlay,
+                    showPhoneOverlay = config.showPhoneOverlay,
+                    showHomeScreenOverlay = config.showHomeScreenOverlay
                 )
+                // Persist so phone-detour and other auto-progress steps survive close+reopen.
+                CalculatorActions.persistConversationStep(nextStep)
             }
         }
     }
@@ -71,13 +77,22 @@ fun AutoProgressHandler(state: MutableState<CalculatorState>) {
         if (config.autoProgressDelay > 0 && !currentState.isMuted) {
             delay(config.autoProgressDelay)
 
+            // Wait for typing to finish before advancing (handles long messages)
+            while (state.value.isTyping && state.value.conversationStep == currentStep) {
+                delay(100)
+            }
+
             // Only progress if we're still on the same step
             if (state.value.conversationStep == currentStep) {
-                val nextStep = when {
-                    config.nextStepOnSuccess > 0 -> config.nextStepOnSuccess
-                    else -> currentStep + 1
+                if (currentStep == 80) {
+                    StoryManager.triggerWikipediaCountdown(state)
+                } else {
+                    val nextStep = when {
+                        config.nextStepOnSuccess > 0 -> config.nextStepOnSuccess
+                        else -> currentStep + 1
+                    }
+                    StoryManager.goToStep(nextStep, state)
                 }
-                StoryManager.goToStep(nextStep, state)
             }
         }
     }

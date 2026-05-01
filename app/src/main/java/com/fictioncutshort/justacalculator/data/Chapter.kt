@@ -127,7 +127,7 @@ val CHAPTERS = listOf(
         id = 14,
         name = "Chapter 13.5: Phone Detour",
         startStep = 1071,
-        description = "Permissions → Talk overlay → Feedback squeal"
+        description = "Permissions → Rotary dial → Phone home screen"
     ),
     Chapter(
         id = 15,
@@ -228,4 +228,4 @@ val INTERACTIVE_STEPS = listOf(
  * These steps should NOT allow the user to skip with ++ as they are part
  * of timed sequences or animations.
  */
-val AUTO_PROGRESS_STEPS = listOf(92, 100, 901, 911, 912, 913, 971, 981, 1072, 1073, 1075, 1076, 1077, 1078, 1079, 1080, 1081, 1082, 1085, 1086)
+val AUTO_PROGRESS_STEPS = listOf(92, 100, 107, 901, 911, 912, 913, 971, 981, 1072, 1073, 1075, 1076, 1077, 1078, 1079, 1080, 1081, 1082, 1085, 1086)

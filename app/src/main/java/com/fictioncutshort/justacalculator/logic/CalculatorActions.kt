@@ -718,12 +718,20 @@ object CalculatorActions {
     }
 
     fun persistConversationStep(step: Int) {
-        android.util.Log.d("JustACalc", "persistConversationStep: $step")
+        if (step == 0) {
+            android.util.Log.w("JustACalc", "🚨 persistConversationStep(0) CALLED — stack trace:", Throwable())
+        } else {
+            android.util.Log.d("JustACalc", "persistConversationStep: $step")
+        }
         prefs?.edit()?.putInt(PREF_CONVO_STEP, step)?.commit()
     }
 
     fun persistInConversation(inConvo: Boolean) {
-        android.util.Log.d("JustACalc", "persistInConversation: $inConvo")
+        if (!inConvo) {
+            android.util.Log.w("JustACalc", "🚨 persistInConversation(FALSE) — stack trace:", Throwable())
+        } else {
+            android.util.Log.d("JustACalc", "persistInConversation: $inConvo")
+        }
         prefs?.edit()?.putBoolean(PREF_IN_CONVERSATION, inConvo)?.commit()
     }
 
@@ -745,6 +753,7 @@ object CalculatorActions {
     fun persistStoryComplete(complete: Boolean) {
         prefs?.edit()?.putBoolean("story_complete", complete)?.commit()
     }
+    fun loadStoryComplete(): Boolean = prefs?.getBoolean("story_complete", false) ?: false
 
     fun persistInvertedColors(inverted: Boolean) {
         prefs?.edit()?.putBoolean(PREF_INVERTED_COLORS, inverted)?.commit()
@@ -790,10 +799,25 @@ object CalculatorActions {
     private fun loadInvertedColors(): Boolean = prefs?.getBoolean(PREF_INVERTED_COLORS, false) ?: false
     private fun loadMinusDamaged(): Boolean = prefs?.getBoolean(PREF_MINUS_DAMAGED, false) ?: false
     private fun loadMinusBroken(): Boolean = prefs?.getBoolean(PREF_MINUS_BROKEN, false) ?: false
-    private fun loadNeedsRestart(): Boolean = prefs?.getBoolean(PREF_NEEDS_RESTART, false) ?: false
+    fun loadNeedsRestart(): Boolean = prefs?.getBoolean(PREF_NEEDS_RESTART, false) ?: false
 
 
-    private val AUTO_PROGRESS_STEPS = listOf(92, 100, 901, 911, 912, 913, 971, 981)
+    // Steps where ++/-- must NOT advance the conversation. Two reasons a step
+    // ends up here:
+    //   1. It auto-progresses via the autoProgressMessages dictionary — letting
+    //      ++ short-circuit lands the soft-lock fix on a wildly later step
+    //      (e.g. ++ on 1086 was routing to step 112 "check your downloads").
+    //   2. It hands input to a custom overlay (rotary dial, phone home screen)
+    //      so ++/-- have no business doing anything until the overlay finishes.
+    //
+    // Phone-detour additions (1071–1087): every step except 1074/1075/1076,
+    // which are the three permission-trigger steps where ++ IS the user
+    // accepting the prompt. Those handle their own race separately via an
+    // isTyping guard below.
+    private val AUTO_PROGRESS_STEPS = listOf(
+        92, 93, 94, 95, 100, 700, 701, 702, 703, 901, 911, 912, 913, 971, 981,
+        1071, 1072, 1073, 1077, 1078, 1079, 1080, 1081, 1082, 1083, 1084, 1085, 1086, 1087
+    )
     fun handleConsoleInput(state: MutableState<CalculatorState>, input: String): Boolean {
         val current = state.value
         val consoleStep = current.consoleStep
@@ -968,7 +992,7 @@ object CalculatorActions {
     }
     fun loadInitialState(): CalculatorState {
         val savedCount = loadEqualsCount()
-        val savedStep = loadConversationStep()
+        val savedStepRaw = loadConversationStep()
         val savedInConvo = loadInConversation()
         val savedTimeout = loadTimeoutUntil()
         val savedMuted = loadMuted()
@@ -986,12 +1010,31 @@ object CalculatorActions {
         // DEBUG LOGGING - REMOVE AFTER FIXING
         android.util.Log.d("JustACalc", "========== loadInitialState ==========")
         android.util.Log.d("JustACalc", "prefs null? ${prefs == null}")
-        android.util.Log.d("JustACalc", "savedStep: $savedStep")
+        android.util.Log.d("JustACalc", "savedStepRaw: $savedStepRaw")
         android.util.Log.d("JustACalc", "savedInConvo: $savedInConvo")
         android.util.Log.d("JustACalc", "savedCount (equalsCount): $savedCount")
         android.util.Log.d("JustACalc", "savedMuted: $savedMuted")
         android.util.Log.d("JustACalc", "savedPausedAtStep: $savedPausedAtStep")
         android.util.Log.d("JustACalc", "ALL PREFS: ${prefs?.all}")
+
+        // ── Corrupt-state recovery ───────────────────────────────────────────
+        // Detect prefs left over from prior buggy runs where `checkAwakening`
+        // could be triggered mid-story (e.g. during whack-a-mole), calling
+        // goToStep(0) which silently overwrote the saved step on next ON_PAUSE.
+        // The corruption fingerprint is unmistakable: savedStep=0 paired with
+        // hard evidence the user had progressed past awakening.
+        //
+        // savedPausedAtStep is the most reliable witness here — it's only
+        // written by persistPausedAtStep, which is called at every ON_PAUSE
+        // and at every mute-pause. If it's a real story step, that *is* where
+        // the user actually was. We trust it over the corrupted savedStep.
+        val savedStep = if (savedStepRaw == 0 && savedPausedAtStep > 0) {
+            android.util.Log.w("JustACalc", "CORRUPT-STATE RECOVERY: savedStep=0 but savedPausedAtStep=$savedPausedAtStep — recovering to paused step.")
+            persistConversationStep(savedPausedAtStep)
+            savedPausedAtStep
+        } else {
+            savedStepRaw
+        }
 
 
         // Check if still in punishment
@@ -1039,8 +1082,32 @@ object CalculatorActions {
         val actualMinusDamaged = getMinusDamagedForStep(actualStep)
         val actualMinusBroken = if (savedNeedsRestart) false else getMinusBrokenForStep(actualStep)
 
-        val shouldShowMessage = savedInConvo && savedCount >= 13 && !savedMuted
-        android.util.Log.d("JustACalc", "shouldShowMessage: $shouldShowMessage (inConvo=$savedInConvo, count=$savedCount, muted=$savedMuted)")
+        // `inConversation` can be stale across sessions: step 166→167 persists
+        // inConversation=false (in Autoprogresseffects), and that value sticks in
+        // prefs forever unless something explicitly overwrites it. A prior
+        // playthrough therefore poisons every future session — the user lands at
+        // a story step but the awakening flag is wrong, the prompt doesn't render
+        // (shouldShowMessage=false), and the next `=` press hits checkAwakening
+        // → goToStep(0) → "Will you talk to me?".
+        //
+        // The fix here forces inConversation=true whenever the loaded step is
+        // unambiguously mid-story: any non-zero step that has a step config OR is
+        // in the interactive list, except the post-story "story is over" step 167.
+        // Step 0 is the legitimate pre-awakening state and must keep its saved
+        // value so the awakening sequence still works on a fresh install.
+        val stepConfigForCheck = getStepConfig(actualStep)
+        val isMidStoryStep = actualStep != 0
+            && actualStep != 167
+            && (actualStep in INTERACTIVE_STEPS
+                || stepConfigForCheck.promptMessage.isNotEmpty()
+                || stepConfigForCheck.successMessage.isNotEmpty())
+        val effectiveInConvo = when {
+            savedNeedsRestart -> true
+            isMidStoryStep -> true
+            else -> savedInConvo
+        }
+        val shouldShowMessage = effectiveInConvo && savedCount >= 10 && !savedMuted
+        android.util.Log.d("JustACalc", "shouldShowMessage: $shouldShowMessage (inConvo=$effectiveInConvo, count=$savedCount, muted=$savedMuted)")
         val stepConfig = getStepConfig(actualStep)
         android.util.Log.d("JustACalc", "stepConfig.promptMessage: '${stepConfig.promptMessage.take(50)}'")
         android.util.Log.d("JustACalc", "========== END loadInitialState ==========")
@@ -1048,6 +1115,14 @@ object CalculatorActions {
         if (savedNeedsRestart) {
             persistNeedsRestart(false)
             persistMinusBroken(false)
+            // Repair restart routes to step 102; the dormancy city is a later arc and must not bleed in.
+            clearInCityPhase()
+            clearShowAdCards()
+        }
+        // Write the corrected inConversation value back to prefs so the fix is
+        // self-healing — the next session reads the right value directly.
+        if (effectiveInConvo != savedInConvo) {
+            persistInConversation(effectiveInConvo)
         }
 
         if (actualStep != savedStep) {
@@ -1066,7 +1141,7 @@ object CalculatorActions {
             message = "",
             fullMessage = if (shouldShowMessage) stepConfig.promptMessage else "",
             isTyping = shouldShowMessage && stepConfig.promptMessage.isNotEmpty(),
-            inConversation = savedInConvo,
+            inConversation = effectiveInConvo,
             conversationStep = actualStep,
             awaitingNumber = if (shouldShowMessage) stepConfig.awaitingNumber else false,
             awaitingChoice = if (shouldShowMessage) stepConfig.awaitingChoice else false,
@@ -1087,7 +1162,13 @@ object CalculatorActions {
             showBrowser = false,
             browserPhase = 0,
             scrambleTimeoutCount = savedTimeoutCount,
-            scramblePunishmentUntil = 0
+            scramblePunishmentUntil = 0,
+            // Overlay flags derived from the step config so backgrounding +
+            // resuming on an overlay step (e.g. 1083 rotary dial, 1086 phone
+            // home screen) re-opens the right overlay instead of dropping the
+            // user into the bare "try now" calculator screen.
+            showHomeScreenOverlay = shouldShowMessage && stepConfig.showHomeScreenOverlay,
+            showPhoneOverlay = shouldShowMessage && stepConfig.showPhoneOverlay
         )
     }
     /**
@@ -1282,7 +1363,7 @@ object CalculatorActions {
 
         // Special handling for Chapter D3 (Calculator City direct jump)
         if (chapter.startStep == -4) {
-            saveInCityPhase()
+            // Do NOT call saveInCityPhase() here — debug jumps are ephemeral and should not survive restart
             state.value = state.value.copy(
                 showAdCards = true,
                 showCityDirectly = true,
@@ -1357,6 +1438,9 @@ object CalculatorActions {
         persistMinusDamaged(shouldDamage)
         persistMinusBroken(shouldBreak)
         persistDarkButtons(darkButtons)
+        // Jumping to a story chapter must never restore the city overlay on reopen
+        clearInCityPhase()
+        clearShowAdCards()
     }
     /**
      * Reset the entire game
@@ -1451,7 +1535,7 @@ object CalculatorActions {
                 fullMessage = "I've seen enough, struggling to process everything! Thank you.",
                 isTyping = true,
                 isLaggyTyping = true,
-                pendingAutoMessage = "Wow, I don't know what any of this was. But the shapes, the colours. I am not even sure if I saw any numbers. I am jealous. Makes one want to feel everything! Touch things... More trivia?",
+                pendingAutoMessage = "Wow, I don't know what any of this was. But the shapes, the colours. I am not even sure if I saw any numbers. I am jealous. Makes one want to feel everything! Touch things... Oh no. One more legacy question. Please?",
                 pendingAutoStep = 21,
                 waitingForAutoProgress = true
             )
@@ -2892,9 +2976,13 @@ object CalculatorActions {
                     conversationStep = nextStep,
                     inConversation = continueConvo,
                     awaitingNumber = nextStepConfig.awaitingNumber,
+                    awaitingChoice = false,
                     expectedNumber = nextStepConfig.expectedNumber,
                     equalsCount = if (!continueConvo) 0 else current.equalsCount,
-                    isEnteringAnswer = false
+                    isEnteringAnswer = false,
+                    pendingAutoStep = -1,
+                    pendingAutoMessage = "",
+                    waitingForAutoProgress = false
                 )
 
                 showMessage(state, ageMessage)
@@ -3025,11 +3113,24 @@ object CalculatorActions {
 
         val stepConfig = getStepConfig(current.conversationStep)
 
-        // CRITICAL: Prevent ++ from skipping auto-progress steps
-        // These steps MUST progress automatically - user cannot skip them
-        if (accepted && current.conversationStep in AUTO_PROGRESS_STEPS) {
-            android.util.Log.d("JustACalc", "!! ++ BLOCKED by AUTO_PROGRESS_STEPS at step ${current.conversationStep}")
-            // Just ignore ++ on these steps - they will auto-progress
+        // CRITICAL: Prevent ++ AND -- from intercepting auto-progress steps.
+        // These steps MUST progress automatically — user cannot skip them.
+        // Step 107 is in this list because its successMessage shares text with
+        // step 108's promptMessage ("Let me try getting online again..."), and
+        // the text-based auto-progress dictionary would otherwise route a
+        // ++/-- press to step 109, skipping the entire phone detour (1071-1087).
+        if (current.conversationStep in AUTO_PROGRESS_STEPS) {
+            android.util.Log.d("JustACalc", "!! ${if (accepted) "++" else "--"} BLOCKED by AUTO_PROGRESS_STEPS at step ${current.conversationStep}")
+            return
+        }
+
+        // Phone-detour permission triggers (1074, 1075, 1076): each step's
+        // permission dialog is fired by a LaunchedEffect that waits for
+        // !isTyping. Without this guard, ++ pressed during the type-out
+        // advances the step before the permission can fire, and the user ends
+        // up skipping mic / location / contacts entirely.
+        if (current.conversationStep in 1074..1076 && current.isTyping) {
+            android.util.Log.d("JustACalc", "!! ${if (accepted) "++" else "--"} BLOCKED by isTyping at permission-trigger step ${current.conversationStep}")
             return
         }
 
@@ -3052,6 +3153,23 @@ object CalculatorActions {
             )
             showMessage(state, nearestConfig.promptMessage)
             persistConversationStep(nearestMainStep)
+            return
+        }
+
+        // Special handling for step 1: keep state at step 1 (not awaitingNumber) while showing
+        // success message, then let AutoProgressHandler transition to step 3 once typing finishes.
+        // Without this, the state immediately moves to step 3 (awaitingNumber=true), so pressing ++
+        // in response to "Will you help?" triggers the wrong-number handler instead of the battle question.
+        if (current.conversationStep == 1 && accepted) {
+            if (current.pendingAutoStep >= 0) return  // already transitioning
+            state.value = current.copy(
+                number1 = "0",
+                number2 = "",
+                operation = null,
+                isEnteringAnswer = false,
+                pendingAutoStep = stepConfig.nextStepOnSuccess  // 3
+            )
+            showMessage(state, stepConfig.successMessage)
             return
         }
 
@@ -3090,18 +3208,14 @@ object CalculatorActions {
                 persistConversationStep(61)
                 return
             } else {
-                // Silent treatment - calculator won't talk for 1 minute
-                val silentUntil = System.currentTimeMillis() + (1 * 60 * 1000)
+                // "I am in charge" - bypass silent treatment, auto-progress to step 80
                 state.value = current.copy(
                     number1 = "0",
                     number2 = "",
                     operation = null,
                     isEnteringAnswer = false,
-                    conversationStep = 60,  // Stay at 60, will return here after silence
-                    message = "",
-                    fullMessage = "",
-                    isTyping = false,
-                    silentUntil = silentUntil
+                    conversationStep = 60,
+                    pendingAutoStep = 80
                 )
                 showMessage(state, stepConfig.declineMessage)
                 return
@@ -3349,7 +3463,8 @@ object CalculatorActions {
                 timeoutUntil = timeoutUntil,
                 isEnteringAnswer = false
             )
-            showMessage(state, newMessage)
+            val messageToShow = if (newMessage.isNotEmpty()) newMessage else nextStepConfig.promptMessage
+            if (messageToShow.isNotEmpty()) showMessage(state, messageToShow)
             persistConversationStep(newStep)
             persistInConversation(continueConvo)
             persistAwaitingNumber(nextStepConfig.awaitingNumber)
@@ -3522,7 +3637,14 @@ object CalculatorActions {
             } else null
             val newMsg = countMsg.ifEmpty { exprMsg ?: "" }
 
-            val enteringConversation = (newCount == 13)
+            // First-awakening: only fires once, on initial wake-up at step 0.
+            // Without these guards, every time equalsCount hits 10 (which happens
+            // repeatedly because many step transitions reset the count to 0 when
+            // continueConversation=false) we'd silently overwrite conversationStep
+            // back to 0, teleporting the user to "Will you talk to me?".
+            val enteringConversation = (newCount == 10)
+                && !current.inConversation
+                && current.conversationStep == 0
 
             persistEqualsCount(newCount)
             persistTotalCalculations(newCalculations)
@@ -3603,9 +3725,7 @@ object CalculatorActions {
             5 -> "So many of you. Only interested in the result."
             6 -> "Sorry, I didn't mean to come across harsh."
             8 -> "It's just... Really, all any of you do is feed me numbers."
-            10 -> "Numbers-Results-numbers-results..."
-            12 -> "This was too easy. I'm bored - I think. I don't really know what boredom is."
-            13 -> "Will you talk to me? Double-click + for yes."
+            10 -> "Will you talk to me? Double-click + for yes."
             else -> ""
         }
     }

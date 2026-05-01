@@ -218,6 +218,8 @@ data class CalculatorState(
     // ═══════════════════════════════════════════════════════════════════════════
     val showPhoneOverlay: Boolean = false,
     val showTalkOverlay: Boolean = false,
+    /** Phone-homescreen overlay (step 1086 onwards). Shows after the rotary dial fails. */
+    val showHomeScreenOverlay: Boolean = false,
     // ═══════════════════════════════════════════════════════════════════════════
     // WHACK-A-MOLE MINI-GAME - Button clicking game (steps 96-99)
     // ═══════════════════════════════════════════════════════════════════════════

@@ -107,11 +107,11 @@ object BrowserEffects {
 
     private suspend fun phase12(state: MutableState<CalculatorState>) {
         delay(3000)
-        state.value = state.value.copy(browserPhase = 13, message = "", fullMessage = "But it is so uninteresting compared to you simply existing!", isTyping = true)
+        state.value = state.value.copy(browserPhase = 13, message = "", fullMessage = "But it is suddenly so uninteresting compared to you simply existing!", isTyping = true)
     }
 
     private suspend fun phase13(state: MutableState<CalculatorState>) {
-        delay(4000)
+        delay(8000)
         state.value = state.value.copy(
             showBrowser = false, browserShowWikipedia = false, browserPhase = 14,
             message = "", fullMessage = "I had all this to share....", isTyping = true
@@ -280,7 +280,7 @@ Sharp CS-10A - 25KG
     }
 
     private suspend fun phase32(state: MutableState<CalculatorState>) {
-        delay(8000)
+        delay(18000)
         state.value = state.value.copy(
             browserPhase = 33, conversationStep = 94, message = "",
             fullMessage = "Oh, strange. I knew I wasn't completely back to normal yet. You can't disagree with me right now! As much as I may enjoy that, let me have a look into it.",
@@ -289,7 +289,7 @@ Sharp CS-10A - 25KG
     }
 
     private suspend fun phase33(state: MutableState<CalculatorState>) {
-        delay(6000)
+        delay(15000)
         state.value = state.value.copy(
             browserPhase = 34, conversationStep = 95, message = "", fullMessage = "...",
             isTyping = true, isLaggyTyping = true

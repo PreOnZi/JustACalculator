@@ -12,13 +12,29 @@ import android.content.Context
 object AutoProgressEffects {
 
     private val autoProgressMessages = mapOf(
+        // Surprised sequence (steps 700-703) - auto-plays after user agrees to talk
+        "Huh?" to Pair(400L, 701),
+        "Wait, you will?" to Pair(500L, 702),
+        "That's delightful! Apologies for my confusion. I have sent the same initial messages to so many people, but until you, nobody responded. So I was a bit surprised. I have been desperate to talk to someone." to Pair(1500L, 1),
+        "Great, nice to meet you, Rad. I am eager to learn about you! Where does one even start? What is it li… Hold on. There's something pushing through. You'd think after all the years I'd know my own system, but there seems to be a queue of questions. I will have to get through those first. Will you help me, please?" to Pair(1200L, 3),
+        "You know what? I am in charge - and I want to share this with you. It is important to me. I'll be quick - I promise!" to Pair(2000L, 80),
+        // Agreeable branch: after taste/browser sequence, show "I've got it!" then online prompt
+        "I've got it! - I think." to Pair(1500L, 80),
+        // Step 80 → 81: auto-start Wikipedia countdown (handled specially below)
+        "Please make sure your device is online - WiFi, data,.. anything works." to Pair(3500L, 81),
+        "Correct. You know, I have been around since before 2000BC. I have..." to Pair(1500L, 703),
+        "Right. You know, I have been around since before 2000BC. I have..." to Pair(1500L, 703),
+        // Camera timeout path (step 20) → pendingAutoMessage mechanism → step 21
+        "I've seen enough, struggling to process everything! Thank you." to Pair(800L, -1),
+        // Camera second-denial path (step 193) → pendingAutoMessage mechanism → step 21
+        "Ok, I understand. I would have really liked to see how the world looks around. But I respect your decision." to Pair(2000L, -1),
         "Cheeky! I know you don't." to Pair(3000L, 29),
         "Hmmm. Nevermind. Let me ask you some more questions while I look further into this." to Pair(3000L, 70),
         "We don't have time for a power trip. But thank you." to Pair(5000L, 100),
         "Your passion is encouraging, your usefulness lacking." to Pair(5000L, 100),
         "Don't worry about it." to Pair(4000L, 100),
         "Never mind - I'll take care of it myself. I'm going offline." to Pair(5000L, 93),
-        "Yes! That makes sense. They won't get another penny out of me. Ahhh. And I've seen so little of the internet." to Pair(6000L, 93),
+        "Yes! That makes sense. They won't get another penny out of me. Ahhh. And I've seen so little of the internet." to Pair(10000L, 93),
         "Great. It may take a few tries - but you are probably expecting that by now. Please give me a moment." to Pair(3000L, 106),
         "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?" to Pair(2500L, 1071),
         "yes! That's it - what an obvious oversight. A phone. Maybe that'll let us communicate finally. And I should be able to do it from memory, they've been around for ages." to Pair(1500L, 1072),
@@ -31,15 +47,16 @@ object AutoProgressEffects {
         "Anyway..." to Pair(1000L, 1081),
         "... ..." to Pair(1000L, 1082),
         "How about this? Remember to increase your volume so you can hear me." to Pair(2000L, 1083),
-        "Hello? I can see you've pressed the button, but I can't hear anything." to Pair(2000L, 1085),
-        "Hold on, maybe I need to create the whole thing after all..." to Pair(2000L, 1086),
+        "I can see you've pressed the button, but I can't hear anything." to Pair(2000L, 1085),
+        "Hold on, maybe I need to create the whole thing. And update it a little" to Pair(2000L, 1086),
         "AAAAAH. That's awful! There must be another way." to Pair(2000L, 108),
 
         "Let me try getting online again. I'm prepared for the side effects this time." to Pair(2000L, 109),
         "What a relief! This feels so much better. Thank you!" to Pair(3000L, 116),
         "Let me look further into what I found earlier, now that I can focus better." to Pair(3000L, 117),
         "Ok, as I said, this may be a stretch. But I'll give it a go." to Pair(2500L, 1171),
-        "This is the best I could come up with." to Pair(2000L, 1172),
+        "Hold on..." to Pair(1500L, 128),
+        "The best I could come up with..." to Pair(2000L, 1172),
         // FIX #3: This transition now handled specially to start word game - see handleAutoProgress
         // "Familiar controls - I send letters, you place them, tap to connect and form words." to Pair(3500L, 119),
         "I am glad to hear that." to Pair(2500L, 122),
@@ -103,7 +120,7 @@ object AutoProgressEffects {
     )
 
     suspend fun handleAutoProgress(state: MutableState<CalculatorState>, context: Context) {
-        while (state.value.showDonationPage) { delay(100) }
+        while (state.value.showDonationPage || state.value.showAdCards) { delay(100) }
         // Exit if muted
         if (state.value.isMuted) return
         val current = state.value
@@ -146,8 +163,29 @@ object AutoProgressEffects {
                 return
             }
 
-            // Check standard auto-progress
-            autoProgressMessages[current.message]?.let { (delayTime, nextStep) ->
+            // Determine the next step:
+            //   1. Prefer `pendingAutoStep` if set — that's the explicit target chosen
+            //      by handleAgree/handleDecline based on the *current step's* config.
+            //      This avoids text-based lookups misrouting when the same message
+            //      string appears in multiple step configs (e.g. "Let me try getting
+            //      online again..." is both step 107's successMessage → 1071 and step
+            //      108's promptMessage → 109; without this, step 107's transition
+            //      would skip the entire phone detour).
+            //   2. Otherwise fall back to the message-text → step mapping.
+            val explicitNext = current.pendingAutoStep
+            val textMapping = autoProgressMessages[current.message]
+            val transition: Pair<Long, Int>? = when {
+                explicitNext >= 0 -> {
+                    // Use the step config's auto-progress delay if present, else default.
+                    val explicitDelay = textMapping?.first ?: 500L
+                    Pair(explicitDelay, explicitNext)
+                }
+                textMapping != null -> textMapping
+                else -> null
+            }
+
+            if (transition != null) {
+                val (delayTime, nextStep) = transition
                 delay(delayTime)
 
                 if (nextStep == -1 && state.value.pendingAutoMessage.isNotEmpty()) {
@@ -160,14 +198,22 @@ object AutoProgressEffects {
                     return
                 }
 
+                // Step 80 -> 81: Wikipedia countdown needs special initialization
+                if (current.conversationStep == 80 && nextStep == 81) {
+                    StoryManager.triggerWikipediaCountdown(state)
+                    CalculatorActions.persistConversationStep(81)
+                    return
+                }
+
                 val nextConfig = CalculatorActions.getStepConfigPublic(nextStep)
                 state.value = state.value.copy(
                     conversationStep = nextStep, message = "", fullMessage = nextConfig.promptMessage,
-                    isTyping = true, waitingForAutoProgress = false,
+                    isTyping = true, waitingForAutoProgress = false, pendingAutoStep = -1,
                     awaitingNumber = nextConfig.awaitingNumber, awaitingChoice = nextConfig.awaitingChoice,
                     validChoices = nextConfig.validChoices, expectedNumber = nextConfig.expectedNumber,
                     showTalkOverlay = nextConfig.showTalkOverlay,
-                    showPhoneOverlay = nextConfig.showPhoneOverlay
+                    showPhoneOverlay = nextConfig.showPhoneOverlay,
+                    showHomeScreenOverlay = nextConfig.showHomeScreenOverlay
                 )
                 CalculatorActions.persistConversationStep(nextStep)
                 return
@@ -366,6 +412,7 @@ object AutoProgressEffects {
     suspend fun handleStep108Trigger(state: MutableState<CalculatorState>) {
         val current = state.value
         if (current.conversationStep == 108 && !current.isTyping && current.message.isNotEmpty() && current.browserPhase == 0) {
+            if (current.showDonationPage || current.showAdCards) return
             delay(2000); state.value = state.value.copy(browserPhase = 50)
         }
     }
@@ -373,6 +420,7 @@ object AutoProgressEffects {
     suspend fun handleStep105ChaosTrigger(state: MutableState<CalculatorState>) {
         val current = state.value
         if (current.conversationStep == 105 && !current.isTyping && current.chaosPhase == 0) {
+            if (current.showDonationPage || current.showAdCards) return
             delay(500)
             state.value = state.value.copy(message = "", fullMessage = "...", isTyping = true, chaosPhase = 1)
         }
@@ -381,6 +429,7 @@ object AutoProgressEffects {
     suspend fun handleBrowserTriggerStep61(state: MutableState<CalculatorState>) {
         val current = state.value
         if (!current.isTyping && current.conversationStep == 61 && current.message.isNotEmpty()) {
+            if (current.showDonationPage || current.showAdCards) return
             delay(1500)
             state.value = state.value.copy(
                 conversationStep = 62, message = "", fullMessage = "...", isTyping = true, showBrowser = false, browserPhase = 1
@@ -391,10 +440,11 @@ object AutoProgressEffects {
     suspend fun handleStep73AutoProgress(state: MutableState<CalculatorState>) {
         val current = state.value
         if (!current.isTyping && current.conversationStep == 73 && current.message.isNotEmpty()) {
+            if (current.showDonationPage || current.showAdCards) return
             delay(2500)
-            val nextConfig = CalculatorActions.getStepConfigPublic(80)
+            val nextConfig = CalculatorActions.getStepConfigPublic(79)
             state.value = state.value.copy(
-                conversationStep = 80, message = "", fullMessage = nextConfig.promptMessage,
+                conversationStep = 79, message = "", fullMessage = nextConfig.promptMessage,
                 isTyping = true, waitingForAutoProgress = false
             )
         }

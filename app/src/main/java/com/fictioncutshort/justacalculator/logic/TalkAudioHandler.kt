@@ -37,10 +37,40 @@ class TalkAudioHandler(private val context: Context) {
     private var echoBufferIndex = 0
     private val echoDecay = 0.4f  // How much the echo fades (0.0 - 1.0)
 
+    // Tunable per call to startRealtimeEcho — mutable so the audio thread
+    // picks up the active values without re-allocation.
+    private var activeEchoDecay = 0.4f
+    private var activeDistortion = 1.2f
+
+    // When true, the recording loop drops captured audio before writing to the
+    // speaker — used by [PhoneCallScreen] to mute the user's mic while the
+    // calculator's pre-recorded audio is playing.
+    @Volatile
+    private var echoMuted = false
+
     /**
-     * Start capturing audio and playing it back with echo/distortion effect
+     * Suspend / resume mic-echo without tearing down AudioRecord/AudioTrack.
+     * Cheaper than stop+start and avoids the audible glitch from re-binding.
      */
-    fun startRealtimeEcho() {
+    fun setEchoMuted(muted: Boolean) {
+        echoMuted = muted
+    }
+
+    /**
+     * Start capturing audio and playing it back with echo/distortion effect.
+     *
+     * @param decay      0..1, how much of the prior signal is mixed back. Lower
+     *                   values produce a tamer, telephone-like effect.
+     * @param distortion soft-clipping gain; 1.0 = none. Lower values reduce the
+     *                   harsh saturation that sells the rotary-phone fail.
+     */
+    fun startRealtimeEcho(
+        decay: Float = 0.4f,
+        distortion: Float = 1.2f
+    ) {
+        activeEchoDecay = decay
+        activeDistortion = distortion
+        echoMuted = false
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED) {
             return
@@ -91,7 +121,9 @@ class TalkAudioHandler(private val context: Context) {
                 if (readCount > 0) {
                     // Apply echo and distortion effect
                     val processed = applyEchoDistortion(buffer, readCount)
-                    audioTrack?.write(processed, 0, readCount)
+                    if (!echoMuted) {
+                        audioTrack?.write(processed, 0, readCount)
+                    }
                 }
             }
         }
@@ -126,10 +158,10 @@ class TalkAudioHandler(private val context: Context) {
             val delayedSample = echoBuffer[echoBufferIndex].toInt()
 
             // Mix current sample with delayed sample (echo effect)
-            var mixedSample = currentSample + (delayedSample * echoDecay).toInt()
+            var mixedSample = currentSample + (delayedSample * activeEchoDecay).toInt()
 
-            // Apply slight distortion (soft clipping)
-            mixedSample = (mixedSample * 1.2).toInt()
+            // Apply soft-clipping distortion. Distortion of 1.0 = passthrough.
+            mixedSample = (mixedSample * activeDistortion).toInt()
             mixedSample = mixedSample.coerceIn(-32000, 32000)
 
             // Store current sample in echo buffer for future delay
