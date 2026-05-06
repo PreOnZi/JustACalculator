@@ -64,6 +64,7 @@ fun ConsoleWindow(
     currentInput: String,
     bannersDisabled: Boolean,
     fullScreenAdsEnabled: Boolean,
+    darkModeEnabled: Boolean,
     totalScreenTimeMs: Long,
     totalCalculations: Int,
     onOpenContributeLink: () -> Unit,
@@ -84,6 +85,7 @@ fun ConsoleWindow(
         adminCodeEntered = adminCodeEntered,
         bannersDisabled = bannersDisabled,
         fullScreenAdsEnabled = fullScreenAdsEnabled,
+        darkModeEnabled = darkModeEnabled,
         totalScreenTimeMs = totalScreenTimeMs,
         totalCalculations = totalCalculations,
         context = context
@@ -165,6 +167,7 @@ private fun getConsoleMenuContent(
     adminCodeEntered: Boolean,
     bannersDisabled: Boolean,
     fullScreenAdsEnabled: Boolean,
+    darkModeEnabled: Boolean,
     totalScreenTimeMs: Long,
     totalCalculations: Int,
     context: android.content.Context
@@ -387,7 +390,9 @@ private fun getConsoleMenuContent(
             |        DESIGN SETTINGS
             |═══════════════════════════════════
             |
-            | Dark mode: Unavailable
+            | Dark mode: ${if (darkModeEnabled) "ON" else "OFF"}
+            |
+            | 1. Toggle dark mode
             |
             | 88. Back
             | 99. Exit console
@@ -402,13 +407,8 @@ private fun getConsoleMenuContent(
             | Banner advertising has been
             | DISABLED.
             |
-            | Full-screen advertising has been
-            | ENABLED.
-            |
-            | Changes will take effect
-            | immediately.
-            |
-            | Press 99++ to close console.
+            | 88. Back
+            | 99. Exit console
             |═══════════════════════════════════
         """.trimMargin()
 

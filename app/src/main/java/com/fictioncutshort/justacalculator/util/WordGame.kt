@@ -36,6 +36,9 @@ object WordCategories {
         if (lower in neutralWords) return true
         if (lower.length == 1 && lower[0] in singleLetterWords) return true
 
+        // Accept binary yes/no synonyms (used by the new branching gates)
+        if (lower in binaryYes || lower in binaryNo) return true
+
         // Accept all colors
         if (lower in validColors) return true
 
@@ -53,6 +56,9 @@ object WordCategories {
 
         // Accept walk frequencies
         if (lower in walkFrequencies) return true
+
+        // Accept activity words (neutral branch, step 142)
+        if (lower in activities) return true
 
         // Accept maths opinions
         if (lower in mathsOpinions) return true
@@ -168,6 +174,48 @@ object WordCategories {
         "yearly", "hardly", "barely", "lot", "everyday", "once", "twice"
     )
 
+    // === BINARY YES/NO ===
+    // Used for gate questions in the rewritten word game (steps 121, 122, 131,
+    // 132, 141). Anything outside these sets triggers a "this is a binary
+    // question" retry.
+    val binaryYes = setOf("yes", "yeah", "yep", "yup", "sure", "ok", "okay")
+    val binaryNo = setOf("no", "nope", "nah", "never", "not")
+
+    // === ACTIVITIES (neutral branch, step 142) ===
+    // The user must spell something the calculator recognises; any other word
+    // triggers the "I've never heard of that" retry. Includes both base verb
+    // and -ing form so either drops in.
+    val activities = setOf(
+        // Active / outdoor
+        "run", "running", "walk", "walking", "hike", "hiking", "swim", "swimming",
+        "bike", "biking", "cycle", "cycling", "ski", "skiing", "surf", "surfing",
+        "skate", "skating", "climb", "climbing", "jog", "jogging",
+        // Indoor / fitness
+        "yoga", "gym", "exercise", "stretch", "stretching", "pilates", "lift",
+        "lifting", "train", "training", "dance", "dancing",
+        // Creative
+        "read", "reading", "write", "writing", "draw", "drawing", "paint",
+        "painting", "sing", "singing", "play", "playing", "music",
+        "knit", "knitting", "sew", "sewing", "bake", "baking",
+        "cook", "cooking", "garden", "gardening", "craft", "crafting",
+        // Sedentary / comfort
+        "eat", "eating", "sleep", "sleeping", "nap", "rest", "resting",
+        "watch", "watching", "listen", "listening", "scroll", "scrolling",
+        "browse", "browsing", "drink", "drinking", "smoke", "smoking",
+        "shop", "shopping",
+        // Social
+        "talk", "talking", "call", "calling", "text", "texting",
+        "party", "chat", "chatting",
+        // Mental
+        "study", "studying", "work", "working", "meditate", "meditating",
+        "think", "thinking", "pray", "praying",
+        // Misc
+        "drive", "driving", "travel", "travelling", "traveling",
+        "cry", "crying", "breathe", "breathing",
+        "game", "gaming", "tv", "podcast", "movies", "puzzle", "chess",
+        "fish", "fishing", "golf"
+    )
+
     // === MATHS OPINIONS (triggers rant) ===
     val mathsOpinions = setOf(
         // Positive
@@ -211,6 +259,10 @@ object WordCategories {
     fun isDeathResponse(word: String): Boolean = word.lowercase() in deathResponses
     fun isWalkFrequency(word: String): Boolean = word.lowercase() in walkFrequencies
     fun isMathsOpinion(word: String): Boolean = word.lowercase() in mathsOpinions
+    fun isBinaryYes(word: String): Boolean = word.lowercase() in binaryYes
+    fun isBinaryNo(word: String): Boolean = word.lowercase() in binaryNo
+    fun isBinary(word: String): Boolean = isBinaryYes(word) || isBinaryNo(word)
+    fun isActivity(word: String): Boolean = word.lowercase() in activities
 }
 
 // Letter generator with weighted distribution for word formation
@@ -247,20 +299,73 @@ object LetterGenerator {
     fun getRandomLetter(): Char = weightedLetters.random()
 
     fun getInitialLetterQueue(): List<Char> {
-        return listOf(
-            'G', 'O', 'O', 'D',
-            'W', 'E', 'L', 'L',
-            'F', 'I', 'N', 'E',
-            'O', 'K',
-            'B', 'A', 'D',
-            'S', 'A', 'D',
-            'Y', 'E', 'S',
-            'N', 'O',
-            'I', 'A', 'M',
-            'T', 'I', 'R', 'E', 'D',
-            'H', 'A', 'P', 'P', 'Y',
-            'A', 'E', 'I', 'O', 'U', 'L', 'N', 'S', 'T', 'R'
-        )
+        // Seed letters across every branch the rewritten word game can ask for
+        // (mood / binary / colour / season / cuisine / activity), so on any
+        // single board the user has enough on-screen to spell several
+        // valid answers without waiting for a queue refill. The queue cycles
+        // when exhausted (see LetterBlockGame.nextLetter), so any answer the
+        // calculator might need keeps coming around.
+        return buildList {
+            // ── Mood (steps 119/120) ─────────────────────────────────────
+            addAll(listOf('G', 'O', 'O', 'D'))
+            addAll(listOf('W', 'E', 'L', 'L'))
+            addAll(listOf('F', 'I', 'N', 'E'))
+            addAll(listOf('B', 'A', 'D'))
+            addAll(listOf('S', 'A', 'D'))
+            addAll(listOf('M', 'E', 'H'))
+            addAll(listOf('O', 'K'))
+            addAll(listOf('H', 'A', 'P', 'P', 'Y'))
+            addAll(listOf('T', 'I', 'R', 'E', 'D'))
+
+            // ── Binary yes/no (steps 121, 122, 131, 132, 141) ────────────
+            // Doubled because every branch hits a binary gate.
+            addAll(listOf('Y', 'E', 'S'))
+            addAll(listOf('N', 'O'))
+            addAll(listOf('Y', 'E', 'S'))
+            addAll(listOf('N', 'O'))
+
+            // ── Colours (step 123) ──────────────────────────────────────
+            addAll(listOf('R', 'E', 'D'))
+            addAll(listOf('B', 'L', 'U', 'E'))
+            addAll(listOf('P', 'I', 'N', 'K'))
+            addAll(listOf('B', 'R', 'O', 'W', 'N'))
+            addAll(listOf('G', 'R', 'E', 'E', 'N'))
+
+            // ── Seasons (step 125) ───────────────────────────────────────
+            addAll(listOf('S', 'P', 'R', 'I', 'N', 'G'))
+            addAll(listOf('S', 'U', 'M', 'M', 'E', 'R'))
+            addAll(listOf('A', 'U', 'T', 'U', 'M', 'N'))
+            addAll(listOf('W', 'I', 'N', 'T', 'E', 'R'))
+
+            // ── Cuisines (step 127) ──────────────────────────────────────
+            // Skipping cuisines with X/Z (excluded from the random fallback)
+            // — THAI, SUSHI, INDIAN cover spicy + non-spicy categories.
+            addAll(listOf('T', 'H', 'A', 'I'))
+            addAll(listOf('S', 'U', 'S', 'H', 'I'))
+            addAll(listOf('I', 'N', 'D', 'I', 'A', 'N'))
+            addAll(listOf('B', 'U', 'R', 'G', 'E', 'R'))
+
+            // ── Activities (step 142, neutral branch) ────────────────────
+            addAll(listOf('R', 'U', 'N'))
+            addAll(listOf('W', 'A', 'L', 'K'))
+            addAll(listOf('R', 'E', 'A', 'D'))
+            addAll(listOf('E', 'A', 'T'))
+            addAll(listOf('S', 'L', 'E', 'E', 'P'))
+            addAll(listOf('S', 'I', 'N', 'G'))
+            addAll(listOf('C', 'O', 'O', 'K'))
+            addAll(listOf('S', 'W', 'I', 'M'))
+            addAll(listOf('Y', 'O', 'G', 'A'))
+            addAll(listOf('B', 'A', 'K', 'E'))
+
+            // ── Walk frequency / death responses (steps 134, 139) ────────
+            addAll(listOf('O', 'F', 'T', 'E', 'N'))
+            addAll(listOf('N', 'E', 'V', 'E', 'R'))
+            addAll(listOf('D', 'A', 'I', 'L', 'Y'))
+
+            // ── Filler vowels + common consonants for general flexibility
+            addAll(listOf('A', 'E', 'I', 'O', 'U'))
+            addAll(listOf('L', 'N', 'S', 'T', 'R'))
+        }
     }
 }
 

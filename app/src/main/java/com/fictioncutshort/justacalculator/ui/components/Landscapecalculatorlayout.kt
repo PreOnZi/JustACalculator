@@ -122,7 +122,8 @@ fun LandscapeCalculatorContent(
                 }
             }
 
-            // LCD Display - bottom of left panel (when not showing camera/browser)
+            // (Dormancy uses its own dedicated screen — see DormancyScreen —
+            // so it never routes through this layout.)
             if (!current.cameraActive && !current.showBrowser) {
                 CalculatorLcdDisplay(
                     displayText = displayText,
@@ -189,6 +190,7 @@ fun LandscapeCalculatorContent(
                     flickeringButton = current.flickeringButton,
                     darkButtons = current.darkButtons,
                     allButtonsRad = current.allButtonsRad,
+                    radButtonsConverted = current.radButtonsConverted,
                     rantMode = current.rantMode,
                     onButtonClick = { symbol ->
                         CalculatorActions.handleInput(state, symbol)

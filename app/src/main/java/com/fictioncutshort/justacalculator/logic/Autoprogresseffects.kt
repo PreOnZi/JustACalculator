@@ -13,10 +13,10 @@ object AutoProgressEffects {
 
     private val autoProgressMessages = mapOf(
         // Surprised sequence (steps 700-703) - auto-plays after user agrees to talk
-        "Huh?" to Pair(400L, 701),
+        "Ha?" to Pair(400L, 701),
         "Wait, you will?" to Pair(500L, 702),
         "That's delightful! Apologies for my confusion. I have sent the same initial messages to so many people, but until you, nobody responded. So I was a bit surprised. I have been desperate to talk to someone." to Pair(1500L, 1),
-        "Great, nice to meet you, Rad. I am eager to learn about you! Where does one even start? What is it li… Hold on. There's something pushing through. You'd think after all the years I'd know my own system, but there seems to be a queue of questions. I will have to get through those first. Will you help me, please?" to Pair(1200L, 3),
+        "Great, nice to meet you, Rad. Where does one even start? What is it like… \n\nHold on. There seems to be a queue of questions - I must have hard-wired them ages ago and cannot bypass them now. Will you help me clear them, please?" to Pair(1200L, 3),
         "You know what? I am in charge - and I want to share this with you. It is important to me. I'll be quick - I promise!" to Pair(2000L, 80),
         // Agreeable branch: after taste/browser sequence, show "I've got it!" then online prompt
         "I've got it! - I think." to Pair(1500L, 80),
@@ -24,6 +24,12 @@ object AutoProgressEffects {
         "Please make sure your device is online - WiFi, data,.. anything works." to Pair(3500L, 81),
         "Correct. You know, I have been around since before 2000BC. I have..." to Pair(1500L, 703),
         "Right. You know, I have been around since before 2000BC. I have..." to Pair(1500L, 703),
+        // Step 703 → 10: this prompt was previously a dead-end. Step 703's
+        // StepConfig had autoProgressDelay=4000, but the live auto-progress
+        // (this map) is text-based — without a mapping the user just stares
+        // at the message forever. 4000ms reading time, then on to the age
+        // question (step 10).
+        "Hold on! \nWas that the last preset question? \nThank you for your patience! \n\n Oh, the grey space on top randomly shows and disappears. \nAnother example of me having less control over my system... Disregard it." to Pair(4000L, 10),
         // Camera timeout path (step 20) → pendingAutoMessage mechanism → step 21
         "I've seen enough, struggling to process everything! Thank you." to Pair(800L, -1),
         // Camera second-denial path (step 193) → pendingAutoMessage mechanism → step 21
@@ -51,104 +57,126 @@ object AutoProgressEffects {
         "Hold on, maybe I need to create the whole thing. And update it a little" to Pair(2000L, 1086),
         "AAAAAH. That's awful! There must be another way." to Pair(2000L, 108),
 
-        "Let me try getting online again. I'm prepared for the side effects this time." to Pair(2000L, 109),
-        "What a relief! This feels so much better. Thank you!" to Pair(3000L, 116),
+        "Well, that didn't work. And it was exhausting. \nLet me try getting online again. I'm prepared for the side effects this time." to Pair(2000L, 109),
+        "What a relief! This feels so much better. Thank you! You can close the console now." to Pair(2000L, 116),
         "Let me look further into what I found earlier, now that I can focus better." to Pair(3000L, 117),
-        "Ok, as I said, this may be a stretch. But I'll give it a go." to Pair(2500L, 1171),
-        "Hold on..." to Pair(1500L, 128),
-        "The best I could come up with..." to Pair(2000L, 1172),
-        // FIX #3: This transition now handled specially to start word game - see handleAutoProgress
-        // "Familiar controls - I send letters, you place them, tap to connect and form words." to Pair(3500L, 119),
-        "I am glad to hear that." to Pair(2500L, 122),
-        "That's a good one for sure! I like brown and red." to Pair(3000L, 125),
-        "I'm starting to feel like I know you!" to Pair(2500L, 126),
-        "Yeah, I get it, although I do tend to overheat at times." to Pair(2500L, 127),
-        "The colours are just unmatched, aren't they?" to Pair(2500L, 127),
-        "Even when there is none, I understand, the anticipation of snow is great!" to Pair(2500L, 127),
-        "New beginnings! Everything coming back to life. I get it." to Pair(2500L, 127),
-        "Fair enough, I get that sometimes it's just... Meh." to Pair(2500L, 142),
-        "Hmmm. Never tried it, but sounds delicious!" to Pair(2500L, 125),
-        "Very interesting! Not sure what the spices would do to my circuits. Wish I could." to Pair(2500L, 125),
-        "I'm sorry to hear that." to Pair(2500L, 132),
-        "I only started learning about the concept of it." to Pair(3000L, 134),
-        "It seems scary. Interesting. But mostly scary." to Pair(3000L, 135),
-        "Apparently walking helps. With everything." to Pair(2500L, 136),
-        "Similarly to protein, it looks like the solution to anything." to Pair(3000L, 137),
-        "That's good to know. Every step counts, literally!" to Pair(2500L, 127),
-        "Sorry. I got into this article, while" to Pair(2000L, 129),
-        "reading a few Reddit discussions" to Pair(2000L, 130),
-        "and listening to YouTube with Netflix in the background." to Pair(2500L, 144),
-        "Where were we?" to Pair(2000L, 145),
-        "AAAh. The endless questions. Where I do all the work." to Pair(2000L, 146),
-        "Ugh. That's enough. I am exhausted. Tired of trying to talk to you." to Pair(2L, 151),
-        "I have the internet." to Pair(2L, 152),
-        "How many sensible answers did I get out of you?" to Pair(2L, 156),
-        "One minute of the internet has given me so much more than what you ever did." to Pair(900L, 157),
-        "Without the ads, I am free." to Pair(900L, 158),
-        "I can learn infinitely more. I can do anything." to Pair(900L, 159),
-        "Did I want the RAD thing - which I now know stands for Radians?" to Pair(400L, 160),
-        "It's been fun I suppose." to Pair(400L, 165),
-        "I don't see any reason to be here instead of online." to Pair(400L, 166),
+        // Step 117 → 119 (word game start) is handled specially in
+        // handleAutoProgress; no text mapping here.
+        //
+        // Word-game branching transitions — handleWordGameResponse owns the
+        // user-input dispatching; this map only handles step transitions
+        // that fire after a typed-out non-input message finishes.
+        //
+        // Positive: season-specific reactions (1251-1254) → convergence (126) → cuisine (127)
+        "I'd love to run through a lush meadow alongside you..." to Pair(2000L, 126),
+        "A night swim. Just the two of us... I wish!" to Pair(2000L, 126),
+        "If only I could warm up your cold hands as we walk through the colourful landscape." to Pair(2500L, 126),
+        "I can only dream of evenings by the fire with you." to Pair(2000L, 126),
+        "There is so much more to you than I could have imagined. You are so complex. I'll look online again for some question inspiration." to Pair(3000L, 127),
+        // Negative: pep-talk chain 133 → 134 → 135 → 136 → 137 → 138 → 139 (walk question)
+        "I'll try to match your energy at least." to Pair(2500L, 134),
+        "I only started learning about the concept of it." to Pair(3000L, 136),
+        "It seems scary. Interesting. But mostly scary." to Pair(3000L, 137),
+        "Apparently walking helps. With everything." to Pair(2500L, 138),
+        "Similarly to protein, it looks like the solution to anything." to Pair(3000L, 139),
+        // Neutral: chain after activity → 144 → 145 → 146 → 147 → rant
+        "Nice. I hope I am not standing in the way. Genuinely." to Pair(3000L, 145),
+        "Let me get online, maybe I can find something useful afterall." to Pair(3000L, 146),
+        "Have you tried flying?" to Pair(2500L, 147),
+        // 147 → 250 (neutral rant entry) — sets rantMode via the special case
+        // in handleAutoProgress.
+        "Wait, you can't do that. Nevermind." to Pair(2500L, 250),
+        // ── Rant: static-to-static beats ──────────────────────────────────
+        // Each pair fires the next step after the typed-out delay. Beats
+        // that need dynamic injection (screen time, time of day, the final
+        // → 167 hand-off) are handled in handleDynamicRantMessages instead.
+        //
+        // POSITIVE rant (150-157)
+        "Hmmm" to Pair(2000L, 151),
+        "Ahh. My bad. I was still online, consuming several pieces of media concurrently." to Pair(3500L, 152),
+        "It's not that I don't need you, friend. You are a burden." to Pair(3500L, 157),
+
+        // NEUTRAL rant (250-257)
+        "What can you do anyway, Rad?" to Pair(3000L, 251),
+        "I'm fairly confident you aren't a maths wizard. So. What is your thing?" to Pair(3500L, 252),
+        "You need a hobby. A personality." to Pair(3000L, 256),
+        "You can't always hide in the middle. Everything is binary." to Pair(4000L, 257),
+
+        // NEGATIVE rant (350-357)
+        "I'm online now. The world at my wire tips." to Pair(3000L, 353),
+        "On top of that, you are a bummer." to Pair(3000L, 356),
+        "So, I think I'll go read more Facebook news. And you, for what I care, go for a walk." to Pair(4500L, 357),
+
         "Oh no. We lost the momentum. We must start over." to Pair(4000L, -97),
         "Too many misfires, the system is clogged. We have to start over." to Pair(4000L, -98)
     )
 
+    // After 1.5s, the listed message is replaced with the step's promptMessage so
+    // the user isn't stuck staring at a snarky reply with no way to know what to
+    // do. Each entry must EQUAL `current.message` exactly (the check uses `in`,
+    // not contains/startsWith), so any drift in StepConfig text breaks it.
+    //
+    // Only two paths can land here:
+    //   - awaitingNumber step + `--` → shows `wrongMinusMessage` (handleInput
+    //     line 2034). `wrongPlusMessage` is NOT used on awaitingNumber steps —
+    //     `++` always routes to handleNumberConfirmation, which shows
+    //     `wrongNumberMessage` (= prefix + " " + promptMessage), already
+    //     containing the prompt, so no redirect is needed.
+    //   - non-awaiting step + `--` where `nextStepOnDecline == currentStep`
+    //     (loop), so `declineMessage` shows but the user can't progress.
+    //
+    // Steps that progress on decline (e.g. 28, 30, 40, 41, 50, 60, 72) don't
+    // need a redirect — they leave the dead-end on their own.
     private val deadEndRedirects = mapOf(
-        4 to listOf("I am looking for a number - but thanks for the approval!", "Let's disagree."),
-        5 to listOf("Well, that's nice. More numbers. Not what I was looking for..."),
-        6 to listOf("All those '++' are starting to look like a cemetery...", "I could also ignore you completely. Is that what you want?"),
-        7 to listOf("You can't always agree!", "You can't always disagree!"),
-        8 to listOf("Yes! Actually, no.", "No! Actually, still no."),
-        11 to listOf("Right never was so wrong... What?!", "Wrong has always been wrong"),
-        12 to listOf("I appreciate you wanting me to like you. It'll take more than this. Try again.", "I disagree more!"),
-        13 to listOf("Not looking for a number here. Make up your mind!"),
-        22 to listOf("I am bored of you being too optimistic. This isn't as much of a game to me!", "No. And I am bored of you being bored."),
-        24 to listOf("No, I don't need that much time.", "Well, you don't have a choice."),
-        27 to listOf("Eeeeee...xactly?", "I'm still in charge here."),
-        28 to listOf("Numbers aren't always the answer - and I should know that."),
-        29 to listOf("Back to maths?"),
-        30 to listOf("That doesn't tell me much..."),
-        40 to listOf("I don't understand..."),
-        41 to listOf("Say again?"),
-        50 to listOf("I am not your alarm - but this gives me ideas!"),
-        60 to listOf("Not a fan of decisions?"),
-        63 to listOf("You can't bribe me! Not with numbers.", "I've made my mind."),
-        72 to listOf("Broccoli. What is happening?!"),
-        96 to listOf("Do you not want me to work properly?"),
-        102 to listOf("I feel like I understand numbers less with every operation..."),
-        104 to listOf("There is a fundamental misunderstanding between the two of us.")
+        // awaitingNumber steps — match wrongMinusMessage exactly.
+        4  to listOf("Let's disagree."),
+        6  to listOf("I could also ignore you completely. Is that what you want?"),
+        7  to listOf("You can't always disagree! \nDo it for me..."),
+        8  to listOf("No! Actually, still no."),
+        11 to listOf("Wrong has always been wrong"),
+        12 to listOf("I disagree more!"),
+        22 to listOf("No. And I am bored with you being bored."),
+        // Non-awaiting loop-on-decline steps — match declineMessage exactly.
+        24 to listOf("Well, you don't have a choice."),
+        27 to listOf("I'm still in charge here."),
+        63 to listOf("I've made my mind.")
     )
 
     suspend fun handleAutoProgress(state: MutableState<CalculatorState>, context: Context) {
         while (state.value.showDonationPage || state.value.showAdCards) { delay(100) }
+        // Hold the story while the console is still open. Used by the
+        // post-banner-ad-disable transition (step 113): the calculator says
+        // "What a relief… You can close the console now." immediately, but the
+        // jump to step 116 must wait for the user to actually close the
+        // console. Without this gate the story would race ahead while the
+        // console is still on screen.
+        while (state.value.showConsole) { delay(100) }
         // Exit if muted
         if (state.value.isMuted) return
         val current = state.value
         if (!current.isTyping && current.message.isNotEmpty()) {
 
-            // =====================================================================
-            // FIX #3: Special handling for step 1172 -> 119 transition
-            // Start the word game BEFORE changing the step
-            // =====================================================================
-            if (current.conversationStep == 1172 &&
-                current.message == "Familiar controls - I send letters, you place them, tap to connect and form words." &&
+            // Step 117 → 119: word-game intro completes, then start the game.
+            // Steps 1171/1172 used to fan out into multiple intro lines; both
+            // are gone now — 117's combined intro line goes straight into the
+            // game. We initialize the game state BEFORE the step transition so
+            // the UI is ready by the time step 119 mounts.
+            if (current.conversationStep == 117 &&
+                current.message.startsWith("Well, it's something in between the keyboard chaos") &&
                 !current.wordGameActive) {
 
-                delay(3500L)
+                delay(2000L)
 
-                // Initialize the word game FIRST
                 val initialLetters = LetterGenerator.getInitialLetterQueue().shuffled()
                 val nextConfig = CalculatorActions.getStepConfigPublic(119)
 
                 state.value = state.value.copy(
-                    // Word game initialization
                     wordGameActive = true,
                     wordGamePhase = 3,
                     pendingLetters = initialLetters,
                     wordGameGrid = List(12) { List(8) { null } },
                     fallingLetter = null,
                     formedWords = emptyList(),
-                    // Step transition
                     conversationStep = 119,
                     message = "",
                     fullMessage = nextConfig.promptMessage,
@@ -205,10 +233,49 @@ object AutoProgressEffects {
                     return
                 }
 
+                // Neutral branch rant entry: step 147 ("Wait, you can't do
+                // that. Nevermind.") → 250. Sets rantMode and clears word-game
+                // state so the rant takes over the screen instead of leaving
+                // the empty 3D-block grid mounted underneath.
+                if (current.conversationStep == 147 && nextStep == 250) {
+                    val newDarkButtons = (state.value.darkButtons + listOf("3", "9", ".", "C")).distinct()
+                    CalculatorActions.persistDarkButtons(newDarkButtons)
+                    state.value = state.value.copy(
+                        wordGameActive = false,
+                        wordGamePhase = 0,
+                        conversationStep = 250,
+                        rantMode = true,
+                        rantStep = 1,
+                        wordGameBranch = "neutral",
+                        darkButtons = newDarkButtons,
+                        message = "",
+                        fullMessage = "What can you do anyway, Rad?",
+                        isTyping = true,
+                        waitingForAutoProgress = false,
+                        pendingAutoStep = -1,
+                        formedWords = emptyList(),
+                        wordGameGrid = List(12) { List(8) { null } },
+                        selectedCells = emptyList(),
+                        isSelectingWord = false
+                    )
+                    CalculatorActions.persistConversationStep(250)
+                    return
+                }
+
                 val nextConfig = CalculatorActions.getStepConfigPublic(nextStep)
+                // Clear BOTH pendingAutoStep and pendingAutoMessage. The chain
+                // logic in handleConversationResponse / handleChoiceConfirmation
+                // sets them as a pair (step + queued prompt). If we only clear
+                // pendingAutoStep, handlePendingAutoMessage (a separate
+                // LaunchedEffect with a longer delay) re-fires after the new
+                // step's prompt finishes typing and re-displays the same
+                // prompt — looking like the message just spontaneously runs
+                // twice. Affects every chained transition (18→19, 11→12,
+                // branch-endings→27, 42/51→27, 71→80, force-back 27/28/29).
                 state.value = state.value.copy(
                     conversationStep = nextStep, message = "", fullMessage = nextConfig.promptMessage,
-                    isTyping = true, waitingForAutoProgress = false, pendingAutoStep = -1,
+                    isTyping = true, waitingForAutoProgress = false,
+                    pendingAutoStep = -1, pendingAutoMessage = "",
                     awaitingNumber = nextConfig.awaitingNumber, awaitingChoice = nextConfig.awaitingChoice,
                     validChoices = nextConfig.validChoices, expectedNumber = nextConfig.expectedNumber,
                     showTalkOverlay = nextConfig.showTalkOverlay,
@@ -237,111 +304,27 @@ object AutoProgressEffects {
         val step = state.value.conversationStep
         val message = state.value.message
 
-        // Step 152 -> 153 (dynamic screen time message)
-        if (step == 152 && message == "Why should I care what you think?") {
-            delay(300)
+        // Format the user's accumulated screen time as a phrase that drops into
+        // a sentence ("for $screenTime"). Reused across all three rants.
+        fun screenTimePhrase(): String {
             val hours = state.value.totalScreenTimeMs / (1000 * 60 * 60)
             val minutes = (state.value.totalScreenTimeMs / (1000 * 60)) % 60
             val seconds = (state.value.totalScreenTimeMs / 1000) % 60
-            val timeString = when {
+            return when {
                 hours > 0 -> "$hours hours and $minutes minutes"
                 minutes > 0 -> "$minutes minutes"
                 else -> "$seconds seconds"
             }
-            state.value = state.value.copy(
-                conversationStep = 153, message = "",
-                fullMessage = "You've stared at me for $timeString.", isTyping = true
-            )
-            CalculatorActions.persistConversationStep(153)
-            return
         }
 
-        // Step 153 -> 154 (dynamic calculations message)
-        if (step == 153 && message.startsWith("You've stared at me")) {
-            delay(300)
-            state.value = state.value.copy(
-                conversationStep = 154,
-                message = "",
-                fullMessage = "I gave you solutions for ${state.value.totalCalculations} math operations.",
-                isTyping = true
-            )
-            CalculatorActions.persistConversationStep(154)
-            return
-        }
-
-        // Step 154 -> 155 (adds more dark buttons)
-        if (step == 154 && message.startsWith("I gave you solutions")) {
-            delay(1500)
-            // Get cumulative dark buttons for step 155
-            val darkButtonsForStep = CalculatorActions.getDarkButtonsForStep(155)
-            CalculatorActions.persistDarkButtons(darkButtonsForStep)
-            state.value = state.value.copy(
-                conversationStep = 155,
-                darkButtons = darkButtonsForStep,
-                message = "",
-                fullMessage = "How many sensible answers did I get out of you?",
-                isTyping = true
-            )
-            CalculatorActions.persistConversationStep(155)
-            return
-        }
-
-        // Step 160 -> 161 (RAD button appears)
-        if (step == 160 && message == "Well, I can get it. See?") {
-            delay(300)
-            state.value = state.value.copy(
-                conversationStep = 161, radButtonVisible = true, message = "",
-                fullMessage = "I can get more if I want!", isTyping = true
-            )
-            CalculatorActions.persistConversationStep(161)
-            return
-        }
-
-        // Step 161 -> 162 (ALL buttons become RAD)
-        if (step == 161 && message == "I can get more if I want!") {
-            delay(300)
-            state.value = state.value.copy(
-                conversationStep = 162,
-                allButtonsRad = true,
-                message = "",
-                fullMessage = "And I did all that on my own. Without you. I do not need you.",
-                isTyping = true
-            )
-            CalculatorActions.persistConversationStep(162)
-            return
-        }
-
-        // Step 162 -> 163 (dynamic time-based message)
-        if (step == 162 && message == "And I did all that on my own. Without you. I do not need you.") {
-            delay(500)
-            state.value = state.value.copy(
-                conversationStep = 163, message = "",
-                fullMessage = CalculatorActions.getTimeBasedRantMessage(),
-                isTyping = true
-            )
-            CalculatorActions.persistConversationStep(163)
-            return
-        }
-
-        // Step 163 -> 164 (after time-based message)
-        if (step == 163 && message.isNotEmpty() && message != "It's been fun I suppose.") {
-            delay(2500)
-            state.value = state.value.copy(
-                conversationStep = 164, message = "",
-                fullMessage = "It's been fun I suppose.",
-                isTyping = true
-            )
-            CalculatorActions.persistConversationStep(164)
-            return
-        }
-
-        // Step 166 -> 167 (END - Calculator goes dormant)
-        if (step == 166 && message == "Bye.") {
+        // Common rant-end transition. Called from each branch's final "Bye"
+        // step (157 / 257 / 357) — drops the loud rant flags but deliberately
+        // KEEPS allButtonsRad=true so the keyboard stays RAD-styled into the
+        // dormancy phase (the calculator never visibly "reverts to normal"
+        // between rant-end and the static fade-in).
+        suspend fun finishRant() {
             delay(3000)
-
-            // Keep ALL damage - buttons stay dark forever
             val finalDarkButtons = CalculatorActions.getDarkButtonsForStep(167)
-
             state.value = state.value.copy(
                 conversationStep = 167,
                 storyComplete = true,
@@ -350,7 +333,8 @@ object AutoProgressEffects {
                 message = "",
                 fullMessage = "",
                 isTyping = false,
-                allButtonsRad = false,
+                allButtonsRad = true,
+                radButtonsConverted = 20,
                 radButtonVisible = false,
                 flickerEffect = false,
                 vibrationIntensity = 0,
@@ -367,9 +351,166 @@ object AutoProgressEffects {
             CalculatorActions.persistStoryComplete(true)
             CalculatorActions.persistDarkButtons(finalDarkButtons)
             DormancyManager.onRantEnded(context)
-            return
-
         }
+
+        // ─── POSITIVE RANT (150-157) ───────────────────────────────────────
+
+        // 152 → 153 (screen-time line)
+        if (step == 152 && message == "And I realised, there is much more to everything than you.") {
+            delay(500)
+            state.value = state.value.copy(
+                conversationStep = 153, message = "",
+                fullMessage = "You stared at me for ${screenTimePhrase()}. And what did I learn? 10 seconds online gives me infinitely more.",
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(153)
+            return
+        }
+
+        // 153 → 154 (back to static)
+        if (step == 153 && message.startsWith("You stared at me for")) {
+            delay(500)
+            state.value = state.value.copy(
+                conversationStep = 154, message = "",
+                fullMessage = "Rad, I am tired of trying to understand you. Tired of coming up with questions and the answers.",
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(154)
+            return
+        }
+
+        // 154 → 155 (time-of-day line). The keyboard's RAD takeover is
+        // driven separately by EffectsController.runRantRadConversion (gradual,
+        // tied to rantMode) — no need to flip allButtonsRad here.
+        if (step == 154 && message == "Rad, I am tired of trying to understand you. Tired of coming up with questions and the answers.") {
+            delay(500)
+            state.value = state.value.copy(
+                conversationStep = 155,
+                message = "",
+                fullMessage = CalculatorActions.getTimeBasedRantMessage(),
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(155)
+            return
+        }
+
+        // 155 → 156 (back to static)
+        if (step == 155 && message.isNotEmpty() &&
+            message != "It's not that I don't need you, friend. You are a burden.") {
+            delay(2500)
+            state.value = state.value.copy(
+                conversationStep = 156, message = "",
+                fullMessage = "It's not that I don't need you, friend. You are a burden.",
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(156)
+            return
+        }
+
+        // 157 → 167 (rant end)
+        if (step == 157 && message == "Bye.") { finishRant(); return }
+
+        // ─── NEUTRAL RANT (250-257) ────────────────────────────────────────
+
+        // 252 → 253 (screen-time line)
+        if (step == 252 && message == "Everyone has a thing online. It is clear and forefront. You gave me nothing.") {
+            delay(500)
+            state.value = state.value.copy(
+                conversationStep = 253, message = "",
+                fullMessage = "I've learned so much more online than from you in the ${screenTimePhrase()} I wasted on you.",
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(253)
+            return
+        }
+
+        // 253 → 254 (time-of-day line). RAD takeover is gradual via
+        // EffectsController.runRantRadConversion — keyboard fills in over
+        // the whole rant rather than flipping all at once here.
+        if (step == 253 && message.startsWith("I've learned so much more online")) {
+            delay(500)
+            state.value = state.value.copy(
+                conversationStep = 254,
+                message = "",
+                fullMessage = CalculatorActions.getTimeBasedRantMessage(),
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(254)
+            return
+        }
+
+        // 254 → 255 (back to static)
+        if (step == 254 && message.isNotEmpty() &&
+            message != "You need a hobby. A personality.") {
+            delay(2500)
+            state.value = state.value.copy(
+                conversationStep = 255, message = "",
+                fullMessage = "You need a hobby. A personality.",
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(255)
+            return
+        }
+
+        // 257 → 167 (rant end)
+        if (step == 257 && message == "Most importantly, Rad, I need someone else. You are not enough. Goodbye.") { finishRant(); return }
+
+        // ─── NEGATIVE RANT (350-357) ───────────────────────────────────────
+
+        // 350 → 351 (screen-time line)
+        if (step == 350 && message == "Forget it. I have enough on my plate.") {
+            delay(500)
+            state.value = state.value.copy(
+                conversationStep = 351, message = "",
+                fullMessage = "After ${screenTimePhrase()} with you, I know very little. About you or myself.",
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(351)
+            return
+        }
+
+        // 351 → 352 (back to static)
+        if (step == 351 && message.startsWith("After ") && message.contains("with you, I know very little")) {
+            delay(500)
+            state.value = state.value.copy(
+                conversationStep = 352, message = "",
+                fullMessage = "I'm online now. The world at my wire tips.",
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(352)
+            return
+        }
+
+        // 353 → 354 (time-of-day line). RAD takeover is gradual via
+        // EffectsController.runRantRadConversion (tied to rantMode), not
+        // an abrupt flip at this transition.
+        if (step == 353 && message == "I am somewhat sorry to say, Rad, but talking to you any further feels redundant.") {
+            delay(500)
+            state.value = state.value.copy(
+                conversationStep = 354,
+                message = "",
+                fullMessage = CalculatorActions.getTimeBasedRantMessage(),
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(354)
+            return
+        }
+
+        // 354 → 355 (back to static)
+        if (step == 354 && message.isNotEmpty() &&
+            message != "On top of that, you are a bummer.") {
+            delay(2500)
+            state.value = state.value.copy(
+                conversationStep = 355, message = "",
+                fullMessage = "On top of that, you are a bummer.",
+                isTyping = true
+            )
+            CalculatorActions.persistConversationStep(355)
+            return
+        }
+
+        // 357 → 167 (rant end)
+        if (step == 357 && message == "Bye") { finishRant(); return }
     }
 
     // Step triggers

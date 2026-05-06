@@ -11,6 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -297,23 +298,38 @@ fun CalculatorButtonGrid(
     flickeringButton: String,
     darkButtons: List<String>,
     allButtonsRad: Boolean,
+    radButtonsConverted: Int,
     rantMode: Boolean,
     onButtonClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Pre-compute which order-position each cellIndex sits at so the per-cell
+    // showAsRad lookup below is O(1) instead of indexOf-on-every-recompose.
+    val orderPositionByIndex = remember {
+        IntArray(20).also { arr ->
+            RAD_CONVERSION_ORDER.forEachIndexed { pos, cellIndex ->
+                if (cellIndex in 0..19) arr[cellIndex] = pos
+            }
+        }
+    }
+
     Column(
         modifier = modifier
             .padding(bottom = if (dimensions.isLandscape) 8.dp else dimensions.contentPadding),
         verticalArrangement = Arrangement.spacedBy(dimensions.buttonSpacing)
     ) {
-        buttonLayout.forEach { row ->
+        buttonLayout.forEachIndexed { rowIdx, row ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(dimensions.buttonRowHeight),
                 horizontalArrangement = Arrangement.spacedBy(dimensions.buttonSpacing)
             ) {
-                row.forEach { symbol ->
+                row.forEachIndexed { colIdx, symbol ->
+                    val cellIndex = rowIdx * 4 + colIdx
+                    val convertedByCount = cellIndex in 0..19 &&
+                        orderPositionByIndex[cellIndex] < radButtonsConverted
+                    val showAsRad = allButtonsRad || convertedByCount
                     CalculatorButton(
                         symbol = symbol,
                         modifier = Modifier
@@ -325,7 +341,7 @@ fun CalculatorButtonGrid(
                         isBroken = minusButtonBroken && symbol == "-",
                         isFlickering = flickeringButton == symbol,
                         isDark = symbol in darkButtons,
-                        showAsRad = allButtonsRad,
+                        showAsRad = showAsRad,
                         onClick = {
                             if (!rantMode) {
                                 onButtonClick(symbol)

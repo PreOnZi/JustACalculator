@@ -355,7 +355,12 @@ Sharp CS-10A - 25KG
     }
 
     private suspend fun phase52(state: MutableState<CalculatorState>) {
-        delay(5000)
+        // The phase51 message ("There's so much, just endless streams of
+        // opinions, advices, unsolicited advices…") is ~110 chars and types
+        // at normal speed; the previous 5000ms left it cut off before the
+        // user could finish reading. 9500ms gives the typing animation time
+        // to finish and a few seconds of read time.
+        delay(9500)
         state.value = state.value.copy(browserPhase = 53, message = "", fullMessage = "...", isTyping = true, isLaggyTyping = true)
     }
 

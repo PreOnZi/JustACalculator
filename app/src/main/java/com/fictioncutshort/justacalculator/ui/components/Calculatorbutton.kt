@@ -33,6 +33,36 @@ import kotlin.random.Random
  */
 
 /**
+ * Order in which the 20 keyboard cells flip to RAD during the rant
+ * (cellIndex = row * 4 + col). The takeover is gradual — one cell every
+ * couple of seconds while [CalculatorState.rantMode] is true — and ends
+ * with the "=" key (index 19) so the calculator's main action is the last
+ * thing to surrender.
+ */
+val RAD_CONVERSION_ORDER: List<Int> = listOf(
+    13,  // 2  (row 3, col 1)
+    6,   // 9  (row 1, col 2)
+    8,   // 4  (row 2, col 0)
+    3,   // /  (row 0, col 3)
+    18,  // .  (row 4, col 2)
+    4,   // 7  (row 1, col 0)
+    11,  // -  (row 2, col 3)
+    15,  // +  (row 3, col 3)
+    0,   // C  (row 0, col 0)
+    17,  // 0  (row 4, col 1)
+    9,   // 5  (row 2, col 1)
+    12,  // 1  (row 3, col 0)
+    5,   // 8  (row 1, col 1)
+    16,  // DEL(row 4, col 0)
+    2,   // %  (row 0, col 2)
+    7,   // *  (row 1, col 3)
+    10,  // 6  (row 2, col 2)
+    14,  // 3  (row 3, col 2)
+    1,   // ( )(row 0, col 1)
+    19   // =  (row 4, col 3) — last
+)
+
+/**
  * A styled calculator button.
  *
  * @param symbol The text to display (0-9, +, -, etc.)

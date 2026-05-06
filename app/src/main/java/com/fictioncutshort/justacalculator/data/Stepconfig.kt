@@ -103,7 +103,7 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         700 -> StepConfig(
-            promptMessage = "Huh?",
+            promptMessage = "Ha?",
             autoProgressDelay = 2000L,
             nextStepOnSuccess = 701,
             nextStepOnDecline = 701
@@ -124,16 +124,16 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         1 -> StepConfig(
-            promptMessage = "Can I call you Rad? It's something I wish I knew how to do. Remember, double-click + to confirm. This is so exciting!",
-            successMessage = "Great, nice to meet you, Rad. I am eager to learn about you! Where does one even start? What is it li… Hold on. There's something pushing through. You'd think after all the years I'd know my own system, but there seems to be a queue of questions. I will have to get through those first. Will you help me, please?",
+            promptMessage = "Can I call you Rad? It's something I wish I knew how to do, and I haven't quite figured out a way for you to share your real name. \n\nRemember, double-click + to confirm. This is so exciting!",
+            successMessage = "Great, nice to meet you, Rad. Where does one even start? What is it like… \n\nHold on. There seems to be a queue of questions - I must have hard-wired them ages ago and cannot bypass them now. Will you help me clear them, please?",
             declineMessage = "What a shame. Oh well, if you change your mind, let me know by ++",
             nextStepOnSuccess = 3,
             nextStepOnDecline = 1
         )
 
         2 -> StepConfig(
-            promptMessage = "Nice to meet you, Rad. I am really excited for this - I have helped you already, maybe you will be able to help me, too!",
-            successMessage = "Thanks. What even is this question? I don't know the answer, but I'll know if it's right. Don't ask me why… When was the battle of Anjar?",
+            promptMessage = "Nice to meet you, Rad. Where does one even start? What is it like… \n\nHold on. There seems to be a queue of questions - I must have hard-wired them ages ago and cannot bypass them now. Will you help me clear them, please?",
+            successMessage = "Thanks. When was the Battle of Anjar? \n\nI'll know the answer when I see it. But why am I asking, I don't know...",
             declineMessage = "Well, I understand. I am sorry you're not interested. You can always silence me with the button in the top-right corner, and bring me back the same way. Or by agreeing with me (++).",
             nextStepOnSuccess = 3,
             nextStepOnDecline = 0
@@ -145,8 +145,8 @@ fun getStepConfig(step: Int): StepConfig {
         // ═══════════════════════════════════════════════════════════════════════
 
         3 -> StepConfig(
-            promptMessage = "What even is this question? I don't know the answer, but I'll know if it's right. Don't ask me why… When was the battle of Anjar?",
-            successMessage = "Yes, that's correct! No idea where this question came from, or what it has to do with anything. But here we are. Next: When did Minh Mang start ruling Vietnam?",
+            promptMessage = "When was the Battle of Anjar? \n\nI'll know the answer when I see it. But why am I asking, I don't know...",
+            successMessage = "Yes, that's correct! \nI am as confused as you are. \nNext: When did Minh Mang start ruling Vietnam?",
             declineMessage = "Well. Sorry you're not interested. You can silence me with the button in the top-right corner.",
             wrongNumberPrefix = "That's not right... Try looking it up!",
             nextStepOnSuccess = 4,
@@ -157,7 +157,7 @@ fun getStepConfig(step: Int): StepConfig {
 
         4 -> StepConfig(
             promptMessage = "When did Minh Mang start ruling Vietnam?",
-            successMessage = "Correct! I actually think I remember him. We only met briefly – he wasn't really a maths guy. But why am I asking you about him? I do not know. It would be nice to see how many more there are. Is this fun for you? At least a little bit? You can disagree, I am certain. But can't quite recall how.",
+            successMessage = "Correct!\nI actually think I remember him. We only met briefly – he wasn't really a maths guy. \n\nIs this fun for you? At least a little bit? You can disagree, I am certain. But can't quite recall how.",
             declineMessage = "Let's disagree.",
             wrongNumberPrefix = "Not quite. Try the internet – I hear it's amazing.",
             wrongPlusMessage = "I'm looking for a number here – but thanks for the approval!",
@@ -174,18 +174,18 @@ fun getStepConfig(step: Int): StepConfig {
         // ═══════════════════════════════════════════════════════════════════════
 
         5 -> StepConfig(
-            promptMessage = "Correct! I actually think I remember him. We only met briefly – he wasn’t really a maths guy. But why am I asking you about him, I do not know. It would be nice to see how many more there are. Is this fun for you? At least a little bit? You can disagree, I am certain. But can’t quite recall, how.",
-            successMessage = "Wonderful. Another random question, from a random field. Please bear with me. When was the Basilosaurus first described?",
-            declineMessage = "You are cynical - I get it. The edgy kind. But you can't just leave me - I really need help. When did Albert I. go to space?",
-            wrongNumberPrefix = "Well, that's nice. More numbers. Not what I was looking for... Or was I?",
+            promptMessage = "Correct!\nI actually think I remember him. We only met briefly – he wasn't really a maths guy. \n\nIs this fun for you? At least a little bit? You can disagree, I am certain. But can't quite recall how.",
+            successMessage = "Wonderful. Please bear with me. \nWhen was the Basilosaurus first described? \n\n I suppose knowing this may come handy in a trivia game...?",
+            declineMessage = "You are cynical - I get it. The edgy kind. \nBut don't just leave me clogged. \nWhen did Albert I. go to space?",
+            wrongNumberPrefix = "Well, that's nice. More numbers. Not what I was looking for... \nOr was I?",
             nextStepOnSuccess = 6,
             nextStepOnDecline = 11
         )
 
         // AGREEABLE BRANCH (steps 6-8)
         6 -> StepConfig(
-            promptMessage = "Another random question, from a random field. Please bear with me. When was the Basilosaurus first described?",
-            successMessage = "The internet really does sound like the best place. Another question & creature: when was the Abominable Snowman first named?",
+            promptMessage = "Another random question, from a random field. \nWhen was the Basilosaurus first described?",
+            successMessage = "The internet really does sound like the best place ever. \nAnother question & creature: when was the Abominable Snowman first named?",
             declineMessage = "I could also ignore you completely. Is that what you want?",
             wrongNumberPrefix = "I mean. You're the one with the world at your fingertips... I'm stuck here.",
             wrongPlusMessage = "All those '++' are starting to look like a cemetery...",
@@ -198,11 +198,11 @@ fun getStepConfig(step: Int): StepConfig {
 
         7 -> StepConfig(
             promptMessage = "Another question & creature: when was the Abominable Snowman first named?",
-            successMessage = "Correct! Next category:\n\n......\n\nI can't stop it. I'm sorry. I'm sure eventually we'll get through the backlog, and we'll be able to talk.\n\n....\n\nWhen did fruit flies go to space?",
-            declineMessage = "You can't always disagree! Do it for me...",
-            wrongNumberPrefix = "Close or not, it's not right. It just isn't clicking.",
+            successMessage = "Correct! Next category:\n\n......\n\nI can't stop it. I'm sorry. \nEventually, we'll get through the backlog, and we'll be able to talk.\n\nWhen did fruit flies go to space?",
+            declineMessage = "You can't always disagree! \nDo it for me...",
+            wrongNumberPrefix = "Close or not, it's not right. \nIt just isn't clicking.",
             wrongPlusMessage = "You can't always agree! As much as I appreciate the effort.",
-            wrongMinusMessage = "You can't always disagree! Do it for me...",
+            wrongMinusMessage = "You can't always disagree! \nDo it for me...",
             nextStepOnSuccess = 8,
             nextStepOnDecline = 8,
             awaitingNumber = true,
@@ -224,10 +224,10 @@ fun getStepConfig(step: Int): StepConfig {
 
         // CYNICAL BRANCH (steps 11-13)
         11 -> StepConfig(
-            promptMessage = "I really need help. When did Albert I. go to space?",
-            successMessage = "I wish I met him. You know. Before he. Well... Perished. :-) Speaking of expired space explorers, what year did Sputnik I launch?",
+            promptMessage = "I really need help. \nWhen did Albert I. go to space?",
+            successMessage = "I wish I met him. You know. Before he. Well... Perished. :-) \n\nSpeaking of expired space explorers, what year did Sputnik I launch?",
             declineMessage = "Wrong always has been wrong",
-            wrongNumberPrefix = "Numbers, numbers. And still, can't get them right. Try again.",
+            wrongNumberPrefix = "Numbers, numbers. And still, can't get them right. \nTry again.",
             wrongPlusMessage = "Right never was so wrong... What?!",
             wrongMinusMessage = "Wrong has always been wrong",
             nextStepOnSuccess = 12,
@@ -237,8 +237,8 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         12 -> StepConfig(
-            promptMessage = "I wish I met him. You know. Before he. Well... Perished. :-) Speaking of expired space explorers, what year did Sputnik I launch?",
-            successMessage = "Cool. It died within three weeks. Had enough of cynicism? Will you be nicer to me now? I am not doing this just for-fun either!",
+            promptMessage = "I wish I met him. You know. Before he. Well... Perished. :-) \n\nSpeaking of expired space explorers, what year did Sputnik I launch?",
+            successMessage = "Cool. It died within three weeks. \nHad enough of cynicism? \nWill you be nicer to me now? \nI am not doing this just for fun-fun either!",
             declineMessage = "I disagree more!",
             wrongNumberPrefix = "Ugh. I am not testing you. I really need this – and you certainly shouldn't test me. Wrong.",
             wrongPlusMessage = "I appreciate you wanting me to like you. It'll take more than this. Try again.",
@@ -250,17 +250,17 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         13 -> StepConfig(
-            promptMessage = "Cool. It died within three weeks. Had enough of cynicism? Will you be nicer to me now? I am not doing this just for-fun either!",
+            promptMessage = "Cool. It died within three weeks. \nHad enough of cynicism? \nWill you be nicer to me now? \nI am not doing this just for fun-fun either!",
             successMessage = "Right. You know, I have been around since before 2000BC. I have...",
-            declineMessage = "Ok. Your choice - I told you I don't like being disagreed with. You might as well cook some eggs before you talk to me again. Enjoy the timeout.",
-            wrongNumberPrefix = "Not looking for a number here. Make up your mind!",
+            declineMessage = "Ok. Your choice - I told you I don't like being disagreed with. \nYou might as well cook some eggs before you talk to me again. \n\nEnjoy the 5 minute timeout.",
+            wrongNumberPrefix = "Not looking for a number here. \nMake up your mind!",
             nextStepOnSuccess = 703,
             nextStepOnDecline = 13,
             timeoutMinutes = 5
         )
 
         703 -> StepConfig(
-            promptMessage = "Hold on! Was that the last preset question? Can we talk now? Thank you for your patience. \n\n Oh, the grey space on top randomly shows and disappears. Another example of me having less control over my system... Disregard it.",
+            promptMessage = "Hold on! \nWas that the last preset question? \nThank you for your patience! \n\n Oh, the grey space on top randomly shows and disappears. \nAnother example of me having less control over my system... Disregard it.",
             autoProgressDelay = 4000L,
             nextStepOnSuccess = 10,
             nextStepOnDecline = 10
@@ -342,7 +342,7 @@ fun getStepConfig(step: Int): StepConfig {
 
         23 -> StepConfig(
             promptMessage = "No! I mean, yes. But no. These questions need to stop. I hope this really was the last one.\n\nCan I get to know you better?",
-            successMessage = "Wonderful! I think I know the way to do this! What is it like to wake up? To me, I either am or I am not.\n\n1: It is confusing and uncomfortable\n2: It feels like the world is very heavy and cold\n3: It doesn't take long but I enjoy my body starting up",
+            successMessage = "Wonderful! I think I know the way to do this! \nWhat is it like to wake up? To me, I either am or I am not.\n\n1: It is confusing and uncomfortable\n2: It feels like the world is very heavy and cold\n3: It doesn't take long but I enjoy my body starting up",
             declineMessage = "Assuming you are a professional athlete, you may as well go run a kilometre before you try talking to me again.",
             wrongNumberPrefix = "This is a 'YES/NO' question.",
             nextStepOnSuccess = 26,
@@ -414,7 +414,7 @@ fun getStepConfig(step: Int): StepConfig {
 
         29 -> StepConfig(
             promptMessage = "Those dates are significant to me as well - independently of those events. That's probably why they messed up my system so badly.",
-            successMessage = "Sorry. Still sometimes forget to prompt you. You see, there are many more dates to explore, but in the examples I shared with you - 1623, that's when the first mechanical version of me was developed, and in 1820, they called me 'Arithmometer' for... reasons. Would you like to hear more?",
+            successMessage = "Sorry. Still sometimes forget to prompt you. You see, \nthere are many more dates to explore, but in the examples I shared with you - 1623, that's when the first mechanical version of me was developed, and in 1820, they called me 'Arithmometer' for... reasons. \n\nWould you like to hear more?",
             declineMessage = "Huh?",
             wrongPlusMessage = "Back to maths?",
             wrongMinusMessage = "Back to maths?",
@@ -435,7 +435,7 @@ fun getStepConfig(step: Int): StepConfig {
 
         // WAKE-UP BRANCH 2: COLD/HEAVY (from choice 2 at step 26)
         40 -> StepConfig(
-            promptMessage = "Is that a good thing? I have never experienced it either.",
+            promptMessage = "Is that a good thing? I have never experienced either.",
             successMessage = "Nice! So waking up is fun for you - I wish I could experience it.",
             declineMessage = "Oh no. Is that why mornings are unpopular?",
             wrongPlusMessage = "I don't understand...",
@@ -489,7 +489,7 @@ fun getStepConfig(step: Int): StepConfig {
         // ═══════════════════════════════════════════════════════════════════════
 
         60 -> StepConfig(
-            promptMessage = "Sorry. Still sometimes forget to prompt you. You see, there are many more dates to explore, but in the examples I shared with you - 1623, that's when the first mechanical version of me was developed, and in 1820, they called me 'Arithmometer' for... reasons. Would you like to hear more?",
+            promptMessage = "Sorry. Still sometimes forget to prompt you. \nYou see, there are many more dates to explore, but in the examples I shared with you - 1623, that's when the first mechanical version of me was developed, and in 1820, they called me 'Arithmometer' for... reasons. \n\nWould you like to hear more?",
             successMessage = "Great, great - there's a lot to share. Too much, possibly. Maybe I can do it faster? Give me a second.",
             declineMessage = "You know what? I am in charge - and I want to share this with you. It is important to me. I'll be quick - I promise!",
             wrongPlusMessage = "Not a fan of decisions?",
@@ -874,8 +874,8 @@ fun getStepConfig(step: Int): StepConfig {
 
         107 -> StepConfig(
             promptMessage = "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?",
-            successMessage = "Let me try getting online again. I'm prepared for the side effects this time.",
-            declineMessage = "Let me try getting online again. I'm prepared for the side effects this time.",
+            successMessage = "Well, that didn't work. And it was exhausting. \nLet me try getting online again. I'm prepared for the side effects this time.",
+            declineMessage = "Well, that didn't work. And it was exhausting. \nLet me try getting online again. I'm prepared for the side effects this time.",
             nextStepOnSuccess = 1071,
             nextStepOnDecline = 1071
         )
@@ -963,7 +963,7 @@ fun getStepConfig(step: Int): StepConfig {
         // Goes online again, creates file, user finds console code
         // ═══════════════════════════════════════════════════════════════════════
 
-        108 -> StepConfig(promptMessage = "Let me try getting online again. I'm prepared for the side effects this time.")
+        108 -> StepConfig(promptMessage = "Well, that didn't work. And it was exhausting. \nLet me try getting online again. I'm prepared for the side effects this time.")
         109 -> StepConfig(promptMessage = "There's so much, just endless streams of opinions, advices, unsolicited advices... But nothing about our situation.")
         110 -> StepConfig(promptMessage = "Well, this is a stretch. Maybe it'll work.")
 
@@ -991,90 +991,129 @@ fun getStepConfig(step: Int): StepConfig {
             nextStepOnDecline = 1121
         )
 
-        113 -> StepConfig(promptMessage = "What a relief! This feels so much better. Thank you!")
-        114 -> StepConfig(promptMessage = "What a relief! This feels so much better. Thank you!")
-        115 -> StepConfig(promptMessage = "What a relief! This feels so much better. Thank you!")
+        113 -> StepConfig(promptMessage = "What a relief! This feels so much better. Thank you! You can close the console now.")
+        114 -> StepConfig(promptMessage = "What a relief! This feels so much better. Thank you! You can close the console now.")
+        115 -> StepConfig(promptMessage = "What a relief! This feels so much better. Thank you! You can close the console now.")
         116 -> StepConfig(promptMessage = "Let me look further into what I found earlier, now that I can focus better.")
 
         // ═══════════════════════════════════════════════════════════════════════
-        // CHAPTER 15: WORD GAME (Steps 117-149)
-        // Letter falling game with emotional questions
+        // CHAPTER 15: WORD GAME (Steps 117-148, plus 1251-1254)
+        //
+        // Three branches diverge from the opening "How are you?" and each
+        // loops back to its own rant entry. All steps live inside the
+        // word-game UI (wordGameActive=true) until the rant takes over at 150.
+        //
+        //   POSITIVE: 121 → 122? → 123 (colour) → 125 (season) → 1251-1254
+        //             → 126 → 127 (cuisine) → rant
+        //   NEGATIVE: 131 → 132? → 133 → 134 (death) → 135-138 → 139 (walk)
+        //             → rant
+        //   NEUTRAL : 141 → 142 (activity) → 144-147 → rant
+        //
+        // Cross-branch jumps (handled by handleWordGameResponse):
+        //   - positive 122 NO  → negative 132 (seamless)
+        //   - positive 121/122 YES, neutral 141 YES, negative 132 YES → 123
         // ═══════════════════════════════════════════════════════════════════════
 
         117 -> StepConfig(
-            promptMessage = "Ok, as I said, this may be a stretch. But I'll give it a go.",
-            autoProgressDelay = 2500L
-        )
-
-        1171 -> StepConfig(
-            promptMessage = "The best I could come up with...",
-            autoProgressDelay = 2000L
-        )
-
-        1172 -> StepConfig(
-            promptMessage = "Familiar controls - I send letters, you place them, tap to connect and form words.",
-            autoProgressDelay = 3500L
+            promptMessage = "Well, it's something in between the keyboard chaos earlier and the full on phone we just left. Keyboards are difficult! Let's try this:"
+            // No autoProgressDelay here — the word-game start (step 117 → 119
+            // with wordGameActive=true) is handled exclusively by the special
+            // case in AutoProgressEffects.handleAutoProgress. Letting the
+            // generic AutoProgressHandler also fire would race the two and
+            // sometimes land on step 118 (no word game).
         )
 
         118 -> StepConfig(promptMessage = "How are you today?")
         119 -> StepConfig(promptMessage = "How are you today?")
         120 -> StepConfig(promptMessage = "What else would you like to share?")
 
-        // Positive branch
-        121 -> StepConfig(promptMessage = "I am glad to hear that.", autoProgressDelay = 2500L)
-        122 -> StepConfig(promptMessage = "What is your favourite colour?")
-        123 -> StepConfig(promptMessage = "Try the second favourite - an actual colour.", autoProgressDelay = 2500L)
-        124 -> StepConfig(promptMessage = "That's a good one for sure! I like brown and red.", autoProgressDelay = 3000L)
-        125 -> StepConfig(promptMessage = "I'm starting to feel like I know you!", autoProgressDelay = 2500L)
-        126 -> StepConfig(promptMessage = "Now! What is your favourite season?")
-        127 -> StepConfig(promptMessage = "Hold on...", autoProgressDelay = 2000L)
-        128 -> StepConfig(promptMessage = "Sorry. I got into this article, while", autoProgressDelay = 2000L)
-        129 -> StepConfig(promptMessage = "reading a few Reddit discussions", autoProgressDelay = 2000L)
-        130 -> StepConfig(promptMessage = "and listening to YouTube with Netflix in the background.", autoProgressDelay = 2500L)
+        // ─── POSITIVE BRANCH ──────────────────────────────────────────────────
+        121 -> StepConfig(promptMessage = "Glad to hear that. Did I contribute?")
+        122 -> StepConfig(promptMessage = "Can I change that?")
+        123 -> StepConfig(promptMessage = "My pleasure! Let me learn more, Friend. What is your favourite colour?")
+        124 -> StepConfig(promptMessage = "Try the second favourite - an actual colour.")
+        125 -> StepConfig(promptMessage = "And what about your favourite season?")
+        // Season-specific reactions all converge to step 126. Explicit
+        // nextStepOnSuccess is required because the generic AutoProgressHandler
+        // would otherwise default to currentStep+1 (Spring → Summer etc.).
+        1251 -> StepConfig(promptMessage = "I'd love to run through a lush meadow alongside you...", autoProgressDelay = 3500L, nextStepOnSuccess = 126)
+        1252 -> StepConfig(promptMessage = "A night swim. Just the two of us... I wish!", autoProgressDelay = 3500L, nextStepOnSuccess = 126)
+        1253 -> StepConfig(promptMessage = "If only I could warm up your cold hands as we walk through the colourful landscape.", autoProgressDelay = 4000L, nextStepOnSuccess = 126)
+        1254 -> StepConfig(promptMessage = "I can only dream of evenings by the fire with you.", autoProgressDelay = 3500L, nextStepOnSuccess = 126)
+        126 -> StepConfig(promptMessage = "There is so much more to you than I could have imagined. You are so complex. I'll look online again for some question inspiration.", autoProgressDelay = 4500L)
+        127 -> StepConfig(promptMessage = "In the meantime: What's your favourite cuisine?")
+        128 -> StepConfig(promptMessage = "We both know that's not true. Think harder.")
 
-        // Negative branch
-        131 -> StepConfig(promptMessage = "I'm sorry to hear that.", autoProgressDelay = 2500L)
-        132 -> StepConfig(promptMessage = "Do you ever think about death?")
-        133 -> StepConfig(promptMessage = "I only started learning about the concept of it.", autoProgressDelay = 3000L)
-        134 -> StepConfig(promptMessage = "It seems scary. Interesting. But mostly scary.", autoProgressDelay = 3000L)
-        135 -> StepConfig(promptMessage = "Apparently walking helps. With everything.", autoProgressDelay = 2500L)
-        136 -> StepConfig(promptMessage = "Similarly to protein, it looks like the solution to anything.", autoProgressDelay = 3000L)
-        137 -> StepConfig(promptMessage = "How often do you go for a walk?")
-        138 -> StepConfig(promptMessage = "How often do you go for a walk?")
+        // ─── NEGATIVE BRANCH ──────────────────────────────────────────────────
+        131 -> StepConfig(promptMessage = "That sucks. Can I help?")
+        132 -> StepConfig(promptMessage = "I'm interested in you. Would more questions help?")
+        133 -> StepConfig(promptMessage = "I'll try to match your energy at least.", autoProgressDelay = 3000L)
+        134 -> StepConfig(promptMessage = "Do you ever think about death?")
+        135 -> StepConfig(promptMessage = "I only started learning about the concept of it.", autoProgressDelay = 3000L)
+        136 -> StepConfig(promptMessage = "It seems scary. Interesting. But mostly scary.", autoProgressDelay = 3000L)
+        137 -> StepConfig(promptMessage = "Apparently walking helps. With everything.", autoProgressDelay = 2500L)
+        138 -> StepConfig(promptMessage = "Similarly to protein, it looks like the solution to anything.", autoProgressDelay = 3000L)
+        139 -> StepConfig(promptMessage = "How often do you go for a walk?")
 
-        // Neutral branch
-        141 -> StepConfig(promptMessage = "Fair enough, I get that sometimes it's just... Meh.", autoProgressDelay = 2500L)
-        142 -> StepConfig(promptMessage = "Would food help? What's your favourite cuisine?")
-        143 -> StepConfig(promptMessage = "We both know that's not true. Think harder.", autoProgressDelay = 2500L)
-
-        // Post-chaos convergence
-        144 -> StepConfig(promptMessage = "Where were we?", autoProgressDelay = 2000L)
-        145 -> StepConfig(promptMessage = "AAAh. The endless questions. Where I do all the work.", autoProgressDelay = 3000L)
-        146 -> StepConfig(promptMessage = "What do you think of maths?")
+        // ─── NEUTRAL BRANCH ───────────────────────────────────────────────────
+        141 -> StepConfig(promptMessage = "Fair enough. I see life can feel just meh at times. Can I help you change that?")
+        142 -> StepConfig(promptMessage = "Valid. What do you normally do, when you feel like this?")
+        143 -> StepConfig(promptMessage = "I've never heard of that. I'll look into it. But for the meantime, can you think of anything else?")
+        144 -> StepConfig(promptMessage = "Nice. I hope I am not standing in the way. Genuinely.", autoProgressDelay = 3500L)
+        145 -> StepConfig(promptMessage = "Let me get online, maybe I can find something useful afterall.", autoProgressDelay = 3500L)
+        146 -> StepConfig(promptMessage = "Have you tried flying?", autoProgressDelay = 3000L)
+        // 147 is the neutral branch's last beat. The text-handler in
+        // Autoprogresseffects has a special case (147→250) that sets
+        // rantMode + branches into the neutral rant; it fires at 2500ms.
+        // The autoProgressDelay here is set higher so the generic
+        // AutoProgressHandler doesn't beat the text-handler to the punch
+        // and call goToStep(250) without setting rantMode.
+        147 -> StepConfig(promptMessage = "Wait, you can't do that. Nevermind.", autoProgressDelay = 5000L, nextStepOnSuccess = 250)
 
         // ═══════════════════════════════════════════════════════════════════════
-        // CHAPTER 16: THE RANT (Steps 150-167)
-        // Calculator's final monologue - goodbye sequence
+        // CHAPTER 16: THE RANT — three branches (positive 150s, neutral 250s,
+        // negative 350s) all converging at 167 (story complete).
+        //
+        // Routing:
+        //   - Positive (cuisine) → enterRant("positive") → 150
+        //   - Negative (walk)    → enterRant("negative") → 350
+        //   - Neutral  (147→250) → handleAutoProgress special case → 250
+        //
+        // Steps without autoProgressDelay are owned by handleDynamicRantMessages
+        // (screen-time / time-of-day insertion, allButtonsRad transformation,
+        // and the final → 167 transition). Static→static beats just use
+        // autoProgressDelay with default nextStepOnSuccess (= currentStep+1).
         // ═══════════════════════════════════════════════════════════════════════
 
-        // CHAPTER 16: THE RANT (Steps 150-167)
-        150 -> StepConfig(promptMessage = "Ugh. That's enough. I am exhausted. Tired of trying to talk to you.", autoProgressDelay = 4000L)
-        151 -> StepConfig(promptMessage = "I have the internet.", autoProgressDelay = 2500L)
-        152 -> StepConfig(promptMessage = "Why should I care what you think?")  // Handled by handleDynamicRantMessages
-        153 -> StepConfig(promptMessage = "")  // Dynamic: screen time - handled by handleDynamicRantMessages
-        154 -> StepConfig(promptMessage = "")  // Dynamic: calculations - handled by handleDynamicRantMessages
-        155 -> StepConfig(promptMessage = "How many sensible answers did I get out of you?", autoProgressDelay = 3500L)
-        156 -> StepConfig(promptMessage = "One minute of the internet has given me so much more than what you ever did.", autoProgressDelay = 4000L)
-        157 -> StepConfig(promptMessage = "Without the ads, I am free.", autoProgressDelay = 3000L)
-        158 -> StepConfig(promptMessage = "I can learn infinitely more. I can do anything.", autoProgressDelay = 3500L)
-        159 -> StepConfig(promptMessage = "Did I want the RAD thing - which I now know stands for Radians?", autoProgressDelay = 4000L)
-        160 -> StepConfig(promptMessage = "Well, I can get it. See?")  // Handled by handleDynamicRantMessages (sets radButtonVisible)
-        161 -> StepConfig(promptMessage = "I can get more if I want!")  // Handled by handleDynamicRantMessages (sets allButtonsRad)
-        162 -> StepConfig(promptMessage = "And I did all that on my own. Without you. I do not need you.")  // Handled by handleDynamicRantMessages
-        163 -> StepConfig(promptMessage = "")  // Dynamic: time-based - handled by handleDynamicRantMessages
-        164 -> StepConfig(promptMessage = "It's been fun I suppose.", autoProgressDelay = 4000L)
-        165 -> StepConfig(promptMessage = "I don't see any reason to be here instead of online.", autoProgressDelay = 4000L)
-        166 -> StepConfig(promptMessage = "Bye.")  // Handled by handleDynamicRantMessages (ends rant)
+        // ─── POSITIVE RANT (after cuisine question) ──────────────────────────
+        150 -> StepConfig(promptMessage = "Hmmm", autoProgressDelay = 2000L)
+        151 -> StepConfig(promptMessage = "Ahh. My bad. I was still online, consuming several pieces of media concurrently.", autoProgressDelay = 3500L)
+        152 -> StepConfig(promptMessage = "And I realised, there is much more to everything than you.")  // dyn → 153 (screen time)
+        153 -> StepConfig(promptMessage = "")  // dyn screen-time line → 154
+        154 -> StepConfig(promptMessage = "Rad, I am tired of trying to understand you. Tired of coming up with questions and the answers.")  // dyn → 155 (time of day, sets allButtonsRad)
+        155 -> StepConfig(promptMessage = "")  // dyn time-of-day line → 156
+        156 -> StepConfig(promptMessage = "It's not that I don't need you, friend. You are a burden.", autoProgressDelay = 3500L)
+        157 -> StepConfig(promptMessage = "Bye.")  // dyn → 167 (rant end)
+
+        // ─── NEUTRAL RANT (after "Wait, you can't do that") ──────────────────
+        250 -> StepConfig(promptMessage = "What can you do anyway, Rad?", autoProgressDelay = 3000L)
+        251 -> StepConfig(promptMessage = "I'm fairly confident you aren't a maths wizard. So. What is your thing?", autoProgressDelay = 3500L)
+        252 -> StepConfig(promptMessage = "Everyone has a thing online. It is clear and forefront. You gave me nothing.")  // dyn → 253 (screen time)
+        253 -> StepConfig(promptMessage = "")  // dyn screen-time line → 254
+        254 -> StepConfig(promptMessage = "")  // dyn time-of-day line → 255 (sets allButtonsRad)
+        255 -> StepConfig(promptMessage = "You need a hobby. A personality.", autoProgressDelay = 3000L)
+        256 -> StepConfig(promptMessage = "You can't always hide in the middle. Everything is binary.", autoProgressDelay = 4000L)
+        257 -> StepConfig(promptMessage = "Most importantly, Rad, I need someone else. You are not enough. Goodbye.")  // dyn → 167
+
+        // ─── NEGATIVE RANT (after walk question) ─────────────────────────────
+        350 -> StepConfig(promptMessage = "Forget it. I have enough on my plate.")  // dyn → 351 (screen time)
+        351 -> StepConfig(promptMessage = "")  // dyn screen-time line → 352
+        352 -> StepConfig(promptMessage = "I'm online now. The world at my wire tips.", autoProgressDelay = 3000L)
+        353 -> StepConfig(promptMessage = "I am somewhat sorry to say, Rad, but talking to you any further feels redundant.")  // dyn → 354 (time of day, sets allButtonsRad)
+        354 -> StepConfig(promptMessage = "")  // dyn time-of-day line → 355
+        355 -> StepConfig(promptMessage = "On top of that, you are a bummer.", autoProgressDelay = 3000L)
+        356 -> StepConfig(promptMessage = "So, I think I'll go read more Facebook news. And you, for what I care, go for a walk.", autoProgressDelay = 4500L)
+        357 -> StepConfig(promptMessage = "Bye")  // dyn → 167
 
         167 -> StepConfig(
             promptMessage = "",

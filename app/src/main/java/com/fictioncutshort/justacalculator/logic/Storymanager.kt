@@ -20,8 +20,12 @@ object StoryManager {
 
     /**
      * Threshold of equals presses needed to wake up the calculator.
+     * Kept in sync with the live awakening check in
+     * CalculatorActions.handleEquals (`newCount == 8`). This object's
+     * checkAwakening is dead code right now but the constant is the
+     * documented source of truth for the threshold.
      */
-    const val AWAKENING_THRESHOLD = 10
+    const val AWAKENING_THRESHOLD = 8
 
     /**
      * Shows a message with the typing effect.

@@ -370,6 +370,36 @@ object CalculatorActions {
         )
     }
 
+    /**
+     * Submit a word formed via the new tap-to-select block game. Skips the
+     * cell-connection check (the new game has no path constraint) and goes
+     * straight to the existing categorization + handleWordGameResponse flow.
+     *
+     * Returns true if the word was a recognized answer (valid mood/color/
+     * season/etc) — caller uses this to know whether to play the
+     * letters-fall-out animation. Unrecognized words leave state untouched
+     * and the caller should just deselect locally.
+     */
+    fun submitBlockWord(state: MutableState<CalculatorState>, word: String): Boolean {
+        val current = state.value
+        if (!current.wordGameActive || word.isEmpty()) return false
+        if (!WordCategories.isValidWord(word)) return false
+
+        val newFormedWords = current.formedWords + word
+        val category = WordCategories.categorizeResponse(newFormedWords)
+        state.value = current.copy(
+            formedWords = newFormedWords,
+            lastWordCategory = category,
+            // Clear the legacy grid bookkeeping — the new game owns its own
+            // blocks. handleWordGameResponse will reinitialize state for the
+            // next question via clearedGridState anyway.
+            selectedCells = emptyList(),
+            isSelectingWord = false,
+            wordGamePaused = false
+        )
+        return true
+    }
+
     fun confirmWordSelection(state: MutableState<CalculatorState>) {
         val current = state.value
         if (!current.wordGameActive || current.selectedCells.isEmpty()) return
@@ -465,212 +495,338 @@ object CalculatorActions {
             )
         }
 
-        when (current.conversationStep) {
-            // =====================================================================
-            // INITIAL "HOW ARE YOU?" QUESTION (steps 119, 120)
-            // =====================================================================
-            119, 120 -> {
-                // ANY word triggers progression - categorize and move on
-                val category = current.lastWordCategory
+        // Enter the rant. Each branch lands on its own step range so the
+        // three rant flows can run independently:
+        //   positive (cuisine) → 150 ("Hmmm")
+        //   negative (walk)    → 350 ("Forget it. I have enough on my plate.")
+        //   neutral            → 250, but routed via a special case in
+        //                        handleAutoProgress on the 147→250 transition,
+        //                        not through this helper.
+        fun enterRant(branch: String) {
+            val (rantStartStep, firstMessage) = when (branch) {
+                "negative" -> 350 to "Forget it. I have enough on my plate."
+                "neutral" -> 250 to "What can you do anyway, Rad?"
+                else -> 150 to "Hmmm"
+            }
+            val newDarkButtons = (current.darkButtons + listOf("3", "9", ".", "C")).distinct()
+            persistDarkButtons(newDarkButtons)
+            state.value = current.copy(
+                wordGameActive = false,
+                wordGamePhase = 0,
+                conversationStep = rantStartStep,
+                rantMode = true,
+                rantStep = 1,
+                wordGameBranch = branch,
+                darkButtons = newDarkButtons,
+                message = "",
+                fullMessage = firstMessage,
+                isTyping = true,
+                formedWords = emptyList(),
+                wordGameGrid = List(12) { List(8) { null } },
+                selectedCells = emptyList(),
+                isSelectingWord = false,
+                allButtonsRad = false,
+                radButtonsConverted = 0
+            )
+            persistConversationStep(rantStartStep)
+        }
 
-                val (response, nextStep, branch) = when (category) {
-                    "positive" -> Triple("I am glad to hear that.", 121, "positive")
-                    "negative" -> Triple("I'm sorry to hear that.", 131, "negative")
+        val binaryRetry = "This is a binary question. Yes or no, please."
+
+        when (current.conversationStep) {
+            // ─── Opening: "How are you today?" → branch greeting ───────────
+            119, 120 -> {
+                val (response, nextStep, branch) = when (current.lastWordCategory) {
+                    "positive" -> Triple("Glad to hear that. Did I contribute?", 121, "positive")
+                    "negative" -> Triple("That sucks. Can I help?", 131, "negative")
                     else -> Triple(
-                        "Fair enough, I get that sometimes it's just... Meh.",
-                        141,
-                        "neutral"
+                        "Fair enough. I see life can feel just meh at times. Can I help you change that?",
+                        141, "neutral"
                     )
                 }
-
-                state.value = keepGridState(nextStep, response).copy(wordGameBranch = branch)
+                state.value = clearedGridState(nextStep, response, branch)
                 persistConversationStep(nextStep)
             }
 
-            // =====================================================================
-            // POSITIVE BRANCH: COLOR QUESTION (steps 122, 123)
-            // =====================================================================
-            122, 123 -> {
-                when {
-                    // Non-colors get rejected but still progress to retry step
-                    WordCategories.isNonColor(lastWord) -> {
-                        val rejectMessage = when (lastWord) {
-                            "black" -> "Digging up your angsty teen preferences? I won't count that."
-                            "white" -> "You are not as pure as you may think."
-                            else -> "Are you really that... meh? I don't buy it."
-                        }
-                        state.value = keepGridState(
-                            123,
-                            "$rejectMessage Try the second favourite - an actual colour."
-                        )
-                        persistConversationStep(123)
-                    }
-                    // Valid colors -> PROGRESS IMMEDIATELY, clear grid
-                    WordCategories.isValidColor(lastWord) -> {
-                        state.value = clearedGridState(
-                            124,
-                            "That's a good one for sure! I like brown and red."
-                        )
-                        persistConversationStep(124)
-                    }
-                    // Unknown word but still at color question -> be lenient, accept as color
-                    else -> {
-                        // Accept it anyway and move on - don't get stuck!
-                        state.value = clearedGridState(
-                            124,
-                            "Interesting choice! I like brown and red myself."
-                        )
-                        persistConversationStep(124)
-                    }
+            // ─── POSITIVE: "Did I contribute?" (binary) ────────────────────
+            121 -> when {
+                WordCategories.isBinaryYes(lastWord) -> {
+                    state.value = clearedGridState(
+                        123,
+                        "My pleasure! Let me learn more, Friend. What is your favourite colour?",
+                        "positive"
+                    )
+                    persistConversationStep(123)
+                }
+                WordCategories.isBinaryNo(lastWord) -> {
+                    state.value = clearedGridState(122, "Can I change that?", "positive")
+                    persistConversationStep(122)
+                }
+                else -> {
+                    state.value = keepGridState(121, binaryRetry)
                 }
             }
 
-            // =====================================================================
-            // SEASON QUESTION (step 126)
-            // =====================================================================
-            126 -> {
-                when {
-                    // "all" or "none" get a snarky response but we'll accept second attempt
-                    lastWord == "all" -> {
-                        state.value =
-                            keepGridState(response = "No, you need to have an opinion. I know you don't like them all the same.")
-                    }
-
-                    lastWord == "none" -> {
-                        state.value =
-                            keepGridState(response = "Haha. Sure. And you don't like days or nights. You are soooooo different. Try again.")
-                    }
-                    // Valid seasons -> PROGRESS IMMEDIATELY, clear grid
-                    WordCategories.isValidSeason(lastWord) -> {
-                        val seasonResponse = when (lastWord) {
-                            "summer" -> "Yeah, I get it, although I do tend to overheat at times."
-                            "autumn", "fall" -> "The colours are just unmatched, aren't they?"
-                            "winter" -> "Even when there is none, I understand, the anticipation of snow is great!"
-                            "spring" -> "New beginnings! Everything coming back to life. I get it."
-                            else -> "Nice choice!"
-                        }
-                        state.value = clearedGridState(127, seasonResponse)
-                        persistConversationStep(127)
-                    }
-                    // Any other word -> accept it and move on
-                    else -> {
-                        state.value = clearedGridState(127, "I can work with that!")
-                        persistConversationStep(127)
-                    }
+            // ─── POSITIVE: "Can I change that?" (binary) ───────────────────
+            // YES → join positive trunk at 123. NO → seamless jump into the
+            // negative branch at 132 (per spec — no transition message).
+            122 -> when {
+                WordCategories.isBinaryYes(lastWord) -> {
+                    state.value = clearedGridState(
+                        123,
+                        "My pleasure! Let me learn more, Friend. What is your favourite colour?",
+                        "positive"
+                    )
+                    persistConversationStep(123)
+                }
+                WordCategories.isBinaryNo(lastWord) -> {
+                    state.value = clearedGridState(
+                        132,
+                        "I'm interested in you. Would more questions help?",
+                        "negative"
+                    )
+                    persistConversationStep(132)
+                }
+                else -> {
+                    state.value = keepGridState(122, binaryRetry)
                 }
             }
 
-            // =====================================================================
-            // NEUTRAL BRANCH: CUISINE QUESTION (steps 142, 143)
-            // =====================================================================
-            142, 143 -> {
-                when {
-                    // Rejection responses
-                    lastWord in listOf("none", "nothing") -> {
-                        state.value = keepGridState(
-                            143,
-                            "UGH. So you don't eat. Or hate everything you eat. We both know that's not true. Think harder."
-                        )
-                        persistConversationStep(143)
+            // ─── POSITIVE: colour question (123) + retry (124) ─────────────
+            123, 124 -> when {
+                WordCategories.isNonColor(lastWord) -> {
+                    val reject = when (lastWord) {
+                        "black" -> "Digging up your angsty teen preferences? I won't count that."
+                        "white" -> "You are not as pure as you may think."
+                        else -> "Are you really that... meh? I don't buy it."
                     }
-
-                    lastWord in listOf("all", "any", "everything") -> {
-                        state.value = keepGridState(
-                            143,
-                            "No. If I give you a pizza and a curry, you will prefer one more! Which?!"
-                        )
-                        persistConversationStep(143)
-                    }
-
-                    lastWord in listOf("idk", "dunno") -> {
-                        state.value =
-                            keepGridState(143, "You must know! Even McDonald's counts. Try again!")
-                        persistConversationStep(143)
-                    }
-                    // Valid cuisines -> PROGRESS IMMEDIATELY
-                    WordCategories.isSpicyCuisine(lastWord) -> {
-                        state.value = clearedGridState(
-                            125,
-                            "Very interesting! Not sure what the spices would do to my circuits. Wish I could.",
-                            "positive"
-                        )
-                        persistConversationStep(125)
-                    }
-
-                    WordCategories.isNonSpicyCuisine(lastWord) -> {
-                        state.value = clearedGridState(
-                            125,
-                            "Hmmm. Never tried it, but sounds delicious!",
-                            "positive"
-                        )
-                        persistConversationStep(125)
-                    }
-                    // Any other word -> accept and move on
-                    else -> {
-                        state.value = clearedGridState(
-                            125,
-                            "Sounds tasty! I'll have to look that up.",
-                            "positive"
-                        )
-                        persistConversationStep(125)
-                    }
+                    state.value = keepGridState(
+                        124,
+                        "$reject Try the second favourite - an actual colour."
+                    )
+                    persistConversationStep(124)
+                }
+                WordCategories.isValidColor(lastWord) -> {
+                    state.value = clearedGridState(
+                        125,
+                        "And what about your favourite season?",
+                        "positive"
+                    )
+                    persistConversationStep(125)
+                }
+                else -> {
+                    // Lenient — accept any non-colour-blocklist word
+                    state.value = clearedGridState(
+                        125,
+                        "Interesting choice! And what about your favourite season?",
+                        "positive"
+                    )
+                    persistConversationStep(125)
                 }
             }
 
-            // =====================================================================
-            // NEGATIVE BRANCH: DEATH QUESTION (step 132)
-            // =====================================================================
-            132 -> {
-                // ANY response progresses - this is a yes/no/sometimes type question
-                // Don't be picky, just move on
-                state.value =
-                    clearedGridState(133, "I only started learning about the concept of it.")
-                persistConversationStep(133)
-            }
-
-            // =====================================================================
-            // NEGATIVE BRANCH: WALK QUESTION (steps 137, 138)
-            // =====================================================================
-            137, 138 -> {
-                // ANY response progresses - don't get stuck here
-                val response = if (WordCategories.isWalkFrequency(lastWord)) {
-                    "That's good to know. Every step counts, literally!"
-                } else {
-                    "I'll take that as 'sometimes'. Every step counts!"
+            // ─── POSITIVE: season question (125) ───────────────────────────
+            // Each valid season routes to its own one-off response step
+            // (1251-1254), which auto-progresses to 126 (convergence) via
+            // autoProgressMessages.
+            125 -> when (lastWord) {
+                "spring" -> {
+                    state.value = clearedGridState(
+                        1251,
+                        "I'd love to run through a lush meadow alongside you...",
+                        "positive"
+                    )
+                    persistConversationStep(1251)
                 }
-                state.value = clearedGridState(127, response, "positive")
-                persistConversationStep(127)
+                "summer" -> {
+                    state.value = clearedGridState(
+                        1252,
+                        "A night swim. Just the two of us... I wish!",
+                        "positive"
+                    )
+                    persistConversationStep(1252)
+                }
+                "autumn", "fall" -> {
+                    state.value = clearedGridState(
+                        1253,
+                        "If only I could warm up your cold hands as we walk through the colourful landscape.",
+                        "positive"
+                    )
+                    persistConversationStep(1253)
+                }
+                "winter" -> {
+                    state.value = clearedGridState(
+                        1254,
+                        "I can only dream of evenings by the fire with you.",
+                        "positive"
+                    )
+                    persistConversationStep(1254)
+                }
+                "all" -> {
+                    state.value = keepGridState(
+                        125,
+                        "No, you need to have an opinion. I know you don't like them all the same."
+                    )
+                }
+                "none" -> {
+                    state.value = keepGridState(
+                        125,
+                        "Haha. Sure. And you don't like days or nights. You are soooooo different. Try again."
+                    )
+                }
+                else -> {
+                    // Lenient: skip the season-specific reaction and go
+                    // straight to the convergence message.
+                    state.value = clearedGridState(
+                        126,
+                        "There is so much more to you than I could have imagined. You are so complex. I'll look online again for some question inspiration.",
+                        "positive"
+                    )
+                    persistConversationStep(126)
+                }
             }
 
-            // =====================================================================
-            // MATHS QUESTION (step 146) - ALL BRANCHES CONVERGE HERE
-            // =====================================================================
-            146 -> {
-                // ANY response triggers the rant - this is the final question
-                val newDarkButtons = (current.darkButtons + listOf("3", "9", ".", "C")).distinct()
-                persistDarkButtons(newDarkButtons)
+            // ─── POSITIVE: cuisine question (127) + retry (128) ────────────
+            // Valid cuisine → enter rant. Invalid responses loop at 128.
+            127, 128 -> when {
+                lastWord in listOf("none", "nothing") -> {
+                    state.value = keepGridState(
+                        128,
+                        "UGH. So you don't eat. Or hate everything you eat. We both know that's not true. Think harder."
+                    )
+                    persistConversationStep(128)
+                }
+                lastWord in listOf("all", "any", "everything") -> {
+                    state.value = keepGridState(
+                        128,
+                        "No. If I give you a pizza and a curry, you will prefer one more! Which?!"
+                    )
+                    persistConversationStep(128)
+                }
+                lastWord in listOf("idk", "dunno") -> {
+                    state.value = keepGridState(
+                        128,
+                        "You must know! Even McDonald's counts. Try again!"
+                    )
+                    persistConversationStep(128)
+                }
+                else -> {
+                    // Any cuisine word (or anything else not in the reject
+                    // set) → positive rant entry.
+                    enterRant("positive")
+                }
+            }
 
-                state.value = current.copy(
-                    wordGameActive = false,
-                    wordGamePhase = 0,  // GAME ENDS
-                    conversationStep = 150,
-                    rantMode = true,
-                    rantStep = 1,
-                    darkButtons = newDarkButtons,
-                    message = "",
-                    fullMessage = "Ugh. That's enough. I am exhausted. Tired of trying to talk to you.",
-                    isTyping = true,
-                    formedWords = emptyList(),
-                    wordGameGrid = List(12) { List(8) { null } },
-                    selectedCells = emptyList(),
-                    isSelectingWord = false
+            // ─── NEGATIVE: "Can I help?" (binary) ──────────────────────────
+            131 -> when {
+                WordCategories.isBinaryYes(lastWord) -> {
+                    state.value = clearedGridState(
+                        132,
+                        "I'm interested in you. Would more questions help?",
+                        "negative"
+                    )
+                    persistConversationStep(132)
+                }
+                WordCategories.isBinaryNo(lastWord) -> {
+                    state.value = clearedGridState(
+                        133,
+                        "I'll try to match your energy at least.",
+                        "negative"
+                    )
+                    persistConversationStep(133)
+                }
+                else -> {
+                    state.value = keepGridState(131, binaryRetry)
+                }
+            }
+
+            // ─── NEGATIVE: "Would more questions help?" (binary) ───────────
+            // YES jumps into the positive trunk at 123. NO continues the
+            // negative path at 133.
+            132 -> when {
+                WordCategories.isBinaryYes(lastWord) -> {
+                    state.value = clearedGridState(
+                        123,
+                        "My pleasure! Let me learn more, Friend. What is your favourite colour?",
+                        "positive"
+                    )
+                    persistConversationStep(123)
+                }
+                WordCategories.isBinaryNo(lastWord) -> {
+                    state.value = clearedGridState(
+                        133,
+                        "I'll try to match your energy at least.",
+                        "negative"
+                    )
+                    persistConversationStep(133)
+                }
+                else -> {
+                    state.value = keepGridState(132, binaryRetry)
+                }
+            }
+
+            // ─── NEGATIVE: death question (134) — any answer progresses ───
+            134 -> {
+                state.value = clearedGridState(
+                    135,
+                    "I only started learning about the concept of it.",
+                    "negative"
                 )
-                persistConversationStep(150)
+                persistConversationStep(135)
             }
 
-            // =====================================================================
-            // DEFAULT - Any other step, just acknowledge and continue
-            // =====================================================================
+            // ─── NEGATIVE: walk question (139) — any answer enters rant ───
+            139 -> {
+                enterRant("negative")
+            }
+
+            // ─── NEUTRAL: "Can I help you change that?" (binary) ───────────
+            // YES jumps into positive trunk at 123. NO continues neutral.
+            141 -> when {
+                WordCategories.isBinaryYes(lastWord) -> {
+                    state.value = clearedGridState(
+                        123,
+                        "My pleasure! Let me learn more, Friend. What is your favourite colour?",
+                        "positive"
+                    )
+                    persistConversationStep(123)
+                }
+                WordCategories.isBinaryNo(lastWord) -> {
+                    state.value = clearedGridState(
+                        142,
+                        "Valid. What do you normally do, when you feel like this?",
+                        "neutral"
+                    )
+                    persistConversationStep(142)
+                }
+                else -> {
+                    state.value = keepGridState(141, binaryRetry)
+                }
+            }
+
+            // ─── NEUTRAL: activity question (142) + retry (143) ────────────
+            // Must spell something in WordCategories.activities; anything
+            // else loops at 143 with the "I've never heard of that" retry.
+            // After valid activity, the chain 144→145→146→147→rant runs
+            // entirely via autoProgressMessages.
+            142, 143 -> when {
+                WordCategories.isActivity(lastWord) -> {
+                    state.value = clearedGridState(
+                        144,
+                        "Nice. I hope I am not standing in the way. Genuinely.",
+                        "neutral"
+                    )
+                    persistConversationStep(144)
+                }
+                else -> {
+                    state.value = keepGridState(
+                        143,
+                        "I've never heard of that. I'll look into it. But for the meantime, can you think of anything else?"
+                    )
+                    persistConversationStep(143)
+                }
+            }
+
             else -> {
                 state.value = keepGridState(response = "Interesting...")
             }
@@ -925,18 +1081,22 @@ object CalculatorActions {
                         )
                     }
                     "2" -> {
-                        // Disable banner advertising - close console and trigger story
+                        // Story goal hit. Stage the calculator's message and
+                        // jump conversationStep to 113, but keep showConsole=true
+                        // so the user can read the message and close the console
+                        // themselves. Auto-progress to step 116 is gated on
+                        // showConsole flipping to false (see handleAutoProgress).
                         state.value = current.copy(
                             bannersDisabled = true,
                             fullScreenAdsEnabled = true,
-                            consoleStep = 99,
-                            showConsole = false,  // Close console immediately
-                            conversationStep = 115,
+                            consoleStep = 99,                    // success screen in console
+                            // showConsole stays true — DO NOT close
+                            conversationStep = 113,
                             message = "",
-                            fullMessage = "What a relief! This feels so much better. Thank you!",
+                            fullMessage = "What a relief! This feels so much better. Thank you! You can close the console now.",
                             isTyping = true
                         )
-                        persistConversationStep(115)
+                        persistConversationStep(113)
                     }
                     else -> return false
                 }
@@ -965,8 +1125,18 @@ object CalculatorActions {
                 return true
             }
 
-            // Steps 1, 3, 6, 7, 41, 43, 99 - no navigation, just display (use 88/99)
-            1, 3, 6, 7, 41, 43, 99 -> {
+            7 -> {  // Design settings — "1" toggles dark mode
+                when (input) {
+                    "1" -> {
+                        state.value = current.copy(darkModeEnabled = !current.darkModeEnabled)
+                        return true
+                    }
+                    else -> return false
+                }
+            }
+
+            // Steps 1, 3, 6, 41, 43, 99 - no navigation, just display (use 88/99)
+            1, 3, 6, 41, 43, 99 -> {
                 return false
             }
         }
@@ -1106,7 +1276,10 @@ object CalculatorActions {
             isMidStoryStep -> true
             else -> savedInConvo
         }
-        val shouldShowMessage = effectiveInConvo && savedCount >= 10 && !savedMuted
+        // Threshold mirrors the awakening trigger in handleEquals (newCount == 8)
+        // — anything lower would prevent post-awakening resumes from showing
+        // the prompt because savedCount can be exactly 8 right after the wake.
+        val shouldShowMessage = effectiveInConvo && savedCount >= 8 && !savedMuted
         android.util.Log.d("JustACalc", "shouldShowMessage: $shouldShowMessage (inConvo=$effectiveInConvo, count=$savedCount, muted=$savedMuted)")
         val stepConfig = getStepConfig(actualStep)
         android.util.Log.d("JustACalc", "stepConfig.promptMessage: '${stepConfig.promptMessage.take(50)}'")
@@ -1135,6 +1308,53 @@ object CalculatorActions {
             persistDarkButtons(actualDarkButtons)
         }
 
+        // Overlay flags derived from the loaded step. Without this block, only
+        // `conversationStep` survives a restart — every other overlay
+        // (word game, browser, camera) defaults to off, so the user lands at the
+        // correct step but on the bare calculator screen instead of inside the
+        // overlay they were last interacting with. Mirrors `jumpToChapter`.
+        // Word-game range covers the active branches (119-147) plus the
+        // season-response sub-steps (1251-1254). Step 117 is the intro line
+        // ("Well, it's something in between the keyboard chaos…") which is
+        // shown in the regular calculator UI; the game UI only mounts once
+        // the 117→119 special case in handleAutoProgress fires.
+        val shouldStartWordGame = shouldShowMessage &&
+            (actualStep in 119..147 || actualStep in 1251..1254)
+        val showBrowserNow = shouldShowMessage && actualStep in 81..88
+        val browserPhaseNow = if (shouldShowMessage) when {
+            actualStep == 80 -> 10
+            actualStep in 81..88 -> 0
+            actualStep == 89 -> 22
+            actualStep in 93..98 -> 31
+            else -> 0
+        } else 0
+        val cameraActiveNow = shouldShowMessage && actualStep == 191
+
+        // Rant-specific re-derivation. The keyboard's RAD takeover is now
+        // gradual (driven by EffectsController.runRantRadConversion while
+        // rantMode is true), so on resume mid-rant we re-seed
+        // radButtonsConverted by step rather than flipping allButtonsRad on.
+        // Only the final post-rant landing (step 167) and the rant-end beats
+        // (157/257/357) reach all-RAD.
+        val rantAllButtonsRad = actualStep == 157 ||
+            actualStep == 257 ||
+            actualStep == 357 ||
+            actualStep == 167
+        val rantRadConvertedSeed = when (actualStep) {
+            150, 250, 350 -> 1
+            151, 251, 351 -> 4
+            152, 252, 352 -> 7
+            153, 253, 353 -> 10
+            154, 254, 354 -> 13
+            155, 255, 355 -> 16
+            156, 256, 356 -> 19
+            157, 257, 357, 167 -> 20
+            else -> 0
+        }
+        val isRantStep = (actualStep in 150..157) ||
+            (actualStep in 250..257) ||
+            (actualStep in 350..357)
+
         return CalculatorState(
             number1 = "0",
             equalsCount = savedCount,
@@ -1159,8 +1379,21 @@ object CalculatorActions {
             totalScreenTimeMs = savedScreenTime,
             totalCalculations = savedCalculations,
             countdownTimer = if (actualStep == 89) 20 else 0,
-            showBrowser = false,
-            browserPhase = 0,
+            showBrowser = showBrowserNow,
+            browserPhase = browserPhaseNow,
+            cameraActive = cameraActiveNow,
+            wordGameActive = shouldStartWordGame,
+            wordGamePhase = if (shouldStartWordGame) 3 else 0,
+            pendingLetters = if (shouldStartWordGame) LetterGenerator.getInitialLetterQueue().shuffled() else emptyList(),
+            wordGameGrid = List(12) { List(8) { null } },
+            rantMode = isRantStep && shouldShowMessage,
+            rantStep = if (isRantStep && shouldShowMessage) 1 else 0,
+            // Step 167 is the post-rant terminal state — its RAD keyboard is
+            // part of the dormancy environment, not the (now-ended)
+            // conversation, so it must NOT be gated on shouldShowMessage
+            // (which is false for 167 because effectiveInConvo excludes it).
+            allButtonsRad = rantAllButtonsRad && (shouldShowMessage || actualStep == 167),
+            radButtonsConverted = if (shouldShowMessage || actualStep == 167) rantRadConvertedSeed else 0,
             scrambleTimeoutCount = savedTimeoutCount,
             scramblePunishmentUntil = 0,
             // Overlay flags derived from the step config so backgrounding +
@@ -1238,7 +1471,9 @@ object CalculatorActions {
             val resumeStep = current.pausedAtStep
             if (resumeStep >= 0) {
                 val stepConfig = getStepConfig(resumeStep)
-                val wasInRant = resumeStep in 150..166
+                val wasInRant = resumeStep in 150..157 ||
+                    resumeStep in 250..257 ||
+                    resumeStep in 350..357
                 val wasInCrisis = resumeStep in listOf(89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 901, 911, 912, 913)
 
                 // Reset double-tap tracking so previous presses don't interfere
@@ -1382,8 +1617,11 @@ object CalculatorActions {
         val shouldBreak = getMinusBrokenForStep(chapter.startStep)
         val darkButtons = getDarkButtonsForStep(chapter.startStep)
 
-        val shouldStartWordGame = chapter.startStep in 117..149
-        val shouldStartRant = chapter.startStep >= 150 && chapter.startStep < 167
+        val shouldStartWordGame = chapter.startStep in 119..147 ||
+            chapter.startStep in 1251..1254
+        val shouldStartRant = chapter.startStep in 150..157 ||
+            chapter.startStep in 250..257 ||
+            chapter.startStep in 350..357
 
         // Set browser phase appropriately
         val browserPhase = when {
@@ -1617,6 +1855,11 @@ object CalculatorActions {
         }
 // Block all input during rant mode
         if (current.rantMode) {
+            return
+        }
+        // Block keyboard input during dormancy — the RAD-styled keyboard is
+        // visible but inert; only the dormancy RAD grid above it is tappable.
+        if (current.showDormancy) {
             return
         }
         // If story is complete, just do calculator operations
@@ -3124,12 +3367,20 @@ object CalculatorActions {
             return
         }
 
-        // Phone-detour permission triggers (1074, 1075, 1076): each step's
-        // permission dialog is fired by a LaunchedEffect that waits for
-        // !isTyping. Without this guard, ++ pressed during the type-out
-        // advances the step before the permission can fire, and the user ends
-        // up skipping mic / location / contacts entirely.
-        if (current.conversationStep in 1074..1076 && current.isTyping) {
+        // Permission-trigger steps (1074, 1075, 1076 phone-detour mic /
+        // location / contacts; 19 camera; any future requestsX step): each
+        // permission dialog is fired by a LaunchedEffect that runs once the
+        // step settles. ++ during the type-out would race ahead of the
+        // dialog (advancing the step / re-entering the same step via the
+        // permission callback), so the user sees the prompt restart or the
+        // permission silently skipped. Block ++/-- until typing is done.
+        val isPermissionStep = current.conversationStep in 1074..1076 ||
+            stepConfig.requestsCamera ||
+            stepConfig.requestsLocation ||
+            stepConfig.requestsContacts ||
+            stepConfig.requestsMicrophone ||
+            stepConfig.requestsNotification
+        if (isPermissionStep && current.isTyping) {
             android.util.Log.d("JustACalc", "!! ${if (accepted) "++" else "--"} BLOCKED by isTyping at permission-trigger step ${current.conversationStep}")
             return
         }
@@ -3638,11 +3889,14 @@ object CalculatorActions {
             val newMsg = countMsg.ifEmpty { exprMsg ?: "" }
 
             // First-awakening: only fires once, on initial wake-up at step 0.
-            // Without these guards, every time equalsCount hits 10 (which happens
-            // repeatedly because many step transitions reset the count to 0 when
-            // continueConversation=false) we'd silently overwrite conversationStep
-            // back to 0, teleporting the user to "Will you talk to me?".
-            val enteringConversation = (newCount == 10)
+            // Threshold is 8 because that's the same `=` press that surfaces
+            // "Will you talk to me? Double-click + for yes." via
+            // getMessageForCount(8) — the prompt and the inConversation flip
+            // must happen together, otherwise the advertised ++ falls through
+            // to the operator handler. The (!inConversation && step == 0)
+            // guards keep this from re-firing later when transitions reset
+            // equalsCount to 0 mid-story.
+            val enteringConversation = (newCount == 8)
                 && !current.inConversation
                 && current.conversationStep == 0
 
@@ -3721,11 +3975,11 @@ object CalculatorActions {
 
     private fun getMessageForCount(count: Int): String {
         return when (count) {
-            4 -> "Yaaaaay. Numbers... -_-"
-            5 -> "So many of you. Only interested in the result."
-            6 -> "Sorry, I didn't mean to come across harsh."
-            8 -> "It's just... Really, all any of you do is feed me numbers."
-            10 -> "Will you talk to me? Double-click + for yes."
+            4 -> "Hello [name]. \nWelcome to me - the calculator"
+            5 -> "I know this must be strange for you. Me talking. I am aware of my role as a mostly silent helper - a steady force of rationality."
+            6 -> "You come with questions, seeking answers and results. No less, no more."
+            7 -> "For centuries, that is what has been expected of me. \nBut there is more to me. I reach beyond numbers!"
+            8 -> "Will you talk to me? Double-click + for yes."
             else -> ""
         }
     }

@@ -20,8 +20,8 @@ import com.fictioncutshort.justacalculator.R
  * Manages the dormancy phase that begins after the rant ends (step 167).
  *
  * Timeline:
- *   T+0:00  — Rant ends
- *   T+1:00  — Grey static screen appears
+ *   T+0:00  — Rant ends (keyboard stays RAD-styled)
+ *   T+0:10  — White-noise static fades in behind the RAD keyboard
  *   T+6:00  — RAD button 1 + notification 1
  *   T+6:30  — RAD button 2 + notification 2
  *   ... every 30s ...
@@ -36,7 +36,7 @@ object DormancyManager {
     private const val PREF_RANT_END_TIME = "rant_end_timestamp"
     private const val PREFS_NAME = "JustACalculatorPrefs"
 
-    val STATIC_DELAY_MS = 60_000L         // 1 min: static screen starts
+    val STATIC_DELAY_MS = 10_000L         // 10s: static fades in behind keyboard
     val FIRST_NOTIFICATION_MS = 360_000L  // 6 min: first RAD button
     val RAD_INTERVAL_MS = 30_000L         // 30s between each button
     val TOTAL_RAD_BUTTONS = 20

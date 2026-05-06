@@ -98,7 +98,9 @@ fun PortraitCalculatorContent(
                     useFrontCamera = current.cameraUseFrontCamera
                 )
             } else {
-                // Normal display + keyboard
+                // Normal display + keyboard. (Dormancy uses its own
+                // dedicated screen — see DormancyScreen — so it never
+                // routes through this branch.)
                 when {
                     current.showBrowser -> {
                         BrowserViewWithFloatingDisplay(
@@ -141,6 +143,7 @@ fun PortraitCalculatorContent(
                     flickeringButton = current.flickeringButton,
                     darkButtons = current.darkButtons,
                     allButtonsRad = current.allButtonsRad,
+                    radButtonsConverted = current.radButtonsConverted,
                     rantMode = current.rantMode,
                     onButtonClick = { symbol ->
                         CalculatorActions.handleInput(state, symbol)

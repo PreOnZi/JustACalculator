@@ -88,10 +88,21 @@ object ConsoleHandler {
             51 -> handleBannerAdsMenu(command, state)
             52 -> handleFullScreenAdsMenu(command, state)
             6 -> { /* Permissions - no options */ }
-            7 -> { /* Design - no options */ }
+            7 -> handleDesignMenu(command, state)
             41 -> { /* Network - no options */ }
             43 -> { /* Data usage - no options */ }
-            99 -> closeConsole(state) // Success screen - any input closes
+            99 -> { /* Success screen — only 88/99 above respond; keeps console
+                      open so the user reads the calc-side message before
+                      manually closing. Any other input is a no-op. */ }
+        }
+    }
+
+    /**
+     * Design settings menu (step 7). "1" toggles dark mode.
+     */
+    private fun handleDesignMenu(command: String, state: MutableState<CalculatorState>) {
+        when (command) {
+            "1" -> state.value = state.value.copy(darkModeEnabled = !state.value.darkModeEnabled)
         }
     }
 
@@ -161,15 +172,22 @@ object ConsoleHandler {
                 )
             }
             "2" -> {
-                // Disable banner ads (enables full-screen)
-                state.value = state.value.copy(
+                // Disable banner ads (enables full-screen). Story goal hit:
+                // immediately stage the calculator's "What a relief…" message
+                // and advance to step 113. Console stays open — the calculator
+                // explicitly tells the user "You can close the console now."
+                // and the auto-progress to the next step is gated on that.
+                val current = state.value
+                state.value = current.copy(
                     bannersDisabled = true,
                     fullScreenAdsEnabled = true,
-                    consoleStep = 99  // Show success message
+                    consoleStep = 99,  // Console-side success screen
+                    conversationStep = 113,
+                    message = "",
+                    fullMessage = "What a relief! This feels so much better. Thank you! You can close the console now.",
+                    isTyping = true
                 )
-
-                // This is the story goal - advance the plot
-                advanceStoryAfterAdsDisabled(state)
+                CalculatorActions.persistConversationStep(113)
             }
         }
     }
@@ -215,7 +233,11 @@ object ConsoleHandler {
     }
 
     /**
-     * Closes the console and returns to calculator.
+     * Closes the console and returns to calculator. The "What a relief…"
+     * message at conversationStep 113 is set up the moment banner ads are
+     * disabled (see handleBannerAdsMenu); auto-progress to the next step is
+     * gated on showConsole becoming false in handleAutoProgress, so simply
+     * dropping showConsole here is enough to unblock the story.
      */
     private fun closeConsole(state: MutableState<CalculatorState>) {
         state.value = state.value.copy(
@@ -223,20 +245,6 @@ object ConsoleHandler {
             consoleStep = 0,
             number1 = "0"
         )
-
-        // If story is at step 112, advance after console closes
-        if (state.value.conversationStep == 112 && state.value.bannersDisabled) {
-            StoryManager.goToStep(113, state)
-        }
-    }
-
-    /**
-     * Called when ads are successfully disabled via console.
-     * This advances the story.
-     */
-    private fun advanceStoryAfterAdsDisabled(state: MutableState<CalculatorState>) {
-        // Mark that the puzzle was solved
-        // The actual step advancement happens when console is closed
     }
 
     /**

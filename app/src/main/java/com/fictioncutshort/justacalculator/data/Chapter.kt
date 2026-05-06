@@ -204,13 +204,22 @@ val INTERACTIVE_STEPS = listOf(
     // Chapter 14: Console Quest (108-116)
     108, 109, 110, 111, 112, 113, 114, 115, 116,
 
-    // Chapter 15: Word Game (117-149)
+    // Chapter 15: Word Game (117-147, plus 1251-1254 season responses)
     117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129,
     130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
     143, 144, 145, 146, 147, 148, 149,
+    1251, 1252, 1253, 1254,
 
-    // Chapter 16: Rant (150-167)
-    150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167,
+    // Chapter 16: Rant — three branches (positive 150s, neutral 250s,
+    // negative 350s) all converging at 167 (story complete).
+    //
+    // Dynamic-only beats (153, 155, 253, 254, 351, 354) are deliberately
+    // excluded: their promptMessage is empty (the text is generated at
+    // runtime). If the user resumes there, getSafeStep falls back to the
+    // previous static step so the dynamic transition re-fires.
+    150, 151, 152, 154, 156, 157, 167,
+    250, 251, 252, 255, 256, 257,
+    350, 352, 353, 355, 356, 357,
 
     // Branch steps
     982,

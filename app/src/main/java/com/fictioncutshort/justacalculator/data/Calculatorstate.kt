@@ -28,7 +28,7 @@ data class CalculatorState(
     /** Current step in the story (0-167). Each step has its own dialogue/behavior. */
     val conversationStep: Int = 0,
 
-    /** True once the calculator "wakes up" and starts talking (after equalsCount >= 13) */
+    /** True once the calculator "wakes up" and starts talking (after equalsCount == 8) */
     val inConversation: Boolean = false,
 
     /** True when conversation is muted (orange button toggled off) */
@@ -310,6 +310,14 @@ data class CalculatorState(
     /** True after enabling full-screen ads in console */
     val fullScreenAdsEnabled: Boolean = false,
 
+    /**
+     * Toggled from the console's Design Settings → Dark Mode menu. Does not
+     * persist across app restarts — purely a session-local visual setting.
+     * Renders as a soft black scrim over the whole UI (~30% alpha) so things
+     * just look dimmer rather than going fully black.
+     */
+    val darkModeEnabled: Boolean = false,
+
     // ═══════════════════════════════════════════════════════════════════════════
     // BUTTON APPEARANCE - Visual states for calculator buttons
     // ═══════════════════════════════════════════════════════════════════════════
@@ -320,8 +328,15 @@ data class CalculatorState(
     /** Extra RAD button visible (step 160) */
     val radButtonVisible: Boolean = false,
 
-    /** All buttons show "RAD" text (step 162) */
+    /** All buttons show "RAD" text — terminal state once the rant has fully
+     *  taken over the keyboard (and through the dormancy phase). */
     val allButtonsRad: Boolean = false,
+
+    /** How many keyboard buttons have been individually flipped to RAD so
+     *  far during the rant. Drives the gradual takeover (0 → 20) before
+     *  [allButtonsRad] becomes true at the rant end. The order is fixed in
+     *  CalculatorButton.kt's RAD_CONVERSION_ORDER. */
+    val radButtonsConverted: Int = 0,
 
     // ═══════════════════════════════════════════════════════════════════════════
     // WORD GAME - Letter falling game (steps 117-149)

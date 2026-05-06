@@ -76,7 +76,6 @@ import com.fictioncutshort.justacalculator.logic.CalculatorActions
 import com.fictioncutshort.justacalculator.logic.DormancyManager
 import com.fictioncutshort.justacalculator.logic.DormancyPhase
 import com.fictioncutshort.justacalculator.logic.EffectsController
-import com.fictioncutshort.justacalculator.ui.screens.DormancyOverlay
 import com.fictioncutshort.justacalculator.ui.screens.AdCardStack
 import com.fictioncutshort.justacalculator.ui.components.CalculatorButton
 import com.fictioncutshort.justacalculator.ui.components.CameraPreview
@@ -89,7 +88,7 @@ import com.fictioncutshort.justacalculator.util.AccentOrange
 import com.fictioncutshort.justacalculator.util.CalculatorDisplayFont
 import com.fictioncutshort.justacalculator.util.RetroCream
 import com.fictioncutshort.justacalculator.util.RetroDisplayGreen
-import com.fictioncutshort.justacalculator.util.WordGameScreen
+import com.fictioncutshort.justacalculator.ui.screens.LetterBlockGame
 import com.fictioncutshort.justacalculator.util.createSecretFile
 import com.fictioncutshort.justacalculator.util.scheduleNotification
 import com.fictioncutshort.justacalculator.util.vibrate
@@ -238,7 +237,8 @@ fun CalculatorScreen() {
                     // Restore rantMode if the user returns to the app while mid-rant
                     val currentState = state.value
                     val step = currentState.conversationStep
-                    if (!currentState.rantMode && step in 150..166) {
+                    if (!currentState.rantMode &&
+                        (step in 150..157 || step in 250..257 || step in 350..357)) {
                         state.value = currentState.copy(rantMode = true)
                     }
                 }
@@ -298,9 +298,14 @@ fun CalculatorScreen() {
             991, 992, 9911                            // close-app + notification retry
         )
 
+        // Step 167 is the *only* legitimate post-story landing — every other
+        // step in the rant ranges (150-157 positive, 250-257 neutral, 350-357
+        // negative) is mid-rant, not post-story. Numbers like 250/350 happen
+        // to sit above 167 numerically, so a `>= 167` test would misclassify
+        // them as post-story if storyCompleteInPrefs ever became stale-true.
         val postStorySafe = storyCompleteInPrefs
             && !needsRestartInPrefs
-            && currentStepOnLaunch >= 167
+            && currentStepOnLaunch == 167
             && currentStepOnLaunch !in preStoryBranchSteps
 
         if (postStorySafe) {
@@ -325,15 +330,21 @@ fun CalculatorScreen() {
                 }
             }
             // City / ad-card restoration: only if the user was actually mid-phase.
+            // These phases are *past* dormancy, so the keyboard is no longer
+            // RAD-styled — undo the recreateState default for step 167.
             when {
                 inCityPhaseInPrefs -> {
                     state.value = state.value.copy(
                         showAdCards = true,
-                        showCityDirectly = true
+                        showCityDirectly = true,
+                        allButtonsRad = false
                     )
                 }
                 showAdCardsInPrefs -> {
-                    state.value = state.value.copy(showAdCards = true)
+                    state.value = state.value.copy(
+                        showAdCards = true,
+                        allButtonsRad = false
+                    )
                 }
             }
         } else {
@@ -751,6 +762,12 @@ fun CalculatorScreen() {
     LaunchedEffect(current.rantMode) {
         EffectsController.runRantFlicker(state)
     }
+    // Gradual keyboard → RAD takeover. Re-launches whenever rantMode flips
+    // on (entering one of the three rant branches) and ticks every 2.5s
+    // until all 20 cells are converted or rantMode drops.
+    LaunchedEffect(current.rantMode) {
+        EffectsController.runRantRadConversion(state)
+    }
     // Telephone detour permissions
     LaunchedEffect(current.conversationStep, current.message, current.isTyping) {
         // Microphone - step is 1075 when "Nice!" is shown (success message from 1074)
@@ -866,7 +883,10 @@ fun CalculatorScreen() {
     }
 
     // ========== AUTO-PROGRESS ==========
-    LaunchedEffect(current.isTyping, current.message, current.conversationStep, current.showDonationPage) {
+    // showConsole is a key here so the effect re-fires when the user closes the
+    // console — handleAutoProgress parks while showConsole=true (used by the
+    // step-113 "What a relief… You can close the console now." gate).
+    LaunchedEffect(current.isTyping, current.message, current.conversationStep, current.showDonationPage, current.showConsole) {
         AutoProgressEffects.handleAutoProgress(state, context)
     }
 
@@ -1206,6 +1226,18 @@ fun CalculatorScreen() {
             }
         }
 
+    } else if (current.showDormancy) {
+        // Dormancy takes over the entire window — full-bleed static, RAD
+        // grid, and the (now-inert) keyboard. The standard chrome (top
+        // bezel, ad banner, mute button, message) is deliberately not
+        // rendered so nothing competes with the static behind the RAD keys.
+        com.fictioncutshort.justacalculator.ui.screens.DormancyScreen(
+            state = state,
+            current = current,
+            buttonLayout = buttonLayout,
+            dimensions = dimensions,
+            currentShakeIntensity = currentShakeIntensity
+        )
     } else {
         Column(
             modifier = Modifier
@@ -1221,51 +1253,30 @@ fun CalculatorScreen() {
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 contentAlignment = if (isTablet) Alignment.TopCenter else Alignment.TopStart
             ) {
-            // Word game replaces calculator buttons but keeps top section
+            // Word game replaces calculator buttons but keeps top section.
+            //
+            // Layout uses a Box (not Column) so the LetterBlockGame has fixed
+            // bounds regardless of the calculator's message text length —
+            // otherwise the Column reflows as the message types out and the
+            // game area visibly resizes mid-animation. The block game is
+            // drawn last (= front), with the message + mute button drawn
+            // first (= back), so falling cubes can drift in front of the
+            // message text while the cap of 11 cubes per column keeps the
+            // settled stack from ever reaching the message area.
             if (current.wordGameActive) {
-                Column(
+                Box(
                     modifier = Modifier
                         .then(if (isTablet) Modifier.widthIn(max = maxContentWidth) else Modifier.fillMaxWidth())
                         .fillMaxHeight()
                 ) {
-
-                    // Ad banner space (same as calculator)
-                    if ((showAdBanner && !current.bannersDisabled) || current.adAnimationPhase > 0 || current.postChaosAdPhase > 0) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(50.dp)
-                                .background(Color(0xFFD4CBC0)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            // Empty banner during word game
-                        }
-                    }
-
-                    // Main content area with message and mute button at top
+                    // Back layer: message + mute button. Mute is on top of
+                    // the cube layer too (own align), so the user can always
+                    // tap it.
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 15.dp)
                     ) {
-                        // Mute button - top right corner
-                        MuteButtonWithSpinner(
-                            isMuted = current.isMuted,
-                            isAutoProgressing = current.showSpinner,
-                            onClick = {
-                                val result = CalculatorActions.handleMuteButtonClick()
-                                when (result) {
-                                    1 -> CalculatorActions.showDebugMenu(state)
-                                    2 -> CalculatorActions.resetGame(state)
-                                    else -> CalculatorActions.toggleConversation(state)
-                                }
-                            },
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(top = 8.dp)
-                        )
-
-                        // Message display - top left
                         if (current.message.isNotEmpty() && !current.isMuted) {
                             Text(
                                 text = current.message,
@@ -1282,46 +1293,34 @@ fun CalculatorScreen() {
                         }
                     }
 
-                    // Spacer between message area and game
-                    Spacer(modifier = Modifier.height(100.dp))
+                    // Front layer: cube game. Fills the full Box; cubes
+                    // spawn at negative Y (above the screen) and fall down,
+                    // drawing in front of the message text.
+                    LetterBlockGame(
+                        questionText = current.message.takeIf { it.isNotEmpty() }
+                            ?: current.fullMessage,
+                        onSubmitWord = { word ->
+                            CalculatorActions.submitBlockWord(state, word)
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
 
-                    // Word game grid and controls (fills remaining space)
-                    WordGameScreen(
-                        gameGrid = current.wordGameGrid,
-                        fallingLetter = current.fallingLetter,
-                        fallingX = current.fallingLetterX,
-                        fallingY = current.fallingLetterY,
-                        selectedCells = current.selectedCells,
-                        isSelecting = current.isSelectingWord,
-                        formedWords = current.formedWords,
-                        isPaused = current.wordGamePaused,
-                        draggingCell = current.draggingCell,
-                        dragOffsetX = current.dragOffsetX,
-                        dragOffsetY = current.dragOffsetY,
-                        previewGrid = current.dragPreviewGrid,    // NEW - shows shifted letters
-                        onMoveLeft = { CalculatorActions.moveWordGameLeft(state) },
-                        onMoveRight = { CalculatorActions.moveWordGameRight(state) },
-                        onMoveDown = { CalculatorActions.moveWordGameDown(state) },
-                        onDrop = { CalculatorActions.dropWordGameLetter(state) },
-                        onCellTap = { row, col ->
-                            CalculatorActions.selectWordGameCell(state, row, col)
+                    // Mute button overlay — z-stacked above the cube layer
+                    // so taps always reach it even when cubes settle nearby.
+                    MuteButtonWithSpinner(
+                        isMuted = current.isMuted,
+                        isAutoProgressing = current.showSpinner,
+                        onClick = {
+                            val result = CalculatorActions.handleMuteButtonClick()
+                            when (result) {
+                                1 -> CalculatorActions.showDebugMenu(state)
+                                2 -> CalculatorActions.resetGame(state)
+                                else -> CalculatorActions.toggleConversation(state)
+                            }
                         },
-                        onConfirmSelection = { CalculatorActions.confirmWordSelection(state) },
-                        onCancelSelection = { CalculatorActions.cancelWordSelection(state) },
-                        onClearGrid = { CalculatorActions.clearWordGameGrid(state) },
-                        onStartDrag = { row, col ->
-                            CalculatorActions.startDraggingLetter(state, row, col)
-                        },
-                        onUpdateDrag = { deltaX, deltaY ->        // CHANGED - now receives deltas
-                            CalculatorActions.updateDragOffset(state, deltaX, deltaY)
-                        },
-                        onEndDrag = {                              // CHANGED - no longer needs cellSize
-                            CalculatorActions.endDraggingLetter(state)
-                        },
-                        onCancelDrag = {
-                            CalculatorActions.cancelDragging(state)
-                        },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 8.dp, end = 15.dp)
                     )
                 }
             } else {
@@ -1407,6 +1406,7 @@ fun CalculatorScreen() {
             currentInput = current.number1,
             bannersDisabled = current.bannersDisabled,
             fullScreenAdsEnabled = current.fullScreenAdsEnabled,
+            darkModeEnabled = current.darkModeEnabled,
             totalScreenTimeMs = current.totalScreenTimeMs,
             totalCalculations = current.totalCalculations,
             onOpenContributeLink = {
@@ -1415,6 +1415,17 @@ fun CalculatorScreen() {
 
             },
             modifier = Modifier.fillMaxSize()
+        )
+    }
+    // Dark-mode dim overlay (toggleable from console → Design Settings).
+    // Soft black scrim — dims, doesn't black out. Drawn above the console so
+    // even the console looks slightly darker; below blackout / chaos overlays
+    // so it doesn't compound those.
+    if (current.darkModeEnabled && !current.screenBlackout) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.30f))
         )
     }
     // Blackout overlay
@@ -1525,7 +1536,7 @@ fun CalculatorScreen() {
                     showHomeScreenOverlay = false,
                     conversationStep = 108,
                     message = "",
-                    fullMessage = "Let me try getting online again. I'm prepared for the side effects this time.",
+                    fullMessage = "Well, that didn't work. And it was exhausting. \nLet me try getting online again. I'm prepared for the side effects this time.",
                     isTyping = true
                 )
                 CalculatorActions.persistConversationStep(108)
@@ -1593,7 +1604,11 @@ fun CalculatorScreen() {
                         ((current.waitingForAutoProgress || current.pendingAutoStep >= 0) &&
                                 !current.awaitingChoice && !current.awaitingNumber)
                 ) &&
-                (current.conversationStep < 167 || current.conversationStep in 700..703 || current.conversationStep in 1070..1087) &&
+                (current.conversationStep < 167 ||
+                    current.conversationStep in 250..257 ||
+                    current.conversationStep in 350..357 ||
+                    current.conversationStep in 700..703 ||
+                    current.conversationStep in 1070..1087) &&
                 !current.showDonationPage
 
         if (shouldShowSpinner) {
@@ -1677,33 +1692,26 @@ fun CalculatorScreen() {
             onCityEntered = { CalculatorActions.saveInCityPhase() }
         )
     }
-    // ========== DORMANCY OVERLAY ==========
-    // Rendered above all other overlays. Full-screen TV static + RAD buttons
-    // after the rant ends. All 5 buttons must be pressed to proceed to Phase 2.
-    if (current.showDormancy) {
-        DormancyOverlay(
-            radButtonsVisible = current.dormancyRadVisible,
-            pressedButtons = current.dormancyPressedButtons,
-            onButtonPressed = { index ->
-                val newPressed = state.value.dormancyPressedButtons + index
-                CalculatorActions.persistDormancyPressedButtons(newPressed)
-                state.value = state.value.copy(
-                    dormancyPressedButtons = newPressed,
-                    vibrationIntensity = newPressed.size
-                )
-            },
-
-            onAllPressed = {
-                DormancyManager.clearDormancy(context)
-                CalculatorActions.clearDormancyPressedButtons()
-                state.value = state.value.copy(
-                    showDormancy = false,
-                    dormancyRadVisible = 0,
-                    dormancyPressedButtons = emptySet(),
-                    vibrationIntensity = 0,
-                    showAdCards = true
-                )
-            }
+    // ========== DORMANCY: ALL-PRESSED → AD CARDS TRANSITION ==========
+    // Dormancy now renders inline inside Portrait/LandscapeCalculatorContent
+    // (static behind the keyboard, RAD grid in place of the LCD), so this
+    // block only watches for completion: once every revealed RAD button has
+    // been tapped, hand off to phase 2 (ad cards) and drop the RAD styling.
+    LaunchedEffect(current.showDormancy, current.dormancyRadVisible, current.dormancyPressedButtons) {
+        if (!current.showDormancy) return@LaunchedEffect
+        if (current.dormancyRadVisible <= 0) return@LaunchedEffect
+        if (current.dormancyPressedButtons.size < current.dormancyRadVisible) return@LaunchedEffect
+        kotlinx.coroutines.delay(800)
+        DormancyManager.clearDormancy(context)
+        CalculatorActions.clearDormancyPressedButtons()
+        state.value = state.value.copy(
+            showDormancy = false,
+            dormancyRadVisible = 0,
+            dormancyPressedButtons = emptySet(),
+            vibrationIntensity = 0,
+            allButtonsRad = false,
+            radButtonsConverted = 0,
+            showAdCards = true
         )
     }
 

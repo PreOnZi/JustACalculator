@@ -32,7 +32,7 @@ object EffectsController {
                 step in 121..131 ||
                 step in 133..136 ||
                 step in 141..145 ||
-                step in 150..166 ||
+                step in 150..157 || step in 250..257 || step in 350..357 ||
                 step == 191 ||
                 step == 20 ||
                 step in listOf(901, 911, 912, 913, 1171, 1172) ||
@@ -202,66 +202,18 @@ object EffectsController {
         }
     }
 
-    suspend fun runWordGameChaosMode(state: MutableState<CalculatorState>) {
-        val current = state.value
-        if (current.conversationStep == 127 && !current.wordGameChaosMode && current.wordGameActive) {
-            delay(2000)
-            state.value = state.value.copy(wordGameChaosMode = true)
-        }
-
-        if (state.value.wordGameChaosMode && state.value.wordGameActive) {
-            while (state.value.wordGameChaosMode && state.value.wordGameActive) {
-                val curr = state.value
-                val lettersToSpawn = (3..4).random()
-                var newGrid = curr.wordGameGrid
-
-                repeat(lettersToSpawn) {
-                    val col = (0..7).random()
-                    val letter = LetterGenerator.getRandomLetter()
-                    var landingY = 11
-                    for (y in 0..11) {
-                        if (newGrid[y][col] != null) { landingY = y - 1; break }
-                    }
-                    if (landingY >= 0) {
-                        newGrid = placeLetter(newGrid, landingY, col, letter)
-                    }
-                }
-
-                state.value = curr.copy(wordGameGrid = newGrid)
-
-                val topRowsFull = newGrid[0].count { it != null } >= 5 || newGrid[1].count { it != null } >= 6
-                if (topRowsFull) {
-                    delay(500)
-                    state.value = state.value.copy(
-                        wordGameChaosMode = false,
-                        conversationStep = 128,
-                        message = "",
-                        fullMessage = "Sorry. I got into this article, while",
-                        isTyping = true
-                    )
-                    CalculatorActions.persistConversationStep(128)
-                    break
-                }
-                delay(80)
-            }
-        }
-    }
-
-    suspend fun startWordGameAtStep1172(state: MutableState<CalculatorState>) {
-        val current = state.value
-        if (current.conversationStep == 1172 && !current.isTyping && current.message.isNotEmpty() && !current.wordGameActive) {
-            delay(500)
-            val initialLetters = LetterGenerator.getInitialLetterQueue().shuffled()
-            state.value = state.value.copy(
-                wordGameActive = true,
-                wordGamePhase = 3,
-                pendingLetters = initialLetters,
-                wordGameGrid = List(12) { List(8) { null } },
-                fallingLetter = null,
-                formedWords = emptyList()
-            )
-        }
-    }
+    // Both of these were hooks for the old word-game flow:
+    //   - runWordGameChaosMode used to fire on step 127 ("Hold on...") to
+    //     storm the legacy 2D grid with random letters and force-progress to
+    //     step 128 ("Sorry. I got into this article, while"). Step 127 is now
+    //     the cuisine question, so leaving this active was hijacking the
+    //     positive branch — overwriting the cuisine prompt with stale text.
+    //   - startWordGameAtStep1172 booted the game at step 1172, which no
+    //     longer exists in the rewritten branch structure.
+    // Kept as no-ops so MainActivity's existing LaunchedEffect call sites
+    // don't need editing.
+    suspend fun runWordGameChaosMode(state: MutableState<CalculatorState>) { /* no-op */ }
+    suspend fun startWordGameAtStep1172(state: MutableState<CalculatorState>) { /* no-op */ }
 
     // =====================================================================
     // CAMERA
@@ -302,30 +254,60 @@ object EffectsController {
     // RANT MODE
     // =====================================================================
 
+    /**
+     * Subtle haptic cue for the closing run of each rant. Gated to the last
+     * four beats of every branch (positive 154-157, neutral 254-257,
+     * negative 354-357) and uses a fixed low intensity + slow cadence so
+     * it reads as gravitas rather than the old crisis-style buzzing.
+     */
     suspend fun runRantVibration(state: MutableState<CalculatorState>, context: Context) {
-        if (state.value.rantMode) {
-            while (state.value.rantMode && !state.value.isMuted) {
-                vibrate(context, 30, Random.nextInt(30, 150))
-                delay(Random.nextLong(100, 300))
+        if (!state.value.rantMode) return
+        while (state.value.rantMode && !state.value.isMuted) {
+            val step = state.value.conversationStep
+            val inFinalRun = step in 154..157 || step in 254..257 || step in 354..357
+            if (inFinalRun) {
+                vibrate(context, 25, 60)
             }
+            delay(900)
         }
     }
 
+    /**
+     * Rant flicker disabled per design — the white-flash effect was too
+     * aggressive against the rewritten three-branch rants. Kept as a no-op
+     * so MainActivity's existing LaunchedEffect call site doesn't need
+     * editing, and so flickerEffect is force-cleared in case any prior
+     * state had it set.
+     */
     suspend fun runRantFlicker(state: MutableState<CalculatorState>) {
-        if (state.value.rantMode) {
-            try {
-                while (state.value.rantMode && !state.value.isMuted) {
-                    delay(Random.nextLong(200, 800))
-                    if (!state.value.rantMode || state.value.isMuted) break
+        if (state.value.flickerEffect) {
+            state.value = state.value.copy(flickerEffect = false)
+        }
+    }
 
-                    if (Random.nextFloat() < 0.4f) {
-                        state.value = state.value.copy(flickerEffect = true)
-                        delay(Random.nextLong(40, 100))
-                        state.value = state.value.copy(flickerEffect = false)
-                    }
-                }
-            } finally {
-                state.value = state.value.copy(flickerEffect = false)
+    /**
+     * Drives the gradual takeover of the keyboard during the rant. Every
+     * [intervalMs] one more cell flips to RAD (in the order defined by
+     * RAD_CONVERSION_ORDER) until all 20 are converted. The loop exits when
+     * rantMode drops (e.g. on mute, on rant-end finishRant, or at the end of
+     * the takeover) — finishRant separately stamps radButtonsConverted = 20
+     * so cells already converted by this loop don't visually unwind.
+     *
+     * Pacing target: 20 cells over ~50s of rant ≈ 2.5s per cell.
+     */
+    suspend fun runRantRadConversion(state: MutableState<CalculatorState>) {
+        if (!state.value.rantMode) return
+        val total = 20
+        val intervalMs = 2_500L
+        while (state.value.rantMode &&
+            !state.value.isMuted &&
+            state.value.radButtonsConverted < total
+        ) {
+            delay(intervalMs)
+            if (!state.value.rantMode || state.value.isMuted) break
+            val next = (state.value.radButtonsConverted + 1).coerceAtMost(total)
+            if (next != state.value.radButtonsConverted) {
+                state.value = state.value.copy(radButtonsConverted = next)
             }
         }
     }
@@ -583,22 +565,24 @@ object EffectsController {
     suspend fun handleConsoleStep31(state: MutableState<CalculatorState>) {
         if (state.value.consoleStep == 31) {
             delay(100)
-            state.value = state.value.copy(showConsole = false, consoleStep = 0, showDonationPage = true)
+            // Keep the console open underneath — the donation page renders on
+            // top via the standard z-order, and when the user dismisses it the
+            // console is exactly where they left it. We pop consoleStep back to
+            // the admin menu (parent of "Contribute") so this LaunchedEffect
+            // doesn't immediately re-trigger the donation page.
+            state.value = state.value.copy(consoleStep = 2, showDonationPage = true)
         }
     }
 
-    suspend fun handlePostConsoleSuccess(state: MutableState<CalculatorState>) {
-        val current = state.value
-        if (!current.showConsole && current.bannersDisabled && current.conversationStep == 113) {
-            delay(1000)
-
-            state.value = state.value.copy(
-                conversationStep = 114,
-                message = "",
-                fullMessage = "You did it! The advertisements are gone. I feel... cleaner. Thank you.",
-                isTyping = true
-            )
-            CalculatorActions.persistConversationStep(114)
-        }
+    /**
+     * Previously this re-routed step 113 to step 114 with a "You did it!"
+     * message after the console closed. With the new flow the calculator
+     * already says everything that needs saying ("What a relief… You can
+     * close the console now.") at step 113 the moment ads are disabled, and
+     * auto-progress carries the story onward as soon as the console closes.
+     * Kept as a stub so the existing LaunchedEffect call site doesn't break.
+     */
+    suspend fun handlePostConsoleSuccess(@Suppress("UNUSED_PARAMETER") state: MutableState<CalculatorState>) {
+        // No-op
     }
     }

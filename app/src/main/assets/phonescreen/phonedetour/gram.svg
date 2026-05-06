@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg width="100%" height="100%" viewBox="0 0 100 100" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:1.5;">
+    <g transform="matrix(0.333333,0,0,0.333333,0,0)">
+        <g transform="matrix(6.12323e-17,-1,1,6.12323e-17,-2.40532,297.595)">
+            <path d="M295.189,78.608L295.189,226.203C295.189,266.933 262.122,300 221.392,300L73.797,300C33.067,300 0,266.933 0,226.203L0,78.608C0,37.878 33.067,4.811 73.797,4.811L221.392,4.811C262.122,4.811 295.189,37.878 295.189,78.608Z" style="fill:url(#_Radial1);"/>
+        </g>
+        <g transform="matrix(0.633981,0,0,0.633981,56.4278,53.3779)">
+            <path d="M295.189,78.608L295.189,226.203C295.189,266.933 262.122,300 221.392,300L73.797,300C33.067,300 0,266.933 0,226.203L0,78.608C0,37.878 33.067,4.811 73.797,4.811L221.392,4.811C262.122,4.811 295.189,37.878 295.189,78.608Z" style="fill-opacity:0;stroke:white;stroke-width:16.43px;"/>
+        </g>
+        <g transform="matrix(1,0,0,1,-6.0185,-11.5885)">
+            <circle cx="156.018" cy="161.588" r="39.001" style="fill:white;stroke:white;stroke-width:10.42px;"/>
+        </g>
+        <path d="M196.617,148.385C196.617,148.385 193.338,150.591 196.617,155.269C199.896,159.947 202.05,167.494 202.05,167.494C202.05,167.494 201.799,171.213 203.235,174.352C204.671,177.491 206.569,186.274 206.569,186.274L209.603,192.155C209.603,192.155 213.964,199.951 221.167,178.152C228.37,156.354 232.663,156.55 232.663,156.55L241.904,142.737" style="fill:none;stroke:white;stroke-width:0.42px;"/>
+        <g transform="matrix(1,0,0,1,-21.9009,-2.84217e-14)">
+            <ellipse cx="216.309" cy="148.385" rx="2.209" ry="1.615" style="fill:white;fill-opacity:0;stroke:white;stroke-width:0.63px;"/>
+        </g>
+        <g transform="matrix(0.115873,0,0,0.115873,188.491,71.8359)">
+            <circle cx="156.018" cy="161.588" r="39.001" style="fill:white;stroke:white;stroke-width:89.9px;"/>
+        </g>
+    </g>
+    <defs>
+        <radialGradient id="_Radial1" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="matrix(295.189,0,0,295.189,0,152.405)"><stop offset="0" style="stop-color:rgb(255,0,112);stop-opacity:1"/><stop offset="0.15" style="stop-color:rgb(225,120,22);stop-opacity:1"/><stop offset="0.35" style="stop-color:rgb(218,150,0);stop-opacity:1"/><stop offset="0.65" style="stop-color:rgb(216,108,72);stop-opacity:1"/><stop offset="1" style="stop-color:rgb(210,0,255);stop-opacity:1"/></radialGradient>
+    </defs>
+</svg>
