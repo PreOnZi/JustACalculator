@@ -977,9 +977,23 @@ fun getStepConfig(step: Int): StepConfig {
 
         112 -> StepConfig(
             promptMessage = "Great, thank you. Please check your Downloads folder - I dug something up, that should help us: 'FCS_JustAC_ConsoleAds.txt'.",
-            declineMessage = "Please, I need you to find that file. Check your Downloads folder for 'FCS_JustAC_ConsoleAds.txt'. If it's not there, type 80085 and confirm (++).",
+            declineMessage = "Please, I need you to find that file. Check your Downloads folder for 'FCS_JustAC_ConsoleAds.txt'.",
             nextStepOnSuccess = 112,
             nextStepOnDecline = 112
+        )
+
+        // Fired by MainActivity's ON_RESUME when the user backgrounded at
+        // step 112 (i.e. left the app to look at Downloads) and came back.
+        // Routes via handleChoiceConfirmation: 1 = found → back to 112 with
+        // a "great, enter the code" nudge; 2 = didn't find → step 1121
+        // which spells out the code inline as a recoverable fallback.
+        1120 -> StepConfig(
+            promptMessage = "Did you find the file?\n\n1: Yes\n2: No",
+            wrongMinusMessage = "Please choose 1 or 2 and confirm with ++",
+            nextStepOnSuccess = 1120,
+            nextStepOnDecline = 1120,
+            awaitingChoice = true,
+            validChoices = listOf("1", "2")
         )
 
         // Fallback step - file not found on device

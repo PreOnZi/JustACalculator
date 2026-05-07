@@ -1,7 +1,6 @@
 package com.fictioncutshort.justacalculator.logic
 
 import android.content.Context
-import android.content.Intent
 import androidx.compose.runtime.MutableState
 import com.fictioncutshort.justacalculator.data.CalculatorState
 import kotlinx.coroutines.delay
@@ -395,50 +394,17 @@ Sharp CS-10A - 25KG
     }
 
     private suspend fun phase56(state: MutableState<CalculatorState>, context: Context, createSecretFile: (Context) -> Boolean) {
-        val fileCreated = createSecretFile(context)
+        // Try to create the file. The user is then nudged toward Downloads —
+        // the post-return "Did you find it?" question (step 1120, fired in
+        // MainActivity's ON_RESUME) is the safety net regardless of whether
+        // the write succeeded, so we don't reveal the instructions inline
+        // here. That would defeat the puzzle.
+        createSecretFile(context)
         delay(500)
-
-        if (!fileCreated) {
-            // File didn't land in Downloads — share the instructions as plain text so
-            // the user can save them wherever they like (notes, email, etc.)
-            val instructions = """Just a Calculator — console instructions
-
-Enter the console code: 353942320485 then confirm (++)
-
-Once in the console:
-  Admin settings (2++) → enter code 12340
-  Connectivity (4++) → Advertising (2++) → Disable banners (2++)
-
-Navigation: 88++ = back  |  99++ = exit console
-
-Return to the app when done."""
-
-            try {
-                val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_SUBJECT, "Calculator console instructions")
-                    putExtra(Intent.EXTRA_TEXT, instructions)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(
-                    Intent.createChooser(shareIntent, "Save instructions").apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                )
-            } catch (e: Exception) {
-                android.util.Log.e("Calculator", "Share intent failed: ${e.message}")
-            }
-        }
-
-        val message = if (fileCreated) {
-            "Great, thank you! Please check your Downloads folder - I dug up something that might be of interest: 'FCS_JustAC_ConsoleAds.txt'."
-        } else {
-            "Great, thank you! I couldn't save the file to Downloads on your device, so I've sent the instructions your way instead. Come back when you're ready."
-        }
 
         state.value = state.value.copy(
             browserPhase = 0, conversationStep = 112, message = "",
-            fullMessage = message,
+            fullMessage = "Great, thank you! Please check your Downloads folder - I dug up something that might be of interest: 'FCS_JustAC_ConsoleAds.txt'.",
             isTyping = true
         )
         CalculatorActions.persistConversationStep(112)

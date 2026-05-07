@@ -20,6 +20,13 @@ object AutoProgressEffects {
         "You know what? I am in charge - and I want to share this with you. It is important to me. I'll be quick - I promise!" to Pair(2000L, 80),
         // Agreeable branch: after taste/browser sequence, show "I've got it!" then online prompt
         "I've got it! - I think." to Pair(1500L, 80),
+        // Step 72 success/decline message → step 80. Step 72 routes to step 79
+        // via handleConversationResponse, which displays the success line at
+        // the top of step 79 — but since step 79's own promptMessage never
+        // shows, the existing "I've got it! - I think." mapping above never
+        // fires. Without this entry the spinner spins forever waiting for
+        // an auto-progress that can't trigger.
+        "Even this question is confusing. Sorry - trying to get online is surprisingly demanding." to Pair(2500L, 80),
         // Step 80 → 81: auto-start Wikipedia countdown (handled specially below)
         "Please make sure your device is online - WiFi, data,.. anything works." to Pair(3500L, 81),
         "Correct. You know, I have been around since before 2000BC. I have..." to Pair(1500L, 703),

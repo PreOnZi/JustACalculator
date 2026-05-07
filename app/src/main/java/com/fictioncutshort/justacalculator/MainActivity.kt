@@ -179,6 +179,15 @@ fun CalculatorScreen() {
     var microphonePermissionDeniedOnce by remember { mutableStateOf(false) }
     var locationPermissionDeniedOnce by remember { mutableStateOf(false) }
     var contactsPermissionDeniedOnce by remember { mutableStateOf(false) }
+    // Tracks an ON_PAUSE while the user was on step 112 (downloads-file
+    // hunt). On the next ON_RESUME we transition to step 1120 ("Did you
+    // find the file?") provided enough time has passed that the user
+    // actually went somewhere. A short bounce (notification shade etc.)
+    // shouldn't fire the question. The "asked" flag keeps the question
+    // from re-firing if the user later backgrounds again at step 112
+    // (e.g. to re-check the file after picking "Yes").
+    var step112PauseTime by remember { mutableStateOf(0L) }
+    var step112QuestionAsked by remember { mutableStateOf(false) }
 
 
 // Lifecycle observer to save state when app goes to background
@@ -189,6 +198,12 @@ fun CalculatorScreen() {
                     // Save current state when app is paused/minimized
                     val currentState = state.value
                     android.util.Log.d("JustACalc", "ON_PAUSE CALLED - current step: ${currentState.conversationStep}")
+                    // Mark the time so ON_RESUME knows whether to fire the
+                    // "Did you find the file?" question (only after a real
+                    // departure, not a momentary shade-pull).
+                    if (currentState.conversationStep == 112) {
+                        step112PauseTime = System.currentTimeMillis()
+                    }
 
                     // Stop rant effects immediately so they don't continue in the background.
                     // The rant step is preserved via persistConversationStep below so it resumes on return.
@@ -240,6 +255,32 @@ fun CalculatorScreen() {
                     if (!currentState.rantMode &&
                         (step in 150..157 || step in 250..257 || step in 350..357)) {
                         state.value = currentState.copy(rantMode = true)
+                    }
+                    // Downloads-file hunt: if the user backgrounded at step
+                    // 112 (the "check your Downloads folder" prompt) for at
+                    // least 3s, they actually went somewhere — flip to step
+                    // 1120 to ask whether they found it. A momentary
+                    // shade-pull or quick switch shouldn't trigger this,
+                    // and we only ask once per playthrough so a user who
+                    // briefly re-checks the file later doesn't get re-asked.
+                    if (step == 112 &&
+                        !step112QuestionAsked &&
+                        step112PauseTime > 0L &&
+                        System.currentTimeMillis() - step112PauseTime >= 3_000L
+                    ) {
+                        val choiceConfig = CalculatorActions.getStepConfigPublic(1120)
+                        state.value = state.value.copy(
+                            conversationStep = 1120,
+                            message = "",
+                            fullMessage = choiceConfig.promptMessage,
+                            isTyping = true,
+                            awaitingChoice = choiceConfig.awaitingChoice,
+                            validChoices = choiceConfig.validChoices,
+                            number1 = "0"
+                        )
+                        CalculatorActions.persistConversationStep(1120)
+                        step112PauseTime = 0L
+                        step112QuestionAsked = true
                     }
                 }
                 Lifecycle.Event.ON_STOP -> {

@@ -82,11 +82,8 @@ private const val SPAWN_INTERVAL_MS = 80L
 // Density target — earlier value of 42 left the screen sparsely populated and
 // the user ran out of usable letters mid-question. Bumped so there's always
 // enough on-screen to spell several different answer words from any branch.
-private const val TARGET_BLOCK_COUNT = 64
 private const val SELECTION_SUBMIT_DELAY_MS = 250L
 private const val FALL_OUT_DURATION_MS = 700L
-/** How many rows of blocks to pre-place (settled) when the game starts. */
-private const val PREFILL_ROWS = 8
 
 @Composable
 fun LetterBlockGame(
@@ -104,12 +101,25 @@ fun LetterBlockGame(
         val playAreaWidthPx = widthPx
         val playAreaHeightPx = heightPx
 
-        // Block size derived so we always get ~6 cols.
-        val blockSize = playAreaWidthPx / 6.5f
+        // Orientation-aware grid:
+        //   Portrait  → ~6 cols × 11 rows → tall stack, lots of letters.
+        //   Landscape → 10 cols × 4 rows → wider but shorter, so blocks stay
+        //               on-screen instead of overflowing the bottom and the
+        //               grid still fits between the message area and the
+        //               bottom edge.
+        val isLandscape = playAreaWidthPx > playAreaHeightPx
+        val targetCols = if (isLandscape) 10 else 6
+        val maxBlocksPerColumn = if (isLandscape) 4 else 11
+        val prefillRows = if (isLandscape) 3 else 8
+        // Pick the largest block size that still fits both targets — width
+        // bound (cols × size ≤ width) and height bound (maxStack × size ≤
+        // height). Without the height check the landscape stack would
+        // happily overflow off the bottom of the screen.
+        val widthBoundedSize = playAreaWidthPx / (targetCols + 0.5f)
+        val heightBoundedSize = playAreaHeightPx / (maxBlocksPerColumn + 0.5f)
+        val blockSize = kotlin.math.min(widthBoundedSize, heightBoundedSize)
         val cols = max(4, (playAreaWidthPx / blockSize).toInt())
-        // Cap stacks at this many blocks per column so the top of the play
-        // area always stays clear for the calculator's message text.
-        val maxBlocksPerColumn = 11
+        val targetBlockCount = (cols * maxBlocksPerColumn * 0.75f).toInt()
 
         // Internal mutable state. Using lists of plain data classes inside a
         // mutableStateOf — list is reassigned each tick for Compose to pick up
@@ -149,7 +159,7 @@ fun LetterBlockGame(
         fun spawnIfNeeded(now: Long, lastSpawnAt: Long): Long {
             if (lockedSubmission) return lastSpawnAt
             val active = blocks.count { !it.fallingOut }
-            if (active >= TARGET_BLOCK_COUNT) return lastSpawnAt
+            if (active >= targetBlockCount) return lastSpawnAt
             if (now - lastSpawnAt < SPAWN_INTERVAL_MS) return lastSpawnAt
             // Pick from columns that haven't reached the cap yet, so no
             // single column ever stacks past `maxBlocksPerColumn` and the
@@ -186,7 +196,7 @@ fun LetterBlockGame(
             // anything was tappable.
             if (blocks.isEmpty()) {
                 val prefilled = buildList {
-                    for (row in 0 until PREFILL_ROWS) {
+                    for (row in 0 until prefillRows) {
                         for (col in 0 until cols) {
                             val xCenter = (col + 0.5f) * (playAreaWidthPx / cols)
                             // Row 0 sits on the floor, row 1 on top of row 0, etc.

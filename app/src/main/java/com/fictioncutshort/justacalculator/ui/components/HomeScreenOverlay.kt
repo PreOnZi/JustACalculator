@@ -53,7 +53,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.fictioncutshort.justacalculator.R
-import com.fictioncutshort.justacalculator.logic.DormancyManager
 import com.fictioncutshort.justacalculator.logic.TalkAudioHandler
 import com.fictioncutshort.justacalculator.ui.screens.PhoneTetrisApp
 import kotlinx.coroutines.delay
@@ -76,11 +75,9 @@ import kotlinx.coroutines.delay
 /** Number that, when dialed via the in-app keypad, triggers the fake call. */
 private const val MAGIC_CALL_NUMBER = "192837465"
 
-/** ms of free exploration before the calculator nudges the user via push. */
+/** ms of free exploration before the calculator nudges the user via the
+ *  in-overlay banner. */
 private const val EXPLORATION_TIMEOUT_MS = 20_000L
-
-private const val GUIDE_NOTIF_GO_TO_PHONE = 100
-private const val GUIDE_NOTIF_DIAL_NUMBER = 101
 
 /** Sentinel name for the post-call return tile. Routed specially everywhere. */
 private const val RETURN_ICON_NAME = "_calculator_return"
@@ -176,18 +173,16 @@ fun HomeScreenOverlay(
     }
 
     // 20-second free-exploration window. After it elapses, the calculator nudges
-    // the user via an in-app banner (always visible, on-theme, primary signal)
-    // AND a system push (in case the app is backgrounded). The system push is
-    // best-effort — silently no-ops if POST_NOTIFICATIONS isn't granted.
+    // the user via an in-app banner (always visible, on-theme, primary signal).
+    // Real Android push removed per UX direction — the user is already inside
+    // the phone overlay; a system notification on top of the in-overlay banner
+    // was redundant and broke the "you're in the fake phone" illusion.
     LaunchedEffect(Unit) {
         delay(EXPLORATION_TIMEOUT_MS)
         if (!exploreNotifFired) {
             exploreNotifFired = true
             val msg = "ok, I think I got it. Go to the phone app."
             fakeNotification = msg to 7_000L
-            DormancyManager.sendDormancyNotification(
-                context, GUIDE_NOTIF_GO_TO_PHONE, msg
-            )
         }
     }
 
@@ -199,9 +194,6 @@ fun HomeScreenOverlay(
             dialNotifFired = true
             val msg = "Now, dial $MAGIC_CALL_NUMBER and place a call"
             fakeNotification = msg to 14_000L
-            DormancyManager.sendDormancyNotification(
-                context, GUIDE_NOTIF_DIAL_NUMBER, msg
-            )
         }
     }
 

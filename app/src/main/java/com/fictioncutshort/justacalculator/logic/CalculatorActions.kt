@@ -1903,7 +1903,11 @@ object CalculatorActions {
                 val enteredNumber = current.number1.trimEnd('.')
                 if (enteredNumber == "353942320485") {
                     // Open console from anywhere!
-                    if (current.conversationStep == 112) {
+                    // Steps 112 (downloads-file path) and 1121 (no-file
+                    // fallback path) are the two legitimate code-entry
+                    // points in the story — both should advance the
+                    // conversation when the user finally enters the code.
+                    if (current.conversationStep == 112 || current.conversationStep == 1121) {
                         state.value = current.copy(
                             showConsole = true,
                             consoleStep = 0,
@@ -2898,6 +2902,17 @@ object CalculatorActions {
                         else -> Pair("Please choose 1, 2, or 3.", 1021)
                     }
                 }
+                1120 -> {
+                    // "Did you find the file?" — fired after the user
+                    // backgrounded at step 112 and came back. Yes routes
+                    // back to 112 with a short nudge to enter the code;
+                    // No routes to step 1121 (inline fallback instructions).
+                    when (enteredNumber) {
+                        "1" -> Pair("Great, please enter the code and follow the instructions from the file.", 112)
+                        "2" -> Pair("", 1121)
+                        else -> Pair("Please choose 1 or 2.", 1120)
+                    }
+                }
                 else -> Pair("I see...", stepConfig.nextStepOnSuccess)
             }
 
@@ -3018,6 +3033,23 @@ object CalculatorActions {
                     persistInConversation(false)
                     persistEqualsCount(0)
                 }
+            } else if (current.conversationStep == 1120 && nextStep == 1121) {
+                // "Didn't find the file" → step 1121 (the inline-fallback
+                // instructions). choiceResponse is empty for this branch,
+                // so show step 1121's prompt directly.
+                state.value = current.copy(
+                    number1 = "0",
+                    number2 = "",
+                    operation = null,
+                    conversationStep = 1121,
+                    awaitingChoice = false,
+                    validChoices = emptyList(),
+                    awaitingNumber = false,
+                    expectedNumber = "",
+                    isEnteringAnswer = false
+                )
+                showMessage(state, nextStepConfig.promptMessage)
+                persistConversationStep(1121)
             } else {
                 state.value = current.copy(
                     number1 = "0",

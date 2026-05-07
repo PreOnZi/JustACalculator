@@ -92,8 +92,11 @@ object WordCategories {
         "indifferent", "neutral", "mediocre", "moderate", "fair", "decent"
     )
 
-    // Single letter responses
-    val singleLetterWords = setOf('i', 'a', 'o')
+    // Single letter responses — intentionally empty. Lone letters (e.g. tapping
+    // 'O' on the way to spelling "OK", or 'I' meaning the pronoun) were
+    // submitting prematurely and accepting the question as answered. Force
+    // the user to spell at least two letters before isValidWord can return true.
+    val singleLetterWords = emptySet<Char>()
 
     // === COLORS ===
     val validColors = setOf(
@@ -300,72 +303,77 @@ object LetterGenerator {
 
     fun getInitialLetterQueue(): List<Char> {
         // Seed letters across every branch the rewritten word game can ask for
-        // (mood / binary / colour / season / cuisine / activity), so on any
-        // single board the user has enough on-screen to spell several
-        // valid answers without waiting for a queue refill. The queue cycles
-        // when exhausted (see LetterBlockGame.nextLetter), so any answer the
-        // calculator might need keeps coming around.
-        return buildList {
-            // ── Mood (steps 119/120) ─────────────────────────────────────
-            addAll(listOf('G', 'O', 'O', 'D'))
-            addAll(listOf('W', 'E', 'L', 'L'))
-            addAll(listOf('F', 'I', 'N', 'E'))
-            addAll(listOf('B', 'A', 'D'))
-            addAll(listOf('S', 'A', 'D'))
-            addAll(listOf('M', 'E', 'H'))
-            addAll(listOf('O', 'K'))
-            addAll(listOf('H', 'A', 'P', 'P', 'Y'))
-            addAll(listOf('T', 'I', 'R', 'E', 'D'))
-
-            // ── Binary yes/no (steps 121, 122, 131, 132, 141) ────────────
-            // Doubled because every branch hits a binary gate.
-            addAll(listOf('Y', 'E', 'S'))
-            addAll(listOf('N', 'O'))
-            addAll(listOf('Y', 'E', 'S'))
-            addAll(listOf('N', 'O'))
-
-            // ── Colours (step 123) ──────────────────────────────────────
-            addAll(listOf('R', 'E', 'D'))
-            addAll(listOf('B', 'L', 'U', 'E'))
-            addAll(listOf('P', 'I', 'N', 'K'))
-            addAll(listOf('B', 'R', 'O', 'W', 'N'))
-            addAll(listOf('G', 'R', 'E', 'E', 'N'))
-
-            // ── Seasons (step 125) ───────────────────────────────────────
-            addAll(listOf('S', 'P', 'R', 'I', 'N', 'G'))
-            addAll(listOf('S', 'U', 'M', 'M', 'E', 'R'))
-            addAll(listOf('A', 'U', 'T', 'U', 'M', 'N'))
-            addAll(listOf('W', 'I', 'N', 'T', 'E', 'R'))
-
-            // ── Cuisines (step 127) ──────────────────────────────────────
-            // Skipping cuisines with X/Z (excluded from the random fallback)
-            // — THAI, SUSHI, INDIAN cover spicy + non-spicy categories.
-            addAll(listOf('T', 'H', 'A', 'I'))
-            addAll(listOf('S', 'U', 'S', 'H', 'I'))
-            addAll(listOf('I', 'N', 'D', 'I', 'A', 'N'))
-            addAll(listOf('B', 'U', 'R', 'G', 'E', 'R'))
-
-            // ── Activities (step 142, neutral branch) ────────────────────
-            addAll(listOf('R', 'U', 'N'))
-            addAll(listOf('W', 'A', 'L', 'K'))
-            addAll(listOf('R', 'E', 'A', 'D'))
-            addAll(listOf('E', 'A', 'T'))
-            addAll(listOf('S', 'L', 'E', 'E', 'P'))
-            addAll(listOf('S', 'I', 'N', 'G'))
-            addAll(listOf('C', 'O', 'O', 'K'))
-            addAll(listOf('S', 'W', 'I', 'M'))
-            addAll(listOf('Y', 'O', 'G', 'A'))
-            addAll(listOf('B', 'A', 'K', 'E'))
-
-            // ── Walk frequency / death responses (steps 134, 139) ────────
-            addAll(listOf('O', 'F', 'T', 'E', 'N'))
-            addAll(listOf('N', 'E', 'V', 'E', 'R'))
-            addAll(listOf('D', 'A', 'I', 'L', 'Y'))
-
-            // ── Filler vowels + common consonants for general flexibility
-            addAll(listOf('A', 'E', 'I', 'O', 'U'))
-            addAll(listOf('L', 'N', 'S', 'T', 'R'))
+        // (mood / binary / colour / season / cuisine / activity). The prefill
+        // (PREFILL_ROWS × cols ≈ 48 cells) takes the first N from this list
+        // shuffled, so each answer-word is repeated 3× to guarantee that even
+        // a single rare letter (F for FINE, K for OK, P for HAPPY) is reliably
+        // present at game start. The queue cycles when exhausted, so anything
+        // the calculator might need keeps coming around.
+        val triple = mutableListOf<Char>()
+        fun seed(word: String, copies: Int = 3) {
+            repeat(copies) { triple.addAll(word.toList()) }
         }
+
+        // ── Mood (steps 119/120) — every common answer the user might try.
+        seed("GOOD")
+        seed("WELL")
+        seed("FINE")
+        seed("BAD")
+        seed("SAD")
+        seed("MEH")
+        seed("OK")
+        seed("HAPPY")
+        seed("TIRED")
+        seed("OKAY")
+        seed("GREAT")
+
+        // ── Binary yes/no (steps 121, 122, 131, 132, 141) — doubled again
+        //    on top because every branch hits a binary gate.
+        seed("YES", copies = 4)
+        seed("NO", copies = 4)
+
+        // ── Colours (step 123)
+        seed("RED")
+        seed("BLUE")
+        seed("PINK")
+        seed("BROWN")
+        seed("GREEN")
+
+        // ── Seasons (step 125)
+        seed("SPRING")
+        seed("SUMMER")
+        seed("AUTUMN")
+        seed("WINTER")
+
+        // ── Cuisines (step 127). Skipping X/Z cuisines; THAI / SUSHI /
+        //    INDIAN / BURGER cover spicy + non-spicy categories.
+        seed("THAI")
+        seed("SUSHI")
+        seed("INDIAN")
+        seed("BURGER")
+
+        // ── Activities (step 142, neutral branch)
+        seed("RUN")
+        seed("WALK")
+        seed("READ")
+        seed("EAT")
+        seed("SLEEP")
+        seed("SING")
+        seed("COOK")
+        seed("SWIM")
+        seed("YOGA")
+        seed("BAKE")
+
+        // ── Walk frequency / death responses (steps 134, 139)
+        seed("OFTEN")
+        seed("NEVER")
+        seed("DAILY")
+
+        // ── Filler vowels + common consonants for general flexibility
+        triple.addAll(listOf('A', 'E', 'I', 'O', 'U'))
+        triple.addAll(listOf('L', 'N', 'S', 'T', 'R'))
+
+        return triple
     }
 }
 
