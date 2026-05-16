@@ -50,18 +50,18 @@ object AutoProgressEffects {
         "Yes! That makes sense. They won't get another penny out of me. Ahhh. And I've seen so little of the internet." to Pair(10000L, 93),
         "Great. It may take a few tries - but you are probably expecting that by now. Please give me a moment." to Pair(3000L, 106),
         "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?" to Pair(2500L, 1071),
-        "yes! That's it - what an obvious oversight. A phone. Maybe that'll let us communicate finally. And I should be able to do it from memory, they've been around for ages." to Pair(1500L, 1072),
+        "Yes! That's it - what an obvious oversight. A phone. Maybe that'll let us communicate finally. And I should be able to do it from memory, they've been around for ages." to Pair(1500L, 1072),
         "I'll probably need some permissions though - please allow me so we can do this together!" to Pair(1500L, 1073),
         "So... What will we need..." to Pair(2000L, 1074),
         "We are on a roll!" to Pair(1200L, 1077),
-        "That should be everything" to Pair(1200L, 1078),
+        "That should be everything." to Pair(1200L, 1078),
         "Hmmmmm" to Pair(1200L, 1079),
         "Wait. Do we need buttons? And you'll only talk to me... Right?" to Pair(2000L, 1080),
         "Anyway..." to Pair(1000L, 1081),
         "... ..." to Pair(1000L, 1082),
         "How about this? Remember to increase your volume so you can hear me." to Pair(2000L, 1083),
         "I can see you've pressed the button, but I can't hear anything." to Pair(2000L, 1085),
-        "Hold on, maybe I need to create the whole thing. And update it a little" to Pair(2000L, 1086),
+        "Hold on, maybe I need to create the whole thing. And update it a little." to Pair(2000L, 1086),
         "AAAAAH. That's awful! There must be another way." to Pair(2000L, 108),
 
         "Well, that didn't work. And it was exhausting. \nLet me try getting online again. I'm prepared for the side effects this time." to Pair(2000L, 109),
@@ -88,7 +88,7 @@ object AutoProgressEffects {
         "Similarly to protein, it looks like the solution to anything." to Pair(3000L, 139),
         // Neutral: chain after activity → 144 → 145 → 146 → 147 → rant
         "Nice. I hope I am not standing in the way. Genuinely." to Pair(3000L, 145),
-        "Let me get online, maybe I can find something useful afterall." to Pair(3000L, 146),
+        "Let me get online, maybe I can find something useful after all." to Pair(3000L, 146),
         "Have you tried flying?" to Pair(2500L, 147),
         // 147 → 250 (neutral rant entry) — sets rantMode via the special case
         // in handleAutoProgress.
@@ -112,7 +112,7 @@ object AutoProgressEffects {
         // NEGATIVE rant (350-357)
         "I'm online now. The world at my wire tips." to Pair(3000L, 353),
         "On top of that, you are a bummer." to Pair(3000L, 356),
-        "So, I think I'll go read more Facebook news. And you, for what I care, go for a walk." to Pair(4500L, 357),
+        "So, I think I'll go read more Facebook news. And you, for all I care, go for a walk." to Pair(4500L, 357),
 
         "Oh no. We lost the momentum. We must start over." to Pair(4000L, -97),
         "Too many misfires, the system is clogged. We have to start over." to Pair(4000L, -98)
@@ -140,7 +140,7 @@ object AutoProgressEffects {
         6  to listOf("I could also ignore you completely. Is that what you want?"),
         7  to listOf("You can't always disagree! \nDo it for me..."),
         8  to listOf("No! Actually, still no."),
-        11 to listOf("Wrong has always been wrong"),
+        11 to listOf("Wrong has always been wrong."),
         12 to listOf("I disagree more!"),
         22 to listOf("No. And I am bored with you being bored."),
         // Non-awaiting loop-on-decline steps — match declineMessage exactly.
@@ -270,6 +270,28 @@ object AutoProgressEffects {
                 }
 
                 val nextConfig = CalculatorActions.getStepConfigPublic(nextStep)
+
+                // Phone detour: if the user denied any of the three permissions
+                // requested across 1075–1077, warn them right as the rotary
+                // dial appears. The 1083 prompt ("Hold the button to talk to me")
+                // is queued as pendingAutoMessage so it still types out after.
+                if (nextStep == 1083 && hasAnyPhoneDetourPermissionDenied(context)) {
+                    state.value = state.value.copy(
+                        conversationStep = nextStep, message = "",
+                        fullMessage = "But since you denied me some access, I don't have high hopes.",
+                        isTyping = true, waitingForAutoProgress = false,
+                        pendingAutoStep = -1,
+                        pendingAutoMessage = nextConfig.promptMessage,
+                        awaitingNumber = nextConfig.awaitingNumber, awaitingChoice = nextConfig.awaitingChoice,
+                        validChoices = nextConfig.validChoices, expectedNumber = nextConfig.expectedNumber,
+                        showTalkOverlay = nextConfig.showTalkOverlay,
+                        showPhoneOverlay = nextConfig.showPhoneOverlay,
+                        showHomeScreenOverlay = nextConfig.showHomeScreenOverlay
+                    )
+                    CalculatorActions.persistConversationStep(nextStep)
+                    return
+                }
+
                 // Clear BOTH pendingAutoStep and pendingAutoMessage. The chain
                 // logic in handleConversationResponse / handleChoiceConfirmation
                 // sets them as a pair (step + queued prompt). If we only clear
@@ -351,13 +373,25 @@ object AutoProgressEffects {
                 bwFlickerPhase = false,
                 darkButtons = finalDarkButtons,
                 flickeringButton = "",
-                minusButtonDamaged = true
+                minusButtonDamaged = true,
+                // Phase 1 build: surface the end-of-Part-1 card alongside the
+                // dormancy. We also flip showDormancy on immediately so the
+                // static is the panel's backdrop right from rant-end — no
+                // 10-second brown-bezel gap before the static fades in.
+                showEndOfPart1 = !com.fictioncutshort.justacalculator.util.PHASE_2_ENABLED,
+                showDormancy = state.value.showDormancy ||
+                    !com.fictioncutshort.justacalculator.util.PHASE_2_ENABLED
             )
             CalculatorActions.persistConversationStep(167)
             CalculatorActions.persistInConversation(false)
             CalculatorActions.persistStoryComplete(true)
             CalculatorActions.persistDarkButtons(finalDarkButtons)
             DormancyManager.onRantEnded(context)
+            // Mark Phase 1 as complete the moment the rant ends, so even
+            // users who close the app mid-dormancy land on the end screen
+            // on reopen. Dormancy itself still plays out for atmosphere —
+            // the flag just blocks the dormancy → ad-cards transition.
+            CalculatorActions.savePhase1Complete()
         }
 
         // ─── POSITIVE RANT (150-157) ───────────────────────────────────────
@@ -420,7 +454,7 @@ object AutoProgressEffects {
         // ─── NEUTRAL RANT (250-257) ────────────────────────────────────────
 
         // 252 → 253 (screen-time line)
-        if (step == 252 && message == "Everyone has a thing online. It is clear and forefront. You gave me nothing.") {
+        if (step == 252 && message == "Everyone has a thing online. It is front and centre. You gave me nothing.") {
             delay(500)
             state.value = state.value.copy(
                 conversationStep = 253, message = "",
@@ -517,7 +551,7 @@ object AutoProgressEffects {
         }
 
         // 357 → 167 (rant end)
-        if (step == 357 && message == "Bye") { finishRant(); return }
+        if (step == 357 && message == "Bye.") { finishRant(); return }
     }
 
     // Step triggers
@@ -596,5 +630,19 @@ object AutoProgressEffects {
                 isTyping = true, waitingForAutoProgress = false
             )
         }
+    }
+
+    private fun hasAnyPhoneDetourPermissionDenied(context: Context): Boolean {
+        val pm = android.content.pm.PackageManager.PERMISSION_GRANTED
+        val mic = androidx.core.content.ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.RECORD_AUDIO
+        ) == pm
+        val loc = androidx.core.content.ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.ACCESS_FINE_LOCATION
+        ) == pm
+        val contacts = androidx.core.content.ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.READ_CONTACTS
+        ) == pm
+        return !(mic && loc && contacts)
     }
 }

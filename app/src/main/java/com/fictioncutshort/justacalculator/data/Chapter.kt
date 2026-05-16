@@ -85,7 +85,7 @@ val CHAPTERS = listOf(
         id = 7,
         name = "Chapter 7: Self Discovery",
         startStep = 27,
-        description = "No inbetween → Share about myself"
+        description = "No in between → Share about myself"
     ),
     Chapter(
         id = 8,

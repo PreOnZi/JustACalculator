@@ -171,6 +171,15 @@ fun CalculatorScreen() {
     var showTermsPopup by remember { mutableStateOf(false) }
     var termsPolicyViewed by remember { mutableStateOf(false) }
     var showTermsWarning by remember { mutableStateOf(false) }
+    // Fake "Enter name" form that flashes once right after the user accepts the
+    // privacy policy and then immediately "crashes" off-screen. It must only
+    // fire on the post-acceptance transition this session, never on cold
+    // restarts where terms were already accepted previously.
+    var justAcceptedTerms by remember { mutableStateOf(false) }
+    var showFakeNameForm by remember { mutableStateOf(false) }
+    var fakeFormOffsetX by remember { mutableFloatStateOf(0f) }
+    var fakeFormOffsetY by remember { mutableFloatStateOf(0f) }
+    var fakeFormAlpha by remember { mutableFloatStateOf(1f) }
     var microphonePermissionRequested by remember { mutableStateOf(false) }
     var locationPermissionRequested by remember { mutableStateOf(false) }
     var contactsPermissionRequested by remember { mutableStateOf(false) }
@@ -373,7 +382,36 @@ fun CalculatorScreen() {
             // City / ad-card restoration: only if the user was actually mid-phase.
             // These phases are *past* dormancy, so the keyboard is no longer
             // RAD-styled — undo the recreateState default for step 167.
+            //
+            // In Phase 1 builds, the post-dormancy landing is the "Part 1
+            // complete" end screen instead of ad cards / city.
+            val phase1CompleteInPrefs = CalculatorActions.loadPhase1Complete()
+            // Dormancy was cleared (timestamp removed) iff getRantEndTime
+            // returns -1. Used below to decide whether the Phase 2 migration
+            // path should fire — it should only kick in once the user has
+            // fully completed dormancy in the old build.
+            val dormancyCleared = DormancyManager.getRantEndTime(context) == -1L
+
+            // Phase 1: surface the end-of-Part-1 card as soon as the user is
+            // marked complete. It coexists with dormancy (renders as an
+            // overlay inside DormancyScreen) and persists afterwards.
+            if (!com.fictioncutshort.justacalculator.util.PHASE_2_ENABLED &&
+                phase1CompleteInPrefs) {
+                state.value = state.value.copy(showEndOfPart1 = true)
+            }
+
             when {
+                // Phase 2 just shipped to a returning Phase 1 user who'd
+                // already completed dormancy: clear the Phase 1 marker and
+                // route them into the ad cards (their next-step content).
+                com.fictioncutshort.justacalculator.util.PHASE_2_ENABLED &&
+                        phase1CompleteInPrefs && dormancyCleared -> {
+                    CalculatorActions.clearPhase1Complete()
+                    state.value = state.value.copy(
+                        showAdCards = true,
+                        allButtonsRad = false
+                    )
+                }
                 inCityPhaseInPrefs -> {
                     state.value = state.value.copy(
                         showAdCards = true,
@@ -395,11 +433,14 @@ fun CalculatorScreen() {
             CalculatorActions.clearDormancyPressedButtons()
             CalculatorActions.clearInCityPhase()
             CalculatorActions.clearShowAdCards()
-            if (state.value.showAdCards || state.value.showCityDirectly || state.value.showDormancy) {
+            CalculatorActions.clearPhase1Complete()
+            if (state.value.showAdCards || state.value.showCityDirectly ||
+                state.value.showDormancy || state.value.showEndOfPart1) {
                 state.value = state.value.copy(
                     showAdCards = false,
                     showCityDirectly = false,
-                    showDormancy = false
+                    showDormancy = false,
+                    showEndOfPart1 = false
                 )
             }
         }
@@ -521,16 +562,12 @@ fun CalculatorScreen() {
                 isTyping = true
             )
         } else {
-            // Second denial
-            val sadMessage = listOf(
-                "I am sorry you feel this way.",
-                "That is a shame. Oh well.",
-                "And I thought you were interested as well..."
-            ).random()
+            // Second denial — give clear instructions instead of a sad line,
+            // since we can't ping them via notification when the repair is done.
             val nextConfig = CalculatorActions.getStepConfigPublic(101)
             state.value = state.value.copy(
                 message = "",
-                fullMessage = sadMessage,
+                fullMessage = "Fair. Close the app, then give me 10-20 seconds and come back. I should be done by then.",
                 isTyping = true,
                 pendingAutoMessage = nextConfig.promptMessage,
                 pendingAutoStep = 101,
@@ -819,7 +856,7 @@ fun CalculatorScreen() {
             }
         }
         // Location - step is 1076 when success message from 1075 is shown
-        if (current.conversationStep == 1076 && current.message == " It's a joy to work with you already! " && !current.isTyping) {
+        if (current.conversationStep == 1076 && current.message == "It's a joy to work with you already!" && !current.isTyping) {
             if (!locationPermissionRequested) {
                 locationPermissionRequested = true
                 locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -1013,9 +1050,14 @@ fun CalculatorScreen() {
 
     val configuration = LocalConfiguration.current
     val isTablet = configuration.screenWidthDp > 600
-    val maxContentWidth = if (isTablet) 400.dp else configuration.screenWidthDp.dp
-    val dimensions = rememberResponsiveDimensions()
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    // Tablets get a centred-column cap so the calculator doesn't stretch
+    // edge-to-edge with comically large buttons. Landscape can afford wider
+    // since the keyboard sits beside the message/LCD rather than below.
+    val maxContentWidth = if (isTablet) {
+        if (isLandscape) 720.dp else 400.dp
+    } else configuration.screenWidthDp.dp
+    val dimensions = rememberResponsiveDimensions()
 
 
     val backgroundColor = if (current.invertedColors) Color.Black else RetroCream
@@ -1080,6 +1122,7 @@ fun CalculatorScreen() {
                     onClick = {
                         if (termsPolicyViewed) {
                             CalculatorActions.persistTermsAccepted()
+                            justAcceptedTerms = true
                             showTermsScreen = false
                         } else {
                             showTermsWarning = true
@@ -1249,6 +1292,7 @@ fun CalculatorScreen() {
                                     onClick = {
                                         showTermsWarning = false
                                         CalculatorActions.persistTermsAccepted()
+                                        justAcceptedTerms = true
                                         showTermsScreen = false
                                     },
                                     modifier = Modifier.weight(1f).height(44.dp),
@@ -1368,7 +1412,7 @@ fun CalculatorScreen() {
                 // Main calculator (not word game)
                 Column(
                     modifier = Modifier
-                        .then(if (isTablet && !isLandscape) Modifier.widthIn(max = maxContentWidth) else Modifier.fillMaxWidth())
+                        .then(if (isTablet) Modifier.widthIn(max = maxContentWidth) else Modifier.fillMaxWidth())
                         .fillMaxHeight()
                 ) {
                     // Ad banner
@@ -1733,6 +1777,17 @@ fun CalculatorScreen() {
             onCityEntered = { CalculatorActions.saveInCityPhase() }
         )
     }
+    // ========== PHASE 1 RELEASE: END SCREEN ==========
+    // The end-of-Part-1 card lives in two places:
+    //   - During dormancy, DormancyScreen renders the panel itself as an
+    //     overlay on top of the static + RAD grid (so users see the message
+    //     the moment the rant ends).
+    //   - After dormancy clears, this full-screen wrapper takes over.
+    // Persisted via `phase_1_complete` so reopens always land back here
+    // until Phase 2 ships.
+    if (current.showEndOfPart1 && !current.showDormancy) {
+        com.fictioncutshort.justacalculator.ui.screens.EndOfPart1Screen()
+    }
     // ========== DORMANCY: ALL-PRESSED → AD CARDS TRANSITION ==========
     // Dormancy now renders inline inside Portrait/LandscapeCalculatorContent
     // (static behind the keyboard, RAD grid in place of the LCD), so this
@@ -1745,15 +1800,28 @@ fun CalculatorScreen() {
         kotlinx.coroutines.delay(800)
         DormancyManager.clearDormancy(context)
         CalculatorActions.clearDormancyPressedButtons()
-        state.value = state.value.copy(
-            showDormancy = false,
-            dormancyRadVisible = 0,
-            dormancyPressedButtons = emptySet(),
-            vibrationIntensity = 0,
-            allButtonsRad = false,
-            radButtonsConverted = 0,
-            showAdCards = true
-        )
+        if (com.fictioncutshort.justacalculator.util.PHASE_2_ENABLED) {
+            state.value = state.value.copy(
+                showDormancy = false,
+                dormancyRadVisible = 0,
+                dormancyPressedButtons = emptySet(),
+                vibrationIntensity = 0,
+                allButtonsRad = false,
+                radButtonsConverted = 0,
+                showAdCards = true
+            )
+        } else {
+            CalculatorActions.savePhase1Complete()
+            state.value = state.value.copy(
+                showDormancy = false,
+                dormancyRadVisible = 0,
+                dormancyPressedButtons = emptySet(),
+                vibrationIntensity = 0,
+                allButtonsRad = false,
+                radButtonsConverted = 0,
+                showEndOfPart1 = true
+            )
+        }
     }
 
     // Debug menu overlay - at the outermost level to cover everything
@@ -1863,6 +1931,85 @@ fun CalculatorScreen() {
                 context.startActivity(intent)
             }
         )
+    }
+
+    // One-shot fake "Enter name" form. Fires once after the user accepts the
+    // privacy policy: ~1s of calculator UI, then the form flashes briefly,
+    // then it "crashes" away leaving the calculator. Consumes the trigger so
+    // it can't fire again until the next first-launch acceptance.
+    LaunchedEffect(showTermsScreen) {
+        if (justAcceptedTerms && !showTermsScreen) {
+            kotlinx.coroutines.delay(1000)
+            val cornerX = configuration.screenWidthDp * 0.32f
+            val cornerY = configuration.screenHeightDp * 0.32f
+            // DVD-screensaver-style teleports: each entry is (xDp, yDp) offset
+            // from centre. No tweening between positions — instant jumps only.
+            val positions = listOf(
+                0f to 0f,
+                -cornerX to -cornerY,
+                cornerX to cornerY,
+                cornerX to -cornerY,
+                -cornerX to cornerY,
+            )
+            fakeFormOffsetX = 0f
+            fakeFormOffsetY = 0f
+            fakeFormAlpha = 1f
+            showFakeNameForm = true
+            val rng = java.util.Random()
+            val holdMs = 130L
+            val tickMs = 40L
+            for ((x, y) in positions) {
+                fakeFormOffsetX = x
+                fakeFormOffsetY = y
+                var elapsed = 0L
+                while (elapsed < holdMs) {
+                    fakeFormAlpha = if (rng.nextFloat() < 0.2f) 0f else 1f
+                    kotlinx.coroutines.delay(tickMs)
+                    elapsed += tickMs
+                }
+            }
+            showFakeNameForm = false
+            justAcceptedTerms = false
+        }
+    }
+    if (showFakeNameForm) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.55f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.82f)
+                    .graphicsLayer {
+                        translationX = fakeFormOffsetX.dp.toPx()
+                        translationY = fakeFormOffsetY.dp.toPx()
+                        alpha = fakeFormAlpha
+                    }
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(RetroCream)
+                    .padding(horizontal = 24.dp, vertical = 28.dp)
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "Enter name",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = CalculatorDisplayFont,
+                        color = AccentOrange
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color.White)
+                    )
+                }
+            }
+        }
     }
 }
 

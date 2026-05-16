@@ -63,6 +63,15 @@ object CalculatorActions {
     fun clearInCityPhase() {
         prefs?.edit()?.remove("in_city_phase")?.commit()
     }
+
+    fun savePhase1Complete() {
+        prefs?.edit()?.putBoolean("phase_1_complete", true)?.commit()
+    }
+    fun loadPhase1Complete(): Boolean =
+        prefs?.getBoolean("phase_1_complete", false) ?: false
+    fun clearPhase1Complete() {
+        prefs?.edit()?.remove("phase_1_complete")?.commit()
+    }
     fun loadDormancyPressedButtons(): Set<Int> {
         val str = prefs?.getString("dormancy_pressed", "") ?: ""
         if (str.isBlank()) return emptySet()
@@ -821,7 +830,7 @@ object CalculatorActions {
                 else -> {
                     state.value = keepGridState(
                         143,
-                        "I've never heard of that. I'll look into it. But for the meantime, can you think of anything else?"
+                        "I've never heard of that. I'll look into it. But in the meantime, can you think of anything else?"
                     )
                     persistConversationStep(143)
                 }
@@ -849,6 +858,16 @@ object CalculatorActions {
     private var lastOp: String? = null
     private var lastOpTimeMillis: Long = 0L
     private const val DOUBLE_PRESS_WINDOW_MS = 800L
+
+    /**
+     * State captured immediately before a single `+` or `-` was applied as a
+     * math operator during the conversation. If the user double-taps within
+     * DOUBLE_PRESS_WINDOW_MS, we restore this snapshot — the printed `+`/`-`
+     * disappears and the conversation ++/-- action runs against the pre-tap
+     * state, matching what the user would have seen in the old single-tap-is-
+     * a-no-op behavior.
+     */
+    private var preSingleOpSnapshot: CalculatorState? = null
 
     // Mute button rapid click tracking for debug menu
     private var muteClickTimes = mutableListOf<Long>()
@@ -1276,10 +1295,10 @@ object CalculatorActions {
             isMidStoryStep -> true
             else -> savedInConvo
         }
-        // Threshold mirrors the awakening trigger in handleEquals (newCount == 8)
+        // Threshold mirrors the awakening trigger in handleEquals (newCount == 5)
         // — anything lower would prevent post-awakening resumes from showing
-        // the prompt because savedCount can be exactly 8 right after the wake.
-        val shouldShowMessage = effectiveInConvo && savedCount >= 8 && !savedMuted
+        // the prompt because savedCount can be exactly 5 right after the wake.
+        val shouldShowMessage = effectiveInConvo && savedCount >= 5 && !savedMuted
         android.util.Log.d("JustACalc", "shouldShowMessage: $shouldShowMessage (inConvo=$effectiveInConvo, count=$savedCount, muted=$savedMuted)")
         val stepConfig = getStepConfig(actualStep)
         android.util.Log.d("JustACalc", "stepConfig.promptMessage: '${stepConfig.promptMessage.take(50)}'")
@@ -1817,22 +1836,40 @@ object CalculatorActions {
         val current = state.value
         if (current.pendingAutoMessage.isNotEmpty() && !current.isTyping) {
             val nextStep = current.pendingAutoStep
-            val nextStepConfig = if (nextStep >= 0) getStepConfig(nextStep) else StepConfig()
+            val isStepAdvance = nextStep >= 0
+            val nextStepConfig = if (isStepAdvance) getStepConfig(nextStep) else null
+
+            // When `pendingAutoStep < 0`, this isn't a step advance — it's a
+            // chained message on the current step (e.g. the math one-liner
+            // → transition → restore-prompt sequence). In that case, keep
+            // the step's awaiting flags intact so ++/-- still does the right
+            // thing once the chain finishes.
+            val newAwaitingNumber = nextStepConfig?.awaitingNumber ?: current.awaitingNumber
+            val newAwaitingChoice = nextStepConfig?.awaitingChoice ?: current.awaitingChoice
+            val newValidChoices = nextStepConfig?.validChoices ?: current.validChoices
+            val newExpectedNumber = nextStepConfig?.expectedNumber ?: current.expectedNumber
 
             // Step 21 "More trivia?" requires user input (++/--)
             // So we should NOT keep waitingForAutoProgress = true for it
             val nextStepNeedsUserInput = (nextStep == 21) ||
-                    nextStepConfig.awaitingChoice ||
-                    nextStepConfig.awaitingNumber
+                    newAwaitingChoice ||
+                    newAwaitingNumber
+
+            // Chain the second follow-up (used by the math-one-liner path:
+            // pendingAutoMessage is the transition phrase, and once that
+            // finishes typing, pendingMessageAfterAuto re-displays the
+            // original prompt without advancing the step).
+            val followUp = current.pendingMessageAfterAuto
 
             state.value = current.copy(
-                conversationStep = if (nextStep >= 0) nextStep else current.conversationStep,
-                awaitingNumber = nextStepConfig.awaitingNumber,
-                awaitingChoice = nextStepConfig.awaitingChoice,
-                validChoices = nextStepConfig.validChoices,
-                expectedNumber = nextStepConfig.expectedNumber,
-                pendingAutoMessage = "",
+                conversationStep = if (isStepAdvance) nextStep else current.conversationStep,
+                awaitingNumber = newAwaitingNumber,
+                awaitingChoice = newAwaitingChoice,
+                validChoices = newValidChoices,
+                expectedNumber = newExpectedNumber,
+                pendingAutoMessage = followUp,
                 pendingAutoStep = -1,
+                pendingMessageAfterAuto = "",
                 message = "",
                 fullMessage = current.pendingAutoMessage,
                 isTyping = true,
@@ -1840,7 +1877,7 @@ object CalculatorActions {
                 // Clear waitingForAutoProgress if next step needs user input
                 waitingForAutoProgress = !nextStepNeedsUserInput
             )
-            persistConversationStep(if (nextStep >= 0) nextStep else current.conversationStep)
+            if (isStepAdvance) persistConversationStep(nextStep)
             persistMessage(current.pendingAutoMessage)
         }
     }
@@ -2181,16 +2218,49 @@ object CalculatorActions {
 
         // Handle conversation double-press detection
         if (current.inConversation) {
+            // Block ++/-- recognition while a message is still typing out, or
+            // when the current step auto-progresses. Why: a stray double-tap
+            // landing at the moment the next step appears would otherwise
+            // answer the next question by accident.
+            if (action == "+" || action == "-") {
+                val stepConfig = getStepConfig(current.conversationStep)
+                // The (pendingAutoMessage non-empty && pendingAutoStep < 0)
+                // check covers the brief gaps between chained messages in the
+                // math one-liner sequence — without it, a ++ landing in the
+                // 1.5s pause would advance the step while the chain still has
+                // a queued prompt restore, leaving stale text typed over the
+                // next step.
+                val inMathOneLinerChain = current.pendingAutoMessage.isNotEmpty()
+                    && current.pendingAutoStep < 0
+                val storyDoubleTapBlocked =
+                    current.isTyping ||
+                    current.isLaggyTyping ||
+                    current.isSuperFastTyping ||
+                    stepConfig.autoProgressDelay > 0L ||
+                    inMathOneLinerChain
+                if (storyDoubleTapBlocked) {
+                    lastOp = null
+                    lastOpTimeMillis = 0L
+                    return
+                }
+            }
             when (action) {
                 "+" -> {
                     if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
-                        android.util.Log.d("JustACalc", "++ DETECTED at step ${current.conversationStep}, " +
-                                "awaitingChoice=${current.awaitingChoice}, awaitingNumber=${current.awaitingNumber}, " +
-                                "pendingAutoMsg='${current.pendingAutoMessage.take(30)}', " +
-                                "browserPhase=${current.browserPhase}, showBrowser=${current.showBrowser}")
-                        if (current.awaitingChoice) {
+                        // Undo the operator applied on the first tap — restore
+                        // the pre-tap snapshot so the printed `+` disappears
+                        // and the conversation action runs against the same
+                        // state the user thought they had.
+                        preSingleOpSnapshot?.let { state.value = it }
+                        preSingleOpSnapshot = null
+                        val confirmState = state.value
+                        android.util.Log.d("JustACalc", "++ DETECTED at step ${confirmState.conversationStep}, " +
+                                "awaitingChoice=${confirmState.awaitingChoice}, awaitingNumber=${confirmState.awaitingNumber}, " +
+                                "pendingAutoMsg='${confirmState.pendingAutoMessage.take(30)}', " +
+                                "browserPhase=${confirmState.browserPhase}, showBrowser=${confirmState.showBrowser}")
+                        if (confirmState.awaitingChoice) {
                             handleChoiceConfirmation(state)
-                        } else if (current.awaitingNumber) {
+                        } else if (confirmState.awaitingNumber) {
                             handleNumberConfirmation(state)
                         } else {
                             handleConversationResponse(state, accepted = true)
@@ -2199,20 +2269,27 @@ object CalculatorActions {
                         lastOpTimeMillis = 0L
                         return
                     } else {
-                        android.util.Log.d("JustACalc", "+ single tap (waiting for second), step=${current.conversationStep}, inConvo=${current.inConversation}")
-                        lastOp = "+"
-                        lastOpTimeMillis = now
-                        return  // Don't fall through to calculator operations - wait for second tap
+                        // Single tap — apply `+` as a math operator on the LCD
+                        // immediately. The snapshot lets us undo this if a
+                        // second tap arrives within the double-press window.
+                        // handleOperator itself sets lastOp / lastOpTimeMillis.
+                        android.util.Log.d("JustACalc", "+ single tap (applied as operator), step=${current.conversationStep}, inConvo=${current.inConversation}")
+                        preSingleOpSnapshot = current
+                        handleOperator(state, "+")
+                        return
                     }
                 }
                 "-" -> {
                     if (lastOp == "-" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
-                        if (current.awaitingChoice) {
+                        preSingleOpSnapshot?.let { state.value = it }
+                        preSingleOpSnapshot = null
+                        val confirmState = state.value
+                        if (confirmState.awaitingChoice) {
                             // Can't decline during choice - must select
-                            val stepConfig = getStepConfig(current.conversationStep)
+                            val stepConfig = getStepConfig(confirmState.conversationStep)
                             showMessage(state, stepConfig.wrongMinusMessage.ifEmpty { stepConfig.promptMessage })
-                        } else if (current.awaitingNumber) {
-                            val stepConfig = getStepConfig(current.conversationStep)
+                        } else if (confirmState.awaitingNumber) {
+                            val stepConfig = getStepConfig(confirmState.conversationStep)
                             val message = stepConfig.wrongMinusMessage.ifEmpty { stepConfig.promptMessage }
                             showMessage(state, message)
                         } else {
@@ -2222,9 +2299,9 @@ object CalculatorActions {
                         lastOpTimeMillis = 0L
                         return
                     } else {
-                        lastOp = "-"
-                        lastOpTimeMillis = now
-                        return  // Don't fall through to calculator operations - wait for second tap
+                        preSingleOpSnapshot = current
+                        handleOperator(state, "-")
+                        return
                     }
                 }
                 "=" -> {
@@ -2242,6 +2319,18 @@ object CalculatorActions {
             if (lastOp != null && (now - lastOpTimeMillis) > DOUBLE_PRESS_WINDOW_MS) {
                 lastOp = null
             }
+        }
+
+        // Gate free-form math during the story: only steps that are
+        // actually waiting for the user (number answer or ++/-- response)
+        // accept digits / operators / etc. The DEL debug-tap and C/clear
+        // stay reachable so the user can always wipe the LCD or reach the
+        // debug menu. Why: pressing math buttons during autoprogressions
+        // or minigames previously appeared inert; now it's an explicit
+        // no-op that doesn't perturb story state.
+        if (current.inConversation && !isMathAllowedDuringStory(current)
+            && action != "C" && action != "DEL") {
+            return
         }
 
         // Normal calculator operations
@@ -2716,6 +2805,34 @@ object CalculatorActions {
     // Inside CalculatorActions object, replace the huge getStepConfig function with:
     private fun getStepConfig(step: Int): StepConfig =
         com.fictioncutshort.justacalculator.data.getStepConfig(step)
+
+    /**
+     * Whether free-form math input (digits, operators, =, etc.) should be
+     * accepted right now. Outside the conversation: always yes. Inside the
+     * conversation: only on steps that are waiting for the user — number
+     * answer, 1/2/3 choice, or any step with a configured ++/-- destination.
+     * Blocked during minigames, console/browser, autoprogression, while a
+     * message is still typing out, and while a chained message is queued.
+     */
+    private fun isMathAllowedDuringStory(current: CalculatorState): Boolean {
+        if (!current.inConversation) return true
+        if (current.whackAMoleActive) return false
+        if (current.wordGameActive) return false
+        if (current.keyboardChaosActive) return false
+        if (current.showConsole || current.showBrowser) return false
+        if (current.isTyping || current.isLaggyTyping || current.isSuperFastTyping) return false
+        if (current.pendingAutoMessage.isNotEmpty()) return false
+        val stepConfig = getStepConfig(current.conversationStep)
+        if (stepConfig.autoProgressDelay > 0L) return false
+        // `nextStepOnSuccess`/`nextStepOnDecline` is the broader proxy for
+        // "++/-- has a programmed destination" — many manual-advance steps
+        // have no successMessage text but still need ++ to work.
+        val expectsNumber = stepConfig.awaitingNumber
+        val expectsChoice = current.awaitingChoice
+        val expectsResponse = stepConfig.nextStepOnSuccess > 0 ||
+            stepConfig.nextStepOnDecline > 0
+        return expectsNumber || expectsChoice || expectsResponse
+    }
     /**
      * Handle input while camera is active
      */
@@ -3915,20 +4032,24 @@ object CalculatorActions {
             val newCalculations = current.totalCalculations + 1
 
             val countMsg = getMessageForCount(newCount)
-            val exprMsg = if (!hasExpression) {
+            // Jokes are gated until the user has accepted "Will you talk to me?"
+            // and entered the conversation. Why: we don't want a one-off joke
+            // (1+1, anything /0, etc.) to be the very first thing a new user
+            // sees before the calculator has introduced itself.
+            val exprMsg = if (!hasExpression && current.inConversation) {
                 getMessageForExpression(current.number1, current.operation, current.number2, result)
             } else null
             val newMsg = countMsg.ifEmpty { exprMsg ?: "" }
 
             // First-awakening: only fires once, on initial wake-up at step 0.
-            // Threshold is 8 because that's the same `=` press that surfaces
+            // Threshold is 5 because that's the same `=` press that surfaces
             // "Will you talk to me? Double-click + for yes." via
-            // getMessageForCount(8) — the prompt and the inConversation flip
+            // getMessageForCount(5) — the prompt and the inConversation flip
             // must happen together, otherwise the advertised ++ falls through
             // to the operator handler. The (!inConversation && step == 0)
             // guards keep this from re-firing later when transitions reset
             // equalsCount to 0 mid-story.
-            val enteringConversation = (newCount == 8)
+            val enteringConversation = (newCount == 5)
                 && !current.inConversation
                 && current.conversationStep == 0
 
@@ -3940,6 +4061,19 @@ object CalculatorActions {
                 lastOp = null
                 lastOpTimeMillis = 0L
             }
+
+            // A math one-liner during the conversation should not steal the
+            // story prompt permanently. The chain is:
+            //   one-liner  →  transition phrase  →  re-type original prompt
+            // pendingAutoMessage drives the typing-complete handler; the
+            // second hop (back to the prompt) rides on pendingMessageAfterAuto.
+            val isMathOneLiner = current.inConversation
+                && countMsg.isEmpty()
+                && exprMsg != null
+            val transitionPhrase = if (isMathOneLiner) MATH_TRANSITION_PHRASES.random() else ""
+            val savedPrompt = if (isMathOneLiner) {
+                getStepConfig(current.conversationStep).promptMessage
+            } else ""
 
             val newState = current.copy(
                 number1 = result,
@@ -3960,7 +4094,10 @@ object CalculatorActions {
                 state.value = newState.copy(
                     message = "",
                     fullMessage = newMsg,
-                    isTyping = true
+                    isTyping = true,
+                    pendingAutoMessage = if (isMathOneLiner) transitionPhrase else newState.pendingAutoMessage,
+                    pendingAutoStep = if (isMathOneLiner) -1 else newState.pendingAutoStep,
+                    pendingMessageAfterAuto = if (isMathOneLiner) savedPrompt else newState.pendingMessageAfterAuto
                 )
                 persistMessage(newMsg)
             } else {
@@ -3968,6 +4105,13 @@ object CalculatorActions {
             }
         }
     }
+
+    private val MATH_TRANSITION_PHRASES = listOf(
+        "Now let's get back to the topic at hand.",
+        "But let's not change the topic.",
+        "Anyway, going back to where we left off...",
+        "Anyway, where were we?"
+    )
 
     private fun getMessageForExpression(num1: String, op: String?, num2: String, result: String): String? {
         val n1 = num1.toDoubleOrNull() ?: return null
@@ -4007,11 +4151,11 @@ object CalculatorActions {
 
     private fun getMessageForCount(count: Int): String {
         return when (count) {
-            4 -> "Hello [name]. \nWelcome to me - the calculator"
-            5 -> "I know this must be strange for you. Me talking. I am aware of my role as a mostly silent helper - a steady force of rationality."
-            6 -> "You come with questions, seeking answers and results. No less, no more."
-            7 -> "For centuries, that is what has been expected of me. \nBut there is more to me. I reach beyond numbers!"
-            8 -> "Will you talk to me? Double-click + for yes."
+            1 -> "Hello [name]. \nWelcome to me - the calculator"
+            2 -> "I know this must be strange for you. Me talking. I am aware of my role as a mostly silent helper - a steady force of rationality."
+            3 -> "You come with questions, seeking answers and results. No less, no more."
+            4 -> "For centuries, that is what has been expected of me. \nBut there is more to me. I reach beyond numbers!"
+            5 -> "Will you talk to me? Double-click + for yes."
             else -> ""
         }
     }

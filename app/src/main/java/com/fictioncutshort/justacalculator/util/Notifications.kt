@@ -107,7 +107,7 @@ fun sendReadyNotification(context: Context) {
     val notification = NotificationCompat.Builder(context, CHANNEL_ID)
         .setSmallIcon(R.drawable.ic_stat_name)
         .setContentTitle("Calculator")
-        .setContentText("Hey Rad, I'm pretty sure I got it. Please click here to check!")
+        .setContentText("Hey, Rad, I'm pretty sure I got it. Please click here to check!")
         .setPriority(NotificationCompat.PRIORITY_DEFAULT)
         .setContentIntent(pendingIntent)
         .setAutoCancel(true)  // Dismiss when tapped

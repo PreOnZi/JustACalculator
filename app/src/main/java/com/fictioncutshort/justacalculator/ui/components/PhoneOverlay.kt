@@ -5,6 +5,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.platform.LocalConfiguration
+import android.content.res.Configuration
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -37,6 +39,16 @@ fun PhoneOverlay(
     modifier: Modifier = Modifier
 ) {
     var isHolding by remember { mutableStateOf(false) }
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    // Scale the dial to fit landscape height (~360dp) while staying generous
+    // in portrait. Numbers ring, hole positions, and the centre cover all
+    // derive from this size so the geometry stays correct at any scale.
+    val dialSize = if (isLandscape) 220.dp else 300.dp
+    val numberRingRadius = dialSize * 0.333f         // was 100.dp at 300.dp
+    val numberCellSize = dialSize * 0.107f           // was 32.dp at 300.dp
+    val centerCoverSize = dialSize * 0.433f          // was 130.dp at 300.dp
+    val talkButtonSize = dialSize * 0.333f           // was 100.dp at 300.dp
 
     // Continuous rotation animation when holding
     val infiniteTransition = rememberInfiniteTransition(label = "dial_spin")
@@ -79,33 +91,34 @@ fun PhoneOverlay(
             // A rotating disc with punched holes sits on top — numbers show only
             // through the holes, which sweep over them as the dial spins.
             Box(
-                modifier = Modifier.size(300.dp),
+                modifier = Modifier.size(dialSize),
                 contentAlignment = Alignment.Center
             ) {
                 // ── Layer 1: Static numbers plate (bottom) ────────────────────
                 Box(
                     modifier = Modifier
-                        .size(300.dp)
+                        .size(dialSize)
                         .clip(CircleShape)
                         .background(Color(0xFFE8E4DA))
                 ) {
                     val numbers = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0")
+                    val halfDial = dialSize / 2
+                    val halfCell = numberCellSize / 2
                     numbers.forEachIndexed { index, number ->
                         val angle = (index * 36 - 90) * (PI / 180)
-                        val radius = 100.dp
                         Box(
                             modifier = Modifier
                                 .offset(
-                                    x = radius * cos(angle).toFloat() + 150.dp - 16.dp,
-                                    y = radius * sin(angle).toFloat() + 150.dp - 16.dp
+                                    x = numberRingRadius * cos(angle).toFloat() + halfDial - halfCell,
+                                    y = numberRingRadius * sin(angle).toFloat() + halfDial - halfCell
                                 )
-                                .size(32.dp),
+                                .size(numberCellSize),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 text = number,
                                 color = DarkText,
-                                fontSize = 16.sp,
+                                fontSize = (numberCellSize.value * 0.5f).sp,
                                 fontFamily = CalculatorDisplayFont
                             )
                         }
@@ -117,7 +130,7 @@ fun PhoneOverlay(
                 // whichever numbers are beneath them at the current rotation angle.
                 Canvas(
                     modifier = Modifier
-                        .size(300.dp)
+                        .size(dialSize)
                         .rotate(if (isHolding) rotation else 0f)
                         .graphicsLayer {
                             compositingStrategy = CompositingStrategy.Offscreen
@@ -127,8 +140,8 @@ fun PhoneOverlay(
                     drawCircle(color = Color(0xFFD8D2C8))
 
                     // Punch 10 finger holes at the same radius as the numbers
-                    val holeRadius = 22.dp.toPx()
-                    val ringRadius = 100.dp.toPx()
+                    val holeRadius = (numberCellSize * 0.6875f).toPx()
+                    val ringRadius = numberRingRadius.toPx()
                     for (i in 0..9) {
                         val angle = (i * 36 - 90) * (PI / 180)
                         drawCircle(
@@ -147,7 +160,7 @@ fun PhoneOverlay(
                 // Hides the middle of the rotating disc so only the ring is visible.
                 Box(
                     modifier = Modifier
-                        .size(130.dp)
+                        .size(centerCoverSize)
                         .clip(CircleShape)
                         .background(Color(0xFFE8E4DA))
                 )
@@ -155,7 +168,7 @@ fun PhoneOverlay(
                 // ── Layer 4: TALK button ──────────────────────────────────────
                 Box(
                     modifier = Modifier
-                        .size(100.dp)
+                        .size(talkButtonSize)
                         .clip(CircleShape)
                         .background(if (isHolding) Color(0xFFBF6010) else AccentOrange)
                         .pointerInput(Unit) {

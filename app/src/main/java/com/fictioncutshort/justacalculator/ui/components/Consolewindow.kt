@@ -91,11 +91,27 @@ fun ConsoleWindow(
         context = context
     )
 
-    // Position console in the middle band — fixed height so it never covers buttons
-    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
-    val consoleTopPadding = (screenHeight * 0.18f).coerceAtLeast(100.dp)
-    val consoleHeight = (screenHeight * 0.40f).coerceIn(180.dp, 300.dp)
+    // Position console in the middle band — fixed height so it never covers buttons.
+    // In landscape the keyboard takes a much taller share of the short side, so we
+    // shrink the console height + top padding to keep the keyboard reachable.
+    val configuration = LocalConfiguration.current
+    val screenHeight = configuration.screenHeightDp.dp
+    val isLandscape =
+        configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val consoleTopPadding = if (isLandscape) {
+        (screenHeight * 0.06f).coerceAtLeast(16.dp)
+    } else {
+        (screenHeight * 0.18f).coerceAtLeast(100.dp)
+    }
+    val consoleHeight = if (isLandscape) {
+        (screenHeight * 0.55f).coerceIn(140.dp, 220.dp)
+    } else {
+        (screenHeight * 0.40f).coerceIn(180.dp, 300.dp)
+    }
 
+    // In landscape, restrict the console to the left half of the screen so it
+    // sits alongside (rather than over) the calculator keyboard on the right.
+    val consoleFillFraction = if (isLandscape) 0.5f else 1f
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -108,7 +124,7 @@ fun ConsoleWindow(
         // Console container with retro terminal styling
         Box(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(consoleFillFraction)
                 .height(consoleHeight)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color.Black)

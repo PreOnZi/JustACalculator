@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -103,12 +104,18 @@ fun PortraitCalculatorContent(
                 // routes through this branch.)
                 when {
                     current.showBrowser -> {
+                        // Suppress the inline floating LCD over the browser —
+                        // in portrait the LCD slot is taken by the browser
+                        // itself, so showing a small "0" overlay was just
+                        // visual noise. The math result still lives in state
+                        // and reappears as soon as the browser closes.
                         BrowserViewWithFloatingDisplay(
                             displayText = displayText,
                             browserSearchText = current.browserSearchText,
                             browserShowWikipedia = current.browserShowWikipedia,
                             browserShowError = current.browserShowError,
                             dimensions = dimensions,
+                            showFloatingDisplay = false,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .weight(1f)
@@ -159,20 +166,25 @@ fun PortraitCalculatorContent(
 // ---
 
 @Composable
-private fun BrowserViewWithFloatingDisplay(
+fun BrowserViewWithFloatingDisplay(
     displayText: String,
     browserSearchText: String,
     browserShowWikipedia: Boolean,
     browserShowError: Boolean,
     dimensions: ResponsiveDimensions,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showFloatingDisplay: Boolean = true,
+    topPadding: Dp? = null
 ) {
-    // Calculate top padding - less than camera to make browser taller
-    val topPadding = (dimensions.screenHeight.value * 0.12f).dp.coerceIn(80.dp, 120.dp)
+    // Default top padding makes room for the portrait message above. Landscape
+    // overrides this via the `topPadding` parameter because its message sits
+    // beside the browser, not above.
+    val resolvedTopPadding = topPadding
+        ?: (dimensions.screenHeight.value * 0.12f).dp.coerceIn(80.dp, 120.dp)
 
     Box(
         modifier = modifier
-            .padding(top = topPadding, bottom = 8.dp)
+            .padding(top = resolvedTopPadding, bottom = 8.dp)
     ) {
         // Browser container
         Box(
@@ -233,11 +245,14 @@ private fun BrowserViewWithFloatingDisplay(
             }
         }
 
-        // Floating calculator display over browser
-        FloatingDisplay(
-            displayText = displayText,
-            modifier = Modifier.align(Alignment.BottomEnd)
-        )
+        // Floating calculator display over browser. Landscape opts out via
+        // showFloatingDisplay = false and renders its own LCD overlay instead.
+        if (showFloatingDisplay) {
+            FloatingDisplay(
+                displayText = displayText,
+                modifier = Modifier.align(Alignment.BottomEnd)
+            )
+        }
     }
 }
 

@@ -27,6 +27,17 @@ import com.fictioncutshort.justacalculator.R
  */
 
 // ═══════════════════════════════════════════════════════════════════════════
+// RELEASE GATING
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * When false, the app cuts off after the dormancy phase (end of Part 1) and
+ * shows the "Part 1 complete" screen instead of advancing to ad cards / city.
+ * Flip to true once the post-dormancy content (Phase 2) is ready to ship.
+ */
+const val PHASE_2_ENABLED = false
+
+// ═══════════════════════════════════════════════════════════════════════════
 // COLORS - Retro calculator theme
 // ═══════════════════════════════════════════════════════════════════════════
 

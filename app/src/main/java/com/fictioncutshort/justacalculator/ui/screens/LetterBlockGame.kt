@@ -109,29 +109,35 @@ fun LetterBlockGame(
         //               bottom edge.
         val isLandscape = playAreaWidthPx > playAreaHeightPx
         val targetCols = if (isLandscape) 10 else 6
-        val maxBlocksPerColumn = if (isLandscape) 4 else 11
-        val prefillRows = if (isLandscape) 3 else 8
+        val maxBlocksPerColumn = if (isLandscape) 6 else 11
+        // Prefill matches the per-column cap so the grid opens full
+        // (no half-empty columns at the start). Capped at maxBlocksPerColumn
+        // so the runtime invariant in spawnIfNeeded still holds.
+        val prefillRows = if (isLandscape) 6 else 11
         // Pick the largest block size that still fits both targets — width
         // bound (cols × size ≤ width) and height bound (maxStack × size ≤
-        // height). Without the height check the landscape stack would
-        // happily overflow off the bottom of the screen.
+        // height). Landscape reserves 1.5 cells of vertical headroom for the
+        // spelled-word chip so it never gets crammed against the screen edge;
+        // portrait only needs the standard half-cell of breathing room.
+        val verticalHeadroom = if (isLandscape) 1.5f else 0.5f
         val widthBoundedSize = playAreaWidthPx / (targetCols + 0.5f)
-        val heightBoundedSize = playAreaHeightPx / (maxBlocksPerColumn + 0.5f)
+        val heightBoundedSize = playAreaHeightPx / (maxBlocksPerColumn + verticalHeadroom)
         val blockSize = kotlin.math.min(widthBoundedSize, heightBoundedSize)
         val cols = max(4, (playAreaWidthPx / blockSize).toInt())
         val targetBlockCount = (cols * maxBlocksPerColumn * 0.75f).toInt()
 
-        // Internal mutable state. Using lists of plain data classes inside a
-        // mutableStateOf — list is reassigned each tick for Compose to pick up
-        // changes without per-block observability overhead.
-        var blocks by remember { mutableStateOf<List<Block>>(emptyList()) }
-        var selectedIds by remember { mutableStateOf<List<Int>>(emptyList()) }
-        var nextId by remember { mutableStateOf(0) }
-        var letterQueue by remember {
+        // Internal mutable state. Keyed on isLandscape so flipping orientation
+        // resets the grid — block positions are stored in pixel coords for the
+        // *previous* play area and would otherwise float off-screen or stack
+        // at the wrong height after a rotation.
+        var blocks by remember(isLandscape) { mutableStateOf<List<Block>>(emptyList()) }
+        var selectedIds by remember(isLandscape) { mutableStateOf<List<Int>>(emptyList()) }
+        var nextId by remember(isLandscape) { mutableStateOf(0) }
+        var letterQueue by remember(isLandscape) {
             mutableStateOf(LetterGenerator.getInitialLetterQueue().shuffled())
         }
-        var fallingOutDeadline by remember { mutableStateOf(0L) }
-        var lockedSubmission by remember { mutableStateOf(false) }
+        var fallingOutDeadline by remember(isLandscape) { mutableStateOf(0L) }
+        var lockedSubmission by remember(isLandscape) { mutableStateOf(false) }
 
         fun nextLetter(): Char {
             if (letterQueue.isEmpty()) {
@@ -335,6 +341,12 @@ fun LetterBlockGame(
                 val stackTopFromBottomDp = with(density) {
                     (maxBlocksPerColumn * blockSize).toDp()
                 }
+                // Lift the chip noticeably above the top of the stack so it
+                // reads as a separate UI element rather than sitting on the
+                // top row of blocks. Landscape has extra headroom reserved
+                // above the stack (via verticalHeadroom = 1.5), so this gap
+                // never collides with a settled block.
+                val chipGap = if (isLandscape) 24.dp else 20.dp
                 Text(
                     text = spelled,
                     color = AccentOrange,
@@ -342,7 +354,7 @@ fun LetterBlockGame(
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = stackTopFromBottomDp + 8.dp)
+                        .padding(bottom = stackTopFromBottomDp + chipGap)
                 )
             }
         }

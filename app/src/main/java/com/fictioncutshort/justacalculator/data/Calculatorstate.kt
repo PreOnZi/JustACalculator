@@ -28,7 +28,7 @@ data class CalculatorState(
     /** Current step in the story (0-167). Each step has its own dialogue/behavior. */
     val conversationStep: Int = 0,
 
-    /** True once the calculator "wakes up" and starts talking (after equalsCount == 8) */
+    /** True once the calculator "wakes up" and starts talking (after equalsCount == 5) */
     val inConversation: Boolean = false,
 
     /** True when conversation is muted (orange button toggled off) */
@@ -72,6 +72,14 @@ data class CalculatorState(
 
     /** Step to go to after pendingAutoMessage is shown */
     val pendingAutoStep: Int = -1,
+
+    /**
+     * Second message to chain after pendingAutoMessage finishes. Used by the
+     * math-one-liner sequence so a free-form math press can show
+     * one-liner → transition phrase → original prompt without losing the
+     * step's awaiting flags.
+     */
+    val pendingMessageAfterAuto: String = "",
 
     /** True when waiting for auto-progress (keeps spinner spinning) */
     val waitingForAutoProgress: Boolean = false,
@@ -438,6 +446,14 @@ data class CalculatorState(
     /** True when the ad card stack overlay is showing (post-dormancy). */
     val showAdCards: Boolean = false,
     val showCityDirectly: Boolean = false,
+
+    /**
+     * True when the "Part 1 complete" end screen should be shown. Set in
+     * place of `showAdCards` after dormancy completes when PHASE_2_ENABLED
+     * is false. Persisted via `phase_1_complete` so the user lands back on
+     * the end screen after reopening the app.
+     */
+    val showEndOfPart1: Boolean = false,
 
     /**
      * Number of RAD buttons currently visible (0 = static only, 1–5 = buttons).

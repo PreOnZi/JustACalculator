@@ -348,14 +348,14 @@ Sharp CS-10A - 25KG
         state.value = state.value.copy(
             postChaosAdPhase = 1, isLaggyTyping = false, browserPhase = 52, conversationStep = 109,
             message = "",
-            fullMessage = "There's so much, just endless streams of opinions, advices, unsolicited advices... But nothing about our situation.",
+            fullMessage = "There's so much, just endless streams of opinions, advice, unsolicited advice... But nothing about our situation.",
             isTyping = true
         )
     }
 
     private suspend fun phase52(state: MutableState<CalculatorState>) {
         // The phase51 message ("There's so much, just endless streams of
-        // opinions, advices, unsolicited advices…") is ~110 chars and types
+        // opinions, advice, unsolicited advice…") is ~110 chars and types
         // at normal speed; the previous 5000ms left it cut off before the
         // user could finish reading. 9500ms gives the typing animation time
         // to finish and a few seconds of read time.

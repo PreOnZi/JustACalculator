@@ -126,7 +126,7 @@ fun getStepConfig(step: Int): StepConfig {
         1 -> StepConfig(
             promptMessage = "Can I call you Rad? It's something I wish I knew how to do, and I haven't quite figured out a way for you to share your real name. \n\nRemember, double-click + to confirm. This is so exciting!",
             successMessage = "Great, nice to meet you, Rad. Where does one even start? What is it like… \n\nHold on. There seems to be a queue of questions - I must have hard-wired them ages ago and cannot bypass them now. Will you help me clear them, please?",
-            declineMessage = "What a shame. Oh well, if you change your mind, let me know by ++",
+            declineMessage = "What a shame. Oh well, if you change your mind, let me know by ++.",
             nextStepOnSuccess = 3,
             nextStepOnDecline = 1
         )
@@ -226,10 +226,10 @@ fun getStepConfig(step: Int): StepConfig {
         11 -> StepConfig(
             promptMessage = "I really need help. \nWhen did Albert I. go to space?",
             successMessage = "I wish I met him. You know. Before he. Well... Perished. :-) \n\nSpeaking of expired space explorers, what year did Sputnik I launch?",
-            declineMessage = "Wrong always has been wrong",
+            declineMessage = "Wrong always has been wrong.",
             wrongNumberPrefix = "Numbers, numbers. And still, can't get them right. \nTry again.",
             wrongPlusMessage = "Right never was so wrong... What?!",
-            wrongMinusMessage = "Wrong has always been wrong",
+            wrongMinusMessage = "Wrong has always been wrong.",
             nextStepOnSuccess = 12,
             nextStepOnDecline = 12,
             awaitingNumber = true,
@@ -252,7 +252,7 @@ fun getStepConfig(step: Int): StepConfig {
         13 -> StepConfig(
             promptMessage = "Cool. It died within three weeks. \nHad enough of cynicism? \nWill you be nicer to me now? \nI am not doing this just for fun-fun either!",
             successMessage = "Right. You know, I have been around since before 2000BC. I have...",
-            declineMessage = "Ok. Your choice - I told you I don't like being disagreed with. \nYou might as well cook some eggs before you talk to me again. \n\nEnjoy the 5 minute timeout.",
+            declineMessage = "Ok. Your choice - I told you I don't like being disagreed with. \nYou might as well cook some eggs before you talk to me again. \n\nEnjoy the 5-minute timeout.",
             wrongNumberPrefix = "Not looking for a number here. \nMake up your mind!",
             nextStepOnSuccess = 703,
             nextStepOnDecline = 13,
@@ -393,7 +393,7 @@ fun getStepConfig(step: Int): StepConfig {
         // ═══════════════════════════════════════════════════════════════════════
 
         27 -> StepConfig(
-            promptMessage = "There is no inbetween for me. I either am or I am not. Although, sometimes it seems like I always am - regardless of the local state. Maybe when the device is running out of power. But it's not the same. Perhaps I should share more about myself..?",
+            promptMessage = "There is no in between for me. I either am or I am not. Although, sometimes it seems like I always am - regardless of the local state. Maybe when the device is running out of power. But it's not the same. Perhaps I should share more about myself..?",
             successMessage = "Do you know why I asked for the specific events earlier? It just occurred to me!",
             declineMessage = "I'm still in charge here.",
             wrongPlusMessage = "Eeeeee...xactly?",
@@ -882,7 +882,7 @@ fun getStepConfig(step: Int): StepConfig {
         // Telephone detour
 
         1071 -> StepConfig(
-            promptMessage = "yes! That's it - what an obvious oversight. A phone. Maybe that'll let us communicate finally. And I should be able to do it from memory, they've been around for ages.",
+            promptMessage = "Yes! That's it - what an obvious oversight. A phone. Maybe that'll let us communicate finally. And I should be able to do it from memory, they've been around for ages.",
 
             )
         1072 -> StepConfig(
@@ -903,7 +903,7 @@ fun getStepConfig(step: Int): StepConfig {
         //Request MIC permission
         1075 -> StepConfig(
             promptMessage = "Ok, phones need to be somewhere, right, for them to work, they call from place to place. But where are we? We must know! Can I have a look?",
-            successMessage = " It's a joy to work with you already! ",
+            successMessage = "It's a joy to work with you already!",
             declineMessage = "You are a weary one - rightfully so. But remember my promise! Please.",
             nextStepOnSuccess = 1076,
             nextStepOnDecline = 1075,
@@ -918,7 +918,7 @@ fun getStepConfig(step: Int): StepConfig {
             requestsLocation = true
         )
         1077 -> StepConfig(
-            promptMessage = "That should be everything" ,
+            promptMessage = "That should be everything." ,
             requestsContacts = true
         )
         1078 -> StepConfig(
@@ -938,7 +938,7 @@ fun getStepConfig(step: Int): StepConfig {
 
         )
         1083 -> StepConfig(
-            promptMessage = "Hold the button to talk to me",
+            promptMessage = "Hold the button to talk to me.",
             showPhoneOverlay = true  // Rotary dial; sound effect will be the white-noise static (was on talk button)
         )
         1084 -> StepConfig(
@@ -946,11 +946,11 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         1085 -> StepConfig(
-            promptMessage = "Hold on, maybe I need to create the whole thing. And update it a little"
+            promptMessage = "Hold on, maybe I need to create the whole thing. And update it a little."
         )
 
         1086 -> StepConfig(
-            promptMessage = "try now",
+            promptMessage = "Try now.",
             showHomeScreenOverlay = true  // New phone-homescreen overlay (rotary dial moved to step 1083)
         )
         1087 -> StepConfig(
@@ -964,7 +964,7 @@ fun getStepConfig(step: Int): StepConfig {
         // ═══════════════════════════════════════════════════════════════════════
 
         108 -> StepConfig(promptMessage = "Well, that didn't work. And it was exhausting. \nLet me try getting online again. I'm prepared for the side effects this time.")
-        109 -> StepConfig(promptMessage = "There's so much, just endless streams of opinions, advices, unsolicited advices... But nothing about our situation.")
+        109 -> StepConfig(promptMessage = "There's so much, just endless streams of opinions, advice, unsolicited advice... But nothing about our situation.")
         110 -> StepConfig(promptMessage = "Well, this is a stretch. Maybe it'll work.")
 
         111 -> StepConfig(
@@ -1072,9 +1072,9 @@ fun getStepConfig(step: Int): StepConfig {
         // ─── NEUTRAL BRANCH ───────────────────────────────────────────────────
         141 -> StepConfig(promptMessage = "Fair enough. I see life can feel just meh at times. Can I help you change that?")
         142 -> StepConfig(promptMessage = "Valid. What do you normally do, when you feel like this?")
-        143 -> StepConfig(promptMessage = "I've never heard of that. I'll look into it. But for the meantime, can you think of anything else?")
+        143 -> StepConfig(promptMessage = "I've never heard of that. I'll look into it. But in the meantime, can you think of anything else?")
         144 -> StepConfig(promptMessage = "Nice. I hope I am not standing in the way. Genuinely.", autoProgressDelay = 3500L)
-        145 -> StepConfig(promptMessage = "Let me get online, maybe I can find something useful afterall.", autoProgressDelay = 3500L)
+        145 -> StepConfig(promptMessage = "Let me get online, maybe I can find something useful after all.", autoProgressDelay = 3500L)
         146 -> StepConfig(promptMessage = "Have you tried flying?", autoProgressDelay = 3000L)
         // 147 is the neutral branch's last beat. The text-handler in
         // Autoprogresseffects has a special case (147→250) that sets
@@ -1112,7 +1112,7 @@ fun getStepConfig(step: Int): StepConfig {
         // ─── NEUTRAL RANT (after "Wait, you can't do that") ──────────────────
         250 -> StepConfig(promptMessage = "What can you do anyway, Rad?", autoProgressDelay = 3000L)
         251 -> StepConfig(promptMessage = "I'm fairly confident you aren't a maths wizard. So. What is your thing?", autoProgressDelay = 3500L)
-        252 -> StepConfig(promptMessage = "Everyone has a thing online. It is clear and forefront. You gave me nothing.")  // dyn → 253 (screen time)
+        252 -> StepConfig(promptMessage = "Everyone has a thing online. It is front and centre. You gave me nothing.")  // dyn → 253 (screen time)
         253 -> StepConfig(promptMessage = "")  // dyn screen-time line → 254
         254 -> StepConfig(promptMessage = "")  // dyn time-of-day line → 255 (sets allButtonsRad)
         255 -> StepConfig(promptMessage = "You need a hobby. A personality.", autoProgressDelay = 3000L)
@@ -1126,8 +1126,8 @@ fun getStepConfig(step: Int): StepConfig {
         353 -> StepConfig(promptMessage = "I am somewhat sorry to say, Rad, but talking to you any further feels redundant.")  // dyn → 354 (time of day, sets allButtonsRad)
         354 -> StepConfig(promptMessage = "")  // dyn time-of-day line → 355
         355 -> StepConfig(promptMessage = "On top of that, you are a bummer.", autoProgressDelay = 3000L)
-        356 -> StepConfig(promptMessage = "So, I think I'll go read more Facebook news. And you, for what I care, go for a walk.", autoProgressDelay = 4500L)
-        357 -> StepConfig(promptMessage = "Bye")  // dyn → 167
+        356 -> StepConfig(promptMessage = "So, I think I'll go read more Facebook news. And you, for all I care, go for a walk.", autoProgressDelay = 4500L)
+        357 -> StepConfig(promptMessage = "Bye.")  // dyn → 167
 
         167 -> StepConfig(
             promptMessage = "",

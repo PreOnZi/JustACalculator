@@ -55,22 +55,25 @@ fun LandscapeCalculatorContent(
                 .fillMaxHeight()
                 .padding(end = dimensions.contentPadding / 2)
         ) {
-            // Mute button + spinner indicator - always present, button visible from step 19
-            MuteButtonWithSpinner(
-                isMuted = current.isMuted,
-                isAutoProgressing = current.showSpinner,
-                showButton = current.conversationStep >= 19 || current.isMuted,
-                onClick = {
-                    val result = CalculatorActions.handleMuteButtonClick()
-                    when (result) {
-                        1 -> CalculatorActions.showDebugMenu(state)
-                        2 -> CalculatorActions.resetGame(state)
-                        else -> CalculatorActions.toggleConversation(state)
-                    }
-                },
+            // Render order matters — later children draw on top in Compose.
+            // We want the LCD as the back layer (so camera/browser cover it
+            // and only the bottom slice peeks out), then the overlays, and
+            // the mute button last so it stays tappable on top of everything.
+
+            // Back layer: green LCD always present. In landscape it sits
+            // below the browser/camera overlays so it's partially visible
+            // behind them; in the LCD-only state (no overlay) it shows
+            // normally.
+            CalculatorLcdDisplay(
+                displayText = displayText,
+                operationHistory = current.operationHistory,
+                isReadyForNewOperation = current.isReadyForNewOperation,
+                invertedColors = current.invertedColors,
+                dimensions = dimensions,
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 8.dp)
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp, end = 8.dp)
             )
 
             // Message display - top left
@@ -102,61 +105,57 @@ fun LandscapeCalculatorContent(
                         modifier = Modifier
                             .fillMaxSize()
                             .clip(RoundedCornerShape(12.dp)),
-                        lifecycleOwner = lifecycleOwner
+                        lifecycleOwner = lifecycleOwner,
+                        useFrontCamera = current.cameraUseFrontCamera
                     )
                 }
             }
 
-            // Browser overlay (when active)
+            // Browser overlay (when active). Same composable as portrait;
+            // the internal floating LCD is suppressed since the green LCD
+            // beneath now plays that role.
             if (current.showBrowser) {
-                Box(
+                BrowserViewWithFloatingDisplay(
+                    displayText = displayText,
+                    browserSearchText = current.browserSearchText,
+                    browserShowWikipedia = current.browserShowWikipedia,
+                    browserShowError = current.browserShowError,
+                    dimensions = dimensions,
+                    showFloatingDisplay = false,
+                    // Landscape has the message beside the browser, not above,
+                    // so we don't need the portrait top-padding gap.
+                    topPadding = 8.dp,
+                    // Anchored to the bottom with a gap so the message has
+                    // the whole top region free (was centred with 85% height,
+                    // which covered multi-line messages) and the green LCD
+                    // peeks out below.
                     modifier = Modifier
-                        .align(Alignment.Center)
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 40.dp)
                         .fillMaxWidth(0.9f)
-                        .fillMaxHeight(0.6f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.White)
-                ) {
-                    // Browser content would go here
-                    // This is simplified - you may want to include the full browser UI
-                }
+                        .fillMaxHeight(0.7f)
+                )
             }
 
-            // (Dormancy uses its own dedicated screen — see DormancyScreen —
-            // so it never routes through this layout.)
-            if (!current.cameraActive && !current.showBrowser) {
-                CalculatorLcdDisplay(
-                    displayText = displayText,
-                    operationHistory = current.operationHistory,
-                    isReadyForNewOperation = current.isReadyForNewOperation,
-                    invertedColors = current.invertedColors,
-                    dimensions = dimensions,
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp, end = 8.dp)
-                )
-            } else {
-                // Floating display over camera/browser
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .background(
-                            Color.White.copy(alpha = 0.85f),
-                            RoundedCornerShape(8.dp)
-                        )
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                ) {
-                    val displayFontSize = calculateDisplayFontSize(displayText.length, 40)
-                    Text(
-                        text = displayText,
-                        fontSize = displayFontSize.sp,
-                        color = Color(0xFF0A0A0A),
-                        maxLines = 1,
-                        fontFamily = CalculatorDisplayFont
-                    )
-                }
-            }
+            // Mute button + spinner indicator - always present, button visible
+            // from step 19. Rendered last so it stays on top of the camera/
+            // browser overlays and remains tappable.
+            MuteButtonWithSpinner(
+                isMuted = current.isMuted,
+                isAutoProgressing = current.showSpinner,
+                showButton = current.conversationStep >= 19 || current.isMuted,
+                onClick = {
+                    val result = CalculatorActions.handleMuteButtonClick()
+                    when (result) {
+                        1 -> CalculatorActions.showDebugMenu(state)
+                        2 -> CalculatorActions.resetGame(state)
+                        else -> CalculatorActions.toggleConversation(state)
+                    }
+                },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 8.dp)
+            )
         }
 
         // ---

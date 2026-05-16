@@ -153,8 +153,12 @@ fun MessageDisplay(
 ) {
     if (message.isEmpty()) return
 
+    // Landscape gets a proportional max-height but capped so an ultrawide
+    // foldable / short-tall landscape window can't push the LCD and keyboard
+    // off-screen. Portrait stays uncapped since 25% of even tall portrait
+    // displays is already a comfortable upper bound.
     val maxHeight = if (dimensions.isLandscape) {
-        (dimensions.screenHeight.value * 0.6f).dp
+        (dimensions.screenHeight.value * 0.6f).dp.coerceAtMost(360.dp)
     } else {
         (dimensions.screenHeight.value * 0.25f).dp
     }
@@ -301,7 +305,11 @@ fun CalculatorButtonGrid(
     radButtonsConverted: Int,
     rantMode: Boolean,
     onButtonClick: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // Used by dormancy: any symbol in this set is rendered as an empty
+    // placeholder, preserving the grid layout. Empty by default for every
+    // other caller.
+    hiddenSymbols: Set<String> = emptySet()
 ) {
     // Pre-compute which order-position each cellIndex sits at so the per-cell
     // showAsRad lookup below is O(1) instead of indexOf-on-every-recompose.
@@ -327,6 +335,14 @@ fun CalculatorButtonGrid(
             ) {
                 row.forEachIndexed { colIdx, symbol ->
                     val cellIndex = rowIdx * 4 + colIdx
+                    if (symbol in hiddenSymbols) {
+                        Spacer(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                        )
+                        return@forEachIndexed
+                    }
                     val convertedByCount = cellIndex in 0..19 &&
                         orderPositionByIndex[cellIndex] < radButtonsConverted
                     val showAsRad = allButtonsRad || convertedByCount
@@ -373,11 +389,16 @@ fun RadButton(
                 .padding(bottom = 8.dp),
             contentAlignment = Alignment.Center
         ) {
+            // Sized off buttonRowHeight so the RAD button stays in proportion
+            // with the rest of the keypad across small phones and tablets.
+            val radButtonHeight = dimensions.buttonRowHeight
+            val radButtonWidth = radButtonHeight * 2
+            val radLabelSize = (radButtonHeight.value * 0.4f).coerceIn(14f, 24f)
             androidx.compose.material3.Button(
                 onClick = { /* Does nothing */ },
                 modifier = Modifier
-                    .width(100.dp)
-                    .height(50.dp),
+                    .width(radButtonWidth)
+                    .height(radButtonHeight),
                 shape = RoundedCornerShape(8.dp),
                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                     containerColor = Color(0xFF8B0000),
@@ -387,7 +408,7 @@ fun RadButton(
             ) {
                 Text(
                     text = "RAD",
-                    fontSize = 20.sp,
+                    fontSize = radLabelSize.sp,
                     fontWeight = FontWeight.Bold
                 )
             }

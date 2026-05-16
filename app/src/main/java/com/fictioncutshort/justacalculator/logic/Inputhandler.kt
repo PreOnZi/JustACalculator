@@ -79,10 +79,19 @@ object InputHandler {
         onSpecialAction: (SpecialAction) -> Unit
     ) {
         val now = System.currentTimeMillis()
+        val currentState = state.value
+
+        if (isStoryDoubleTapBlocked(currentState)) {
+            // Don't let this press pair with a future one as a ++.
+            lastPlusPress = 0L
+            state.value = CalculatorEngine.setOperation("+", state.value)
+            return
+        }
+
         val isDoubleTap = (now - lastPlusPress) < DOUBLE_PRESS_WINDOW_MS
         lastPlusPress = now
 
-        if (isDoubleTap && state.value.inConversation && !state.value.isMuted) {
+        if (isDoubleTap && currentState.inConversation && !currentState.isMuted) {
             // Double-tap: Story agree action
             handleStoryAgree(state, onSpecialAction)
         } else {
@@ -104,16 +113,38 @@ object InputHandler {
         }
 
         val now = System.currentTimeMillis()
+        val currentState = state.value
+
+        if (isStoryDoubleTapBlocked(currentState)) {
+            lastMinusPress = 0L
+            state.value = CalculatorEngine.setOperation("-", state.value)
+            return
+        }
+
         val isDoubleTap = (now - lastMinusPress) < DOUBLE_PRESS_WINDOW_MS
         lastMinusPress = now
 
-        if (isDoubleTap && state.value.inConversation && !state.value.isMuted) {
+        if (isDoubleTap && currentState.inConversation && !currentState.isMuted) {
             // Double-tap: Story decline action
             StoryManager.handleDecline(state)
         } else {
             // Single tap: Regular - operation
             state.value = CalculatorEngine.setOperation("-", state.value)
         }
+    }
+
+    /**
+     * Returns true if ++ / -- should not trigger a story action right now.
+     * Why: if a step auto-progresses, a stray double-tap at the moment of
+     * progression can land on the next step and unintentionally answer it.
+     * Also blocks while the message is still being typed out, so the user
+     * can't agree/decline before they've read the prompt.
+     */
+    private fun isStoryDoubleTapBlocked(s: CalculatorState): Boolean {
+        if (!s.inConversation) return false
+        if (s.isTyping || s.isLaggyTyping || s.isSuperFastTyping) return true
+        val config = com.fictioncutshort.justacalculator.data.getStepConfig(s.conversationStep)
+        return config.autoProgressDelay > 0L
     }
 
     /**

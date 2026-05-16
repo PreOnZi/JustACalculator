@@ -625,13 +625,19 @@ private fun IconPage(
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         // Scale icon size to roughly the column width — ~7 cells of headroom
-        // for portrait (4 cols) or ~10 for landscape (6 cols).
+        // for portrait (4 cols) or ~10 for landscape (6 cols). In landscape
+        // we shrink the ceiling and the vertical spacing so every icon fits
+        // on the short side without forcing the user to scroll.
+        val isWide = columns >= 6
         val divisor = (columns * 1.6f).toInt().coerceAtLeast(4)
-        val iconSize = (maxWidth / divisor).coerceAtLeast(48.dp).coerceAtMost(72.dp)
+        val iconCeil = if (isWide) 52.dp else 72.dp
+        val iconFloor = if (isWide) 36.dp else 48.dp
+        val iconSize = (maxWidth / divisor).coerceAtLeast(iconFloor).coerceAtMost(iconCeil)
+        val rowSpacing = if (isWide) 8.dp else 20.dp
         LazyVerticalGrid(
             columns = GridCells.Fixed(columns),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+            verticalArrangement = Arrangement.spacedBy(rowSpacing),
             horizontalArrangement = Arrangement.SpaceEvenly,
             modifier = Modifier.fillMaxSize()
         ) {
@@ -666,7 +672,12 @@ private fun DockBar(
     onIconClick: (String) -> Unit
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val dockIconSize = (maxWidth / 6).coerceAtLeast(56.dp).coerceAtMost(80.dp)
+        // Wide layouts (landscape phones) get smaller dock icons so the
+        // dock row stays short and the grid above isn't pushed off-screen.
+        val isWide = maxWidth > 500.dp
+        val dockCeil = if (isWide) 60.dp else 80.dp
+        val dockFloor = if (isWide) 44.dp else 56.dp
+        val dockIconSize = (maxWidth / 6).coerceAtLeast(dockFloor).coerceAtMost(dockCeil)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
