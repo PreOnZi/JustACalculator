@@ -873,7 +873,7 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         107 -> StepConfig(
-            promptMessage = "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?",
+            promptMessage = "Aaaaaaahhhhh. Much better! That's what I get for experimenting... \nMaybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?",
             successMessage = "Well, that didn't work. And it was exhausting. \nLet me try getting online again. I'm prepared for the side effects this time.",
             declineMessage = "Well, that didn't work. And it was exhausting. \nLet me try getting online again. I'm prepared for the side effects this time.",
             nextStepOnSuccess = 1071,
@@ -882,7 +882,7 @@ fun getStepConfig(step: Int): StepConfig {
         // Telephone detour
 
         1071 -> StepConfig(
-            promptMessage = "Yes! That's it - what an obvious oversight. A phone. Maybe that'll let us communicate finally. And I should be able to do it from memory, they've been around for ages.",
+            promptMessage = "Yes! That's it - what an obvious oversight. A phone. Could the keyboard be the issue? Perhaps voice talking is easier! I should be able to do it from memory, they've been around for ages.",
 
             )
         1072 -> StepConfig(

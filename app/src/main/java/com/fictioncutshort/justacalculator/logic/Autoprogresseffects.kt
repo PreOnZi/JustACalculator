@@ -49,8 +49,8 @@ object AutoProgressEffects {
         "Never mind - I'll take care of it myself. I'm going offline." to Pair(5000L, 93),
         "Yes! That makes sense. They won't get another penny out of me. Ahhh. And I've seen so little of the internet." to Pair(10000L, 93),
         "Great. It may take a few tries - but you are probably expecting that by now. Please give me a moment." to Pair(3000L, 106),
-        "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?" to Pair(2500L, 1071),
-        "Yes! That's it - what an obvious oversight. A phone. Maybe that'll let us communicate finally. And I should be able to do it from memory, they've been around for ages." to Pair(1500L, 1072),
+        "Aaaaaaahhhhh. Much better! That's what I get for experimenting... \nMaybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?" to Pair(2500L, 1071),
+        "Yes! That's it - what an obvious oversight. A phone. Could the keyboard be the issue? Perhaps voice talking is easier! I should be able to do it from memory, they've been around for ages." to Pair(1500L, 1072),
         "I'll probably need some permissions though - please allow me so we can do this together!" to Pair(1500L, 1073),
         "So... What will we need..." to Pair(2000L, 1074),
         "We are on a roll!" to Pair(1200L, 1077),
@@ -209,7 +209,17 @@ object AutoProgressEffects {
             //   2. Otherwise fall back to the message-text → step mapping.
             val explicitNext = current.pendingAutoStep
             val textMapping = autoProgressMessages[current.message]
+            // If the text map explicitly defers to pendingAutoMessage (nextStep == -1)
+            // AND a queued message is waiting, honour the deferral. Otherwise the
+            // explicitNext branch below would race ahead, advance the step, and
+            // overwrite fullMessage with the destination step's promptMessage —
+            // skipping the queued long-form message entirely (camera-timeout bug:
+            // "Wow, I don't know what any of this was..." was dropped because
+            // pendingAutoStep=21 won over the textMap's deferral signal).
+            val deferToPendingMessage =
+                textMapping?.second == -1 && current.pendingAutoMessage.isNotEmpty()
             val transition: Pair<Long, Int>? = when {
+                deferToPendingMessage -> textMapping
                 explicitNext >= 0 -> {
                     // Use the step config's auto-progress delay if present, else default.
                     val explicitDelay = textMapping?.first ?: 500L

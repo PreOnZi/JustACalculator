@@ -188,15 +188,15 @@ fun CalculatorScreen() {
     var microphonePermissionDeniedOnce by remember { mutableStateOf(false) }
     var locationPermissionDeniedOnce by remember { mutableStateOf(false) }
     var contactsPermissionDeniedOnce by remember { mutableStateOf(false) }
-    // Tracks an ON_PAUSE while the user was on step 112 (downloads-file
-    // hunt). On the next ON_RESUME we transition to step 1120 ("Did you
-    // find the file?") provided enough time has passed that the user
-    // actually went somewhere. A short bounce (notification shade etc.)
-    // shouldn't fire the question. The "asked" flag keeps the question
-    // from re-firing if the user later backgrounds again at step 112
-    // (e.g. to re-check the file after picking "Yes").
-    var step112PauseTime by remember { mutableStateOf(0L) }
-    var step112QuestionAsked by remember { mutableStateOf(false) }
+    // Downloads-file hunt (step 112): tracks whether the user has actually
+    // backgrounded the app while at step 112. ON_STOP — not ON_PAUSE — is
+    // the authoritative "user left" signal (it doesn't fire for shade-pulls
+    // or transient overlays), so we set the flag there and on the next
+    // ON_RESUME at step 112 we flip to step 1120 ("Did you find the file?").
+    // The flag is persisted so it survives a process kill in the background.
+    // No time-delta heuristic, no in-memory "already asked" flag — the
+    // set-on-leave / clear-on-fire pattern is self-resetting, so the
+    // question fires reliably every time the user backgrounds from step 112.
 
 
 // Lifecycle observer to save state when app goes to background
@@ -207,12 +207,6 @@ fun CalculatorScreen() {
                     // Save current state when app is paused/minimized
                     val currentState = state.value
                     android.util.Log.d("JustACalc", "ON_PAUSE CALLED - current step: ${currentState.conversationStep}")
-                    // Mark the time so ON_RESUME knows whether to fire the
-                    // "Did you find the file?" question (only after a real
-                    // departure, not a momentary shade-pull).
-                    if (currentState.conversationStep == 112) {
-                        step112PauseTime = System.currentTimeMillis()
-                    }
 
                     // Stop rant effects immediately so they don't continue in the background.
                     // The rant step is preserved via persistConversationStep below so it resumes on return.
@@ -266,17 +260,14 @@ fun CalculatorScreen() {
                         state.value = currentState.copy(rantMode = true)
                     }
                     // Downloads-file hunt: if the user backgrounded at step
-                    // 112 (the "check your Downloads folder" prompt) for at
-                    // least 3s, they actually went somewhere — flip to step
-                    // 1120 to ask whether they found it. A momentary
-                    // shade-pull or quick switch shouldn't trigger this,
-                    // and we only ask once per playthrough so a user who
-                    // briefly re-checks the file later doesn't get re-asked.
-                    if (step == 112 &&
-                        !step112QuestionAsked &&
-                        step112PauseTime > 0L &&
-                        System.currentTimeMillis() - step112PauseTime >= 3_000L
-                    ) {
+                    // 112 (the "check your Downloads folder" prompt), the
+                    // ON_STOP handler below set a persisted flag. Now that
+                    // they're back, flip to step 1120 to ask whether they
+                    // found the file. The flag is cleared on fire so the
+                    // question can fire again if the user backgrounds from
+                    // step 112 a second time (e.g. after answering "Yes"
+                    // and returning to verify).
+                    if (step == 112 && CalculatorActions.loadStep112LeftApp()) {
                         val choiceConfig = CalculatorActions.getStepConfigPublic(1120)
                         state.value = state.value.copy(
                             conversationStep = 1120,
@@ -288,8 +279,7 @@ fun CalculatorScreen() {
                             number1 = "0"
                         )
                         CalculatorActions.persistConversationStep(1120)
-                        step112PauseTime = 0L
-                        step112QuestionAsked = true
+                        CalculatorActions.persistStep112LeftApp(false)
                     }
                 }
                 Lifecycle.Event.ON_STOP -> {
@@ -307,6 +297,16 @@ fun CalculatorScreen() {
                     }
                     CalculatorActions.persistConversationStep(stepToSave)
                     CalculatorActions.persistPausedAtStep(stepToSave)
+
+                    // Downloads-file hunt: arm the "Did you find the file?"
+                    // fallback. ON_STOP — not ON_PAUSE — only fires when the
+                    // user actually leaves (home / recents / another app),
+                    // so this filters out shade-pulls and transient overlays
+                    // without needing a time threshold. ON_RESUME consumes
+                    // and clears the flag.
+                    if (currentStep == 112) {
+                        CalculatorActions.persistStep112LeftApp(true)
+                    }
                 }
                 else -> {}
             }
@@ -564,8 +564,14 @@ fun CalculatorScreen() {
         } else {
             // Second denial — give clear instructions instead of a sad line,
             // since we can't ping them via notification when the repair is done.
+            // conversationStep must move off 9911 here, otherwise the retry
+            // trigger LaunchedEffect (keyed on step==9911) fires again as soon
+            // as "Fair..." finishes typing, re-launches the (now permanently
+            // denied) permission, lands back in this else branch, and re-types
+            // "Fair..." a second time.
             val nextConfig = CalculatorActions.getStepConfigPublic(101)
             state.value = state.value.copy(
+                conversationStep = 101,
                 message = "",
                 fullMessage = "Fair. Close the app, then give me 10-20 seconds and come back. I should be done by then.",
                 isTyping = true,
@@ -722,7 +728,11 @@ fun CalculatorScreen() {
                 isTyping = true
             )
         } else {
-            // Second denial – sad message then continue the story
+            // Second denial – sad message then continue the story.
+            // Must move conversationStep off 10741 here, otherwise the retry
+            // trigger LaunchedEffect (keyed on step==10741) fires again when
+            // the sad message finishes typing, re-launches the (now
+            // permanently denied) permission, and re-types the sad message.
             val sadMessage = listOf(
                 "I am sorry you feel this way.",
                 "That is a shame. Oh well.",
@@ -730,6 +740,7 @@ fun CalculatorScreen() {
             ).random()
             val nextConfig = CalculatorActions.getStepConfigPublic(1075)
             state.value = state.value.copy(
+                conversationStep = 1075,
                 message = "",
                 fullMessage = sadMessage,
                 isTyping = true,
@@ -768,7 +779,11 @@ fun CalculatorScreen() {
                 isTyping = true
             )
         } else {
-            // Second denial – sad message then continue the story
+            // Second denial – sad message then continue the story.
+            // Must move conversationStep off 10751 here, otherwise the retry
+            // trigger LaunchedEffect (keyed on step==10751) fires again when
+            // the sad message finishes typing, re-launches the (now
+            // permanently denied) permission, and re-types the sad message.
             val sadMessage = listOf(
                 "I am sorry you feel this way.",
                 "That is a shame. Oh well.",
@@ -776,6 +791,7 @@ fun CalculatorScreen() {
             ).random()
             val nextConfig = CalculatorActions.getStepConfigPublic(1076)
             state.value = state.value.copy(
+                conversationStep = 1076,
                 message = "",
                 fullMessage = sadMessage,
                 isTyping = true,
@@ -814,7 +830,11 @@ fun CalculatorScreen() {
                 isTyping = true
             )
         } else {
-            // Second denial – sad message then continue the story
+            // Second denial – sad message then continue the story.
+            // Must move conversationStep off 10761 here, otherwise the retry
+            // trigger LaunchedEffect (keyed on step==10761) fires again when
+            // the sad message finishes typing, re-launches the (now
+            // permanently denied) permission, and re-types the sad message.
             val sadMessage = listOf(
                 "I am sorry you feel this way.",
                 "That is a shame. Oh well.",
@@ -822,6 +842,7 @@ fun CalculatorScreen() {
             ).random()
             val nextConfig = CalculatorActions.getStepConfigPublic(1077)
             state.value = state.value.copy(
+                conversationStep = 1077,
                 message = "",
                 fullMessage = sadMessage,
                 isTyping = true,
@@ -1754,7 +1775,7 @@ fun CalculatorScreen() {
                         chaosPhase = 0,
                         conversationStep = 107,
                         message = "",
-                        fullMessage = "Aaaaaaahhhhh. That's much better! That's what I get for experimenting... Maybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?",
+                        fullMessage = "Aaaaaaahhhhh. Much better! That's what I get for experimenting... \nMaybe I should try incremental changes before I try to become a BlackBerry.\n\nBut what to change?",
                         isTyping = true
                     )
                     CalculatorActions.persistConversationStep(107)
@@ -1927,7 +1948,7 @@ fun CalculatorScreen() {
                 CalculatorActions.hideDonationPage(state)
             },
             onDonate = {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://ko-fi.com/fictioncutshort"))
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=com.fictioncutshort.justacalculator"))
                 context.startActivity(intent)
             }
         )

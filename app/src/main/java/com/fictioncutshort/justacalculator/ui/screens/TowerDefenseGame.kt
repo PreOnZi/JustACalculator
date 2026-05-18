@@ -313,22 +313,26 @@ private fun TDLevelScreen(
                     .build()
             ).build()
     }
-    // en1–en8: random pool for types 1–3 · en9: enemy4 · en10: enemy5
-    val soundIds = remember {
-        listOf(R.raw.en1, R.raw.en2, R.raw.en3, R.raw.en4,
-               R.raw.en5, R.raw.en6, R.raw.en7, R.raw.en8,
-               R.raw.en9, R.raw.en10)
-            .map { soundPool.load(ctx, it, 1) }
+    // Per-enemy sound pools:
+    //   td_enemy1 → en1, en2, en4, en5
+    //   td_enemy2 → en3
+    //   td_enemy3 → en6, en11
+    //   td_enemy4 → en7, en9, en10
+    //   td_enemy5 → en8, en12
+    val enemySounds = remember {
+        mapOf(
+            1 to listOf(R.raw.en1, R.raw.en2, R.raw.en4, R.raw.en5),
+            2 to listOf(R.raw.en3),
+            3 to listOf(R.raw.en6, R.raw.en11),
+            4 to listOf(R.raw.en7, R.raw.en9, R.raw.en10),
+            5 to listOf(R.raw.en8, R.raw.en12)
+        ).mapValues { (_, resIds) -> resIds.map { soundPool.load(ctx, it, 1) } }
     }
     DisposableEffect(Unit) { onDispose { soundPool.release() } }
 
     fun playEnemySound(enemyType: Int, vol: Float = 1f) {
-        val id = when (enemyType) {
-            4    -> soundIds[8]
-            5    -> soundIds[9]
-            else -> soundIds[(0 until 8).random()]
-        }
-        soundPool.play(id, vol, vol, 1, 0, 1f)
+        val pool = enemySounds[enemyType] ?: return
+        soundPool.play(pool.random(), vol, vol, 1, 0, 1f)
     }
 
     // ── Game state ────────────────────────────────────────────────────────────

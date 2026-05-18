@@ -23,6 +23,7 @@ import com.fictioncutshort.justacalculator.util.PREF_MINUS_BROKEN
 import com.fictioncutshort.justacalculator.util.PREF_MINUS_DAMAGED
 import com.fictioncutshort.justacalculator.util.PREF_MUTED
 import com.fictioncutshort.justacalculator.util.PREF_NEEDS_RESTART
+import com.fictioncutshort.justacalculator.util.PREF_STEP_112_LEFT_APP
 import com.fictioncutshort.justacalculator.util.PREF_TERMS_ACCEPTED
 import com.fictioncutshort.justacalculator.util.PREF_TIMEOUT_UNTIL
 import com.fictioncutshort.justacalculator.data.INTERACTIVE_STEPS
@@ -843,6 +844,11 @@ object CalculatorActions {
 
     }
     fun loadTermsAcceptedPublic(): Boolean = loadTermsAccepted()
+
+    fun persistStep112LeftApp(left: Boolean) {
+        prefs?.edit()?.putBoolean(PREF_STEP_112_LEFT_APP, left)?.commit()
+    }
+    fun loadStep112LeftApp(): Boolean = prefs?.getBoolean(PREF_STEP_112_LEFT_APP, false) ?: false
 
     fun persistTermsAccepted() {
         prefs?.edit()?.putBoolean(PREF_TERMS_ACCEPTED, true)?.commit()
@@ -1969,9 +1975,34 @@ object CalculatorActions {
             }
         }
 
-        // Step 112 specific handling - console code entry
-        if (current.conversationStep == 112 && !current.showConsole) {
+        // Code-entry steps: 112 (Downloads-file path) and 1121 (inline
+        // fallback after "didn't find it"). Both wait for the console code
+        // and must NOT route ++ through handleConversationResponse — that
+        // would overwrite the code prompt with the step's successMessage and
+        // leave the user stuck without the code on screen. The single-tap
+        // "+" branch records the tap WITHOUT calling handleOperator, so
+        // number1 stays clean for the global console-code check at line 1937
+        // on the second tap.
+        val isCodeEntryStep = (current.conversationStep == 112 || current.conversationStep == 1121)
+        if (isCodeEntryStep && !current.showConsole) {
             val now = System.currentTimeMillis()
+            val isStep1121 = current.conversationStep == 1121
+            val repeatPromptMessage = if (isStep1121) {
+                // Re-show the full step 1121 prompt so the code is visible again.
+                getStepConfig(1121).promptMessage
+            } else {
+                "Please check your Downloads folder for 'FCS_JustAC_ConsoleAds.txt'. Enter the code you find there."
+            }
+            val wrongCodeMessage = if (isStep1121) {
+                "That's not the right code. The code is 353942320485."
+            } else {
+                "That's not the right code. Check the file in your Downloads folder."
+            }
+            val declineMessage = if (isStep1121) {
+                "Please enter the code: 353942320485."
+            } else {
+                "Please, I need you to find that file. Check your Downloads folder for 'FCS_JustAC_ConsoleAds.txt'."
+            }
 
             if (action == "+") {
                 if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
@@ -1981,7 +2012,7 @@ object CalculatorActions {
                         // Just ++ with no code entered - repeat the prompt
                         state.value = current.copy(
                             message = "",
-                            fullMessage = "Please check your Downloads folder for 'FCS_JustAC_ConsoleAds.txt'. Enter the code you find there.",
+                            fullMessage = repeatPromptMessage,
                             isTyping = true,
                             number1 = "0"
                         )
@@ -1989,7 +2020,7 @@ object CalculatorActions {
                         // Wrong code - show error
                         state.value = current.copy(
                             message = "",
-                            fullMessage = "That's not the right code. Check the file in your Downloads folder.",
+                            fullMessage = wrongCodeMessage,
                             isTyping = true,
                             number1 = "0"
                         )
@@ -2000,13 +2031,14 @@ object CalculatorActions {
                 } else {
                     lastOp = "+"
                     lastOpTimeMillis = now
+                    return  // Don't fall through to handleOperator — preserves number1.
                 }
             } else if (action == "-") {
                 if (lastOp == "-" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
-                    // User pressed -- at step 112, remind them about the file
+                    // User pressed -- at code-entry step, remind them about the code.
                     state.value = current.copy(
                         message = "",
-                        fullMessage = "Please, I need you to find that file. Check your Downloads folder for 'FCS_JustAC_ConsoleAds.txt'.",
+                        fullMessage = declineMessage,
                         isTyping = true,
                         number1 = "0"
                     )
@@ -2016,6 +2048,7 @@ object CalculatorActions {
                 } else {
                     lastOp = "-"
                     lastOpTimeMillis = now
+                    return
                 }
             }
 
@@ -2032,7 +2065,7 @@ object CalculatorActions {
                 return
             }
 
-            return  // Block all other actions at step 112 to prevent dead ends
+            return  // Block all other actions at code-entry steps to prevent dead ends
         }
 
 

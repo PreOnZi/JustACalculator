@@ -109,6 +109,16 @@ const val PREF_TOTAL_CALCULATIONS = "total_calculations"
 const val PREF_DARK_BUTTONS = "dark_buttons"
 const val PREF_STORY_COMPLETE = "story_complete"
 
+// Downloads-file hunt (step 112): persisted boolean set on ON_STOP
+// while the user is at step 112 (i.e. they actually backgrounded the
+// app, not just pulled the notification shade). On the next ON_RESUME
+// at step 112 the "Did you find the file?" question (step 1120) fires
+// and the flag is cleared. ON_STOP — not ON_PAUSE — is the reliable
+// signal: it only fires when the user truly leaves, so no time-delta
+// heuristic is needed. The flag is persisted so it survives a full
+// process kill in the background.
+const val PREF_STEP_112_LEFT_APP = "step_112_left_app"
+
 // ═══════════════════════════════════════════════════════════════════════════
 // CALCULATOR LIMITS
 // ═══════════════════════════════════════════════════════════════════════════
