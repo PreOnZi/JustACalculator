@@ -12,8 +12,8 @@ android {
         applicationId = "com.fictioncutshort.justacalculator"
         minSdk = 24
         targetSdk = 36
-        versionCode = 11
-        versionName = "1.11"
+        versionCode = 14
+        versionName = "1.14"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -66,7 +66,7 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 
     // 3D model viewer for key examination overlay
-    implementation("io.github.sceneview:sceneview:2.2.1")
+    implementation("io.github.sceneview:sceneview:2.3.0")
 
     // CameraX dependencies - using Kotlin DSL syntax
     val cameraxVersion = "1.5.1"

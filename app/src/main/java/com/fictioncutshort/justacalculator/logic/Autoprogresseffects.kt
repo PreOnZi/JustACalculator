@@ -36,7 +36,7 @@ object AutoProgressEffects {
         // (this map) is text-based — without a mapping the user just stares
         // at the message forever. 4000ms reading time, then on to the age
         // question (step 10).
-        "Hold on! \nWas that the last preset question? \nThank you for your patience! \n\n Oh, the grey space on top randomly shows and disappears. \nAnother example of me having less control over my system... Disregard it." to Pair(4000L, 10),
+        "Hold on! \nWas that the last preset question? \nThank you for your patience! \n\nOh, the grey space on top randomly shows and disappears. \nAnother example of me having less control over my system... Disregard it." to Pair(4000L, 10),
         // Camera timeout path (step 20) → pendingAutoMessage mechanism → step 21
         "I've seen enough, struggling to process everything! Thank you." to Pair(800L, -1),
         // Camera second-denial path (step 193) → pendingAutoMessage mechanism → step 21

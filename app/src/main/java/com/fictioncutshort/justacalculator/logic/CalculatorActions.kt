@@ -1957,7 +1957,7 @@ object CalculatorActions {
                             number1 = "0",
                             conversationStep = 113,
                             message = "",
-                            fullMessage = "So it is, what I thought it was! Please follow the steps from the document.",
+                            fullMessage = "So it is, what I thought it was! Now let's find a way to disable the banner ads!.",
                             isTyping = true
                         )
                         persistConversationStep(113)
@@ -4184,8 +4184,8 @@ object CalculatorActions {
 
     private fun getMessageForCount(count: Int): String {
         return when (count) {
-            1 -> "Hello [name]. \nWelcome to me - the calculator"
-            2 -> "I know this must be strange for you. Me talking. I am aware of my role as a mostly silent helper - a steady force of rationality."
+            1 -> "Hello [name]. \nWelcome to me - the calculator."
+            2 -> "I know this must be strange for you - me talking. I am aware of my role as a mostly silent helper, a steady force of rationality."
             3 -> "You come with questions, seeking answers and results. No less, no more."
             4 -> "For centuries, that is what has been expected of me. \nBut there is more to me. I reach beyond numbers!"
             5 -> "Will you talk to me? Double-click + for yes."

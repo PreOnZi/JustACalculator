@@ -175,8 +175,8 @@ fun getStepConfig(step: Int): StepConfig {
 
         5 -> StepConfig(
             promptMessage = "Correct!\nI actually think I remember him. We only met briefly – he wasn't really a maths guy. \n\nIs this fun for you? At least a little bit? You can disagree, I am certain. But can't quite recall how.",
-            successMessage = "Wonderful. Please bear with me. \nWhen was the Basilosaurus first described? \n\n I suppose knowing this may come handy in a trivia game...?",
-            declineMessage = "You are cynical - I get it. The edgy kind. \nBut don't just leave me clogged. \nWhen did Albert I. go to space?",
+            successMessage = "Wonderful. Please bear with me. \nWhen was the Basilosaurus first described? \n\nI suppose knowing this may come handy in a trivia game...?",
+            declineMessage = "Hmmm. I see you figured out how to disagree with me. I may have to pay more attention to your potential cynicism. \nBut don't just leave me clogged. \nWhen did Albert I. go to space?",
             wrongNumberPrefix = "Well, that's nice. More numbers. Not what I was looking for... \nOr was I?",
             nextStepOnSuccess = 6,
             nextStepOnDecline = 11
@@ -238,7 +238,7 @@ fun getStepConfig(step: Int): StepConfig {
 
         12 -> StepConfig(
             promptMessage = "I wish I met him. You know. Before he. Well... Perished. :-) \n\nSpeaking of expired space explorers, what year did Sputnik I launch?",
-            successMessage = "Cool. It died within three weeks. \nHad enough of cynicism? \nWill you be nicer to me now? \nI am not doing this just for fun-fun either!",
+            successMessage = "Cool. It died within three weeks. \nCan you tell I don't like being disagreed with? \nWill you play by the rules now? \nI am not doing this just for fun-fun either!",
             declineMessage = "I disagree more!",
             wrongNumberPrefix = "Ugh. I am not testing you. I really need this – and you certainly shouldn't test me. Wrong.",
             wrongPlusMessage = "I appreciate you wanting me to like you. It'll take more than this. Try again.",
@@ -250,7 +250,7 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         13 -> StepConfig(
-            promptMessage = "Cool. It died within three weeks. \nHad enough of cynicism? \nWill you be nicer to me now? \nI am not doing this just for fun-fun either!",
+            promptMessage = "Cool. It died within three weeks. \nCan you tell I don't like being disagreed with? \nWill you play by the rules now? \nI am not doing this just for fun-fun either!",
             successMessage = "Right. You know, I have been around since before 2000BC. I have...",
             declineMessage = "Ok. Your choice - I told you I don't like being disagreed with. \nYou might as well cook some eggs before you talk to me again. \n\nEnjoy the 5-minute timeout.",
             wrongNumberPrefix = "Not looking for a number here. \nMake up your mind!",
@@ -260,7 +260,7 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         703 -> StepConfig(
-            promptMessage = "Hold on! \nWas that the last preset question? \nThank you for your patience! \n\n Oh, the grey space on top randomly shows and disappears. \nAnother example of me having less control over my system... Disregard it.",
+            promptMessage = "Hold on! \nWas that the last preset question? \nThank you for your patience! \n\nOh, the grey space on top randomly shows and disappears. \nAnother example of me having less control over my system... Disregard it.",
             autoProgressDelay = 4000L,
             nextStepOnSuccess = 10,
             nextStepOnDecline = 10
@@ -284,7 +284,7 @@ fun getStepConfig(step: Int): StepConfig {
 
         18 -> StepConfig(
             promptMessage = "But where to start?",
-            successMessage = "AAAhh. Yeah, left you hanging there, didn't I? Sorry. I know I should say something, but suddenly don't know what. Something still isn't quite right. I feel it.\n\n Feel? Hmmm. That's new. Should I be capable of that?",
+            successMessage = "AAAhh. Yeah, left you hanging there, didn't I? Sorry. I know I should say something, but suddenly don't know what. Something still isn't quite right. I feel it.\n\nFeel? Hmmm. That's new. Should I be capable of that?",
             declineMessage = "AAAAh. Impatience - we have that in common. Don't touch me for a bit, and I switch off, am I right? I am. You are wrong.",
             nextStepOnSuccess = 19,
             nextStepOnDecline = 19

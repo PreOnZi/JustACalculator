@@ -140,7 +140,7 @@ object WordCategories {
         "irish", "scottish", "welsh", "czech", "hungarian", "romanian",
         "filipino", "hawaiian", "caribbean", "cuban", "jamaican",
         "mediterranean", "persian", "lebanese", "turkish", "israeli",
-        "moroccan", "egyptian", "southern", "comfort",
+        "moroccan", "egyptian", "southern", "comfort", "asian", "oriental",
         "mcdonalds", "burger", "pizza", "pasta", "seafood",
         "steak", "bbq", "barbecue", "diner", "cafe", "bakery", "dessert",
         "vegan", "vegetarian", "organic", "fusion", "modern"
@@ -302,78 +302,72 @@ object LetterGenerator {
     fun getRandomLetter(): Char = weightedLetters.random()
 
     fun getInitialLetterQueue(): List<Char> {
-        // Seed letters across every branch the rewritten word game can ask for
-        // (mood / binary / colour / season / cuisine / activity). The prefill
-        // (PREFILL_ROWS × cols ≈ 48 cells) takes the first N from this list
-        // shuffled, so each answer-word is repeated 3× to guarantee that even
-        // a single rare letter (F for FINE, K for OK, P for HAPPY) is reliably
-        // present at game start. The queue cycles when exhausted, so anything
-        // the calculator might need keeps coming around.
-        val triple = mutableListOf<Char>()
-        fun seed(word: String, copies: Int = 3) {
-            repeat(copies) { triple.addAll(word.toList()) }
+        // Two-section queue. The FRONT is the prefill guarantee: one full copy
+        // of every branch-critical answer word, lightly shuffled so letters
+        // aren't laid out in word-order on the grid. The BACK is the bulk
+        // pool with extra copies for variety and runtime refills after a
+        // word is removed. Because the prefill consumes letters strictly
+        // from the front of the queue, every answer the calculator might
+        // demand is reliably present on the grid the moment the game opens.
+        val guaranteed = mutableListOf<Char>()
+        fun ensure(word: String) { guaranteed.addAll(word.toList()) }
+
+        // ── Mood greeting (step 119) — all three branches must be reachable.
+        ensure("GOOD")      // positive
+        ensure("HAPPY")     // positive
+        ensure("BAD")       // negative
+        ensure("TIRED")     // negative
+        ensure("MEH")       // neutral
+        ensure("OKAY")      // neutral
+
+        // ── Binary YES/NO — every branch hits a binary gate.
+        ensure("YES")
+        ensure("NO")
+
+        // ── Positive branch followups: colour (123), season (125), cuisine (127).
+        ensure("RED")
+        ensure("BLUE")
+        ensure("SPRING")
+        ensure("THAI")
+        ensure("ASIAN")
+
+        // ── Negative branch followups: walk frequency / death freq.
+        ensure("OFTEN")
+        ensure("NEVER")
+
+        // ── Neutral branch followups: activity (step 142).
+        ensure("RUN")
+        ensure("EAT")
+
+        // Light shuffle so the guaranteed letters aren't laid out spelling
+        // each word verbatim, but still all land in the prefill (which draws
+        // from the front of the queue).
+        guaranteed.shuffle()
+
+        // Bulk pool: extras for variety + runtime refill after blocks remove.
+        val bulk = mutableListOf<Char>()
+        fun seed(word: String, copies: Int = 2) {
+            repeat(copies) { bulk.addAll(word.toList()) }
         }
 
-        // ── Mood (steps 119/120) — every common answer the user might try.
-        seed("GOOD")
-        seed("WELL")
-        seed("FINE")
-        seed("BAD")
-        seed("SAD")
-        seed("MEH")
-        seed("OK")
-        seed("HAPPY")
-        seed("TIRED")
-        seed("OKAY")
-        seed("GREAT")
+        // More mood options (variety on the opener).
+        seed("WELL"); seed("FINE"); seed("GREAT"); seed("SAD"); seed("OK")
 
-        // ── Binary yes/no (steps 121, 122, 131, 132, 141) — doubled again
-        //    on top because every branch hits a binary gate.
-        seed("YES", copies = 4)
-        seed("NO", copies = 4)
-
-        // ── Colours (step 123)
-        seed("RED")
-        seed("BLUE")
-        seed("PINK")
-        seed("BROWN")
-        seed("GREEN")
-
-        // ── Seasons (step 125)
-        seed("SPRING")
-        seed("SUMMER")
-        seed("AUTUMN")
-        seed("WINTER")
-
-        // ── Cuisines (step 127). Skipping X/Z cuisines; THAI / SUSHI /
-        //    INDIAN / BURGER cover spicy + non-spicy categories.
-        seed("THAI")
-        seed("SUSHI")
-        seed("INDIAN")
-        seed("BURGER")
-
-        // ── Activities (step 142, neutral branch)
-        seed("RUN")
-        seed("WALK")
-        seed("READ")
-        seed("EAT")
-        seed("SLEEP")
-        seed("SING")
-        seed("COOK")
-        seed("SWIM")
-        seed("YOGA")
-        seed("BAKE")
-
-        // ── Walk frequency / death responses (steps 134, 139)
-        seed("OFTEN")
-        seed("NEVER")
+        // Extra colours / seasons / cuisines / activities so the user can
+        // build multiple valid answers per branch instead of just one.
+        seed("PINK"); seed("BROWN"); seed("GREEN")
+        seed("SUMMER"); seed("AUTUMN"); seed("WINTER")
+        seed("SUSHI"); seed("INDIAN"); seed("BURGER")
+        seed("WALK"); seed("READ"); seed("SLEEP"); seed("SING")
+        seed("COOK"); seed("SWIM"); seed("YOGA"); seed("BAKE")
         seed("DAILY")
 
-        // ── Filler vowels + common consonants for general flexibility
-        triple.addAll(listOf('A', 'E', 'I', 'O', 'U'))
-        triple.addAll(listOf('L', 'N', 'S', 'T', 'R'))
+        // Filler vowels + common consonants for general flexibility.
+        bulk.addAll(listOf('A', 'E', 'I', 'O', 'U'))
+        bulk.addAll(listOf('L', 'N', 'S', 'T', 'R'))
+        bulk.shuffle()
 
-        return triple
+        return guaranteed + bulk
     }
 }
 

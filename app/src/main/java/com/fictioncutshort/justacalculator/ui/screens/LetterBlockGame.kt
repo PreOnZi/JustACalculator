@@ -79,9 +79,6 @@ import kotlin.random.Random
 private const val GRAVITY = 1800f         // px/s²
 private const val MAX_FALL_SPEED = 1400f  // px/s
 private const val SPAWN_INTERVAL_MS = 80L
-// Density target — earlier value of 42 left the screen sparsely populated and
-// the user ran out of usable letters mid-question. Bumped so there's always
-// enough on-screen to spell several different answer words from any branch.
 private const val SELECTION_SUBMIT_DELAY_MS = 250L
 private const val FALL_OUT_DURATION_MS = 700L
 
@@ -124,7 +121,11 @@ fun LetterBlockGame(
         val heightBoundedSize = playAreaHeightPx / (maxBlocksPerColumn + verticalHeadroom)
         val blockSize = kotlin.math.min(widthBoundedSize, heightBoundedSize)
         val cols = max(4, (playAreaWidthPx / blockSize).toInt())
-        val targetBlockCount = (cols * maxBlocksPerColumn * 0.75f).toInt()
+        // Refill to full grid capacity (cols × maxBlocksPerColumn). Earlier
+        // 0.75× cap left the grid permanently below the prefill height after
+        // a few words were removed — each successful answer should put new
+        // letters back from the top until every column is full again.
+        val targetBlockCount = cols * maxBlocksPerColumn
 
         // Internal mutable state. Keyed on isLandscape so flipping orientation
         // resets the grid — block positions are stored in pixel coords for the
@@ -133,15 +134,21 @@ fun LetterBlockGame(
         var blocks by remember(isLandscape) { mutableStateOf<List<Block>>(emptyList()) }
         var selectedIds by remember(isLandscape) { mutableStateOf<List<Int>>(emptyList()) }
         var nextId by remember(isLandscape) { mutableStateOf(0) }
+        // No external shuffle: getInitialLetterQueue() returns a queue whose
+        // front is already a balanced, shuffled set of guaranteed answer-word
+        // letters and whose tail is the shuffled bulk pool. Re-shuffling the
+        // whole thing would scatter the guaranteed letters across the entire
+        // queue and re-introduce the variety problem the layout was built to
+        // solve (some branches would land with no spellable answer at start).
         var letterQueue by remember(isLandscape) {
-            mutableStateOf(LetterGenerator.getInitialLetterQueue().shuffled())
+            mutableStateOf(LetterGenerator.getInitialLetterQueue())
         }
         var fallingOutDeadline by remember(isLandscape) { mutableStateOf(0L) }
         var lockedSubmission by remember(isLandscape) { mutableStateOf(false) }
 
         fun nextLetter(): Char {
             if (letterQueue.isEmpty()) {
-                letterQueue = LetterGenerator.getInitialLetterQueue().shuffled()
+                letterQueue = LetterGenerator.getInitialLetterQueue()
             }
             val letter = letterQueue.first()
             letterQueue = letterQueue.drop(1)
