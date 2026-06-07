@@ -1,842 +1,1870 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
-import android.app.Activity
-import android.content.pm.ActivityInfo
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import com.fictioncutshort.justacalculator.R
+import com.fictioncutshort.justacalculator.ui.components.DonationLandingPage
 import kotlinx.coroutines.delay
-import kotlin.math.*
-import kotlin.random.Random
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  TERRAIN DESIGNER
-//  ─────────────────────────────────────────────────────────────────────────────
-//  Edit the list below to reshape the battlefield.
-//
-//  Each entry:   x-fraction (0.0 = left edge   →   1.0 = right edge)
-//             to y-fraction (0.0 = screen top   →   1.0 = screen bottom)
-//
-//  Lower y  →  taller hill          Higher y  →  deeper valley
-//  Practical range: y ≈ 0.42 (tall peak) … 0.82 (valley floor)
-//
-//  Rules:
-//    • First point x = 0.0, last point x = 1.0
-//    • Points must be in strictly ascending x order
-//    • Keep adjacent y values within ~0.18 of each other for smooth slopes
-// ═══════════════════════════════════════════════════════════════════════════════
-private val TERRAIN_POINTS = listOf(
-    0.00f to 0.72f,   // left flat — subtle escape gate lives here
-    0.08f to 0.71f,
-    0.16f to 0.57f,   // first hill
-    0.24f to 0.73f,   // dip
-    0.33f to 0.76f,   // shallow valley
-    0.42f to 0.61f,   // central hill
-    0.50f to 0.74f,
-    0.58f to 0.64f,   // second hill
-    0.68f to 0.77f,   // valley before enemy
-    0.78f to 0.67f,   // enemy hill
-    0.88f to 0.71f,
-    1.00f to 0.72f    // right flat — enemies spawn here
+// Visual style + behavior tags ────────────────────────────────────────────────
+private const val ICON_DIR_FRESH = "phonescreen/phonedetour"
+private const val ICON_DIR_USED  = "phonescreen/tankgame"
+private const val RETURN_NAME    = "_return_calc"
+
+// Apps that auto-close in 5s (purely-popup style); everything else closes in 10s.
+private val SHORT_APPS = setOf("birds", "candy", "TEMU")
+
+// Apps that opt OUT of the standard auto-close timer until they explicitly
+// signal they're done (via the onReadyToClose callback). Used by Duolingo so
+// the timer can't yank the user out before the upgrade modal has appeared.
+private val GATED_CLOSE_APPS = setOf("duo")
+
+// How long the install animation runs on the Just-A-Calculator tile that shows
+// after every other app has been visited.
+private const val INSTALL_DURATION_MS = 3000
+
+private data class PhoneApp(val name: String, val label: String)
+
+// Grid order matches the original home screen, minus the apps the user asked
+// to drop (gemini, gpt, pictures, spotify, uber).
+private val GRID_APPS = listOf(
+    PhoneApp("airbnb",  "Airbnb"),
+    PhoneApp("fbook",   "Facebook"),
+    PhoneApp("calc",    "Calculator"),
+    PhoneApp("gram",    "Instagram"),
+    PhoneApp("TEMU",    "Temu"),
+    PhoneApp("camera",  "Camera"),
+    PhoneApp("amazon",  "Amazon"),
+    PhoneApp("youtube", "YouTube"),
+    PhoneApp("discord", "Discord"),
+    PhoneApp("tok",     "TikTok"),
+    PhoneApp("birds",   "Angry Birds"),
+    PhoneApp("candy",   "Candy Crush"),
+    PhoneApp("duo",     "Duolingo"),
+    PhoneApp("tetris",  "Tetris"),
 )
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  BALANCE KNOBS — tweak feel without touching game logic
-// ═══════════════════════════════════════════════════════════════════════════════
-private const val GRAVITY           = 650f    // px/s²
-private const val MAX_SHOOT_SPEED   = 920f    // px/s at full power
-private const val TANK_MOVE_SPEED   = 130f    // px/s — player movement
-private const val EXPLOSION_RADIUS  = 58f     // px
-private const val TANK_W            = 52f
-private const val TANK_H            = 22f
-private const val BARREL_LEN        = 36f
-private const val PLAYER_MAX_HP     = 3
-private const val ENEMY_HP          = 2
-// After these turn numbers an extra enemy tank spawns (one per entry)
-private val REINFORCE_AT_TURNS      = listOf(4, 8)
-// Turn on which the player's gun permanently jams
-private const val GUN_JAM_TURN      = 12
-// Player must reach this x-fraction (LEFT side) to escape — gate is intentionally subtle
-private const val ESCAPE_X           = 0.04f
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// ── Data classes ──────────────────────────────────────────────────────────────
-
-private data class TankState(
-    val id: Int,
-    val x: Float,
-    val hp: Int,
-    val isPlayer: Boolean,
-    // 0° = right, 90° = straight up, 180° = left
-    val gunAngle: Float = if (isPlayer) 55f else 125f,
-    val power: Float    = 0.65f
+private val DOCK_APPS = listOf(
+    PhoneApp("phone",     "Phone"),
+    PhoneApp("message",   "Messages"),
+    PhoneApp("mail",      "Mail"),
+    PhoneApp("phonebook", "Contacts"),
 )
 
-private data class Projectile(
-    val x: Float, val y: Float,
-    val vx: Float, val vy: Float,
-    val fromPlayer: Boolean
-)
+private val ALL_APP_NAMES = (GRID_APPS + DOCK_APPS).map { it.name }.toSet()
 
-private data class Explosion(val x: Float, val y: Float, val age: Float = 0f)
-
-private enum class Phase {
-    INIT,
-    PLAYER_TURN,
-    PROJECTILE_FLYING,
-    ENEMY_THINKING,
-    ENEMY_PROJECTILE,
-    REINFORCEMENTS,        // brief pause while new enemy tanks appear
-    GUN_JAMMED_NOTICE,     // message to player that gun is gone
-    GAME_OVER,
-    ESCAPED
-}
-
-// ── Main composable ───────────────────────────────────────────────────────────
-
+/**
+ * Building 3 — phone-app simulation minigame.
+ *
+ * The home grid mirrors the Phase-1 phone overlay, but every app misbehaves on
+ * tap. Each visited app has its icon swapped from the "phonedetour" set to the
+ * "tankgame" set. Once all apps have been visited, a "Just A Calculator" tile
+ * is installed on the home screen — tapping it ends the level (banner +
+ * onComplete which the city view wires to a bridge piece and aerial flyover).
+ */
 @Composable
-fun TankGame(onComplete: () -> Unit, onExit: () -> Unit) {
-    val context  = LocalContext.current
-    val activity = context as? Activity
+fun TankGame(onComplete: () -> Unit) {
+    val context = LocalContext.current
+    // No runtime permissions are needed for the tank game; each app's own
+    // permission gag (if any) lives inside that app, not at building entry.
+    var activeApp by remember { mutableStateOf<String?>(null) }
+    var visited by remember { mutableStateOf(setOf<String>()) }
+    var donationOpen by remember { mutableStateOf(false) }
+    var finishing by remember { mutableStateOf(false) }
+    // Gates the auto-close timer for apps in GATED_CLOSE_APPS. Resets per-app
+    // on open; for ungated apps it's set true immediately; for gated apps it
+    // stays false until the app calls onReadyToClose.
+    var appCloseReady by remember { mutableStateOf(false) }
 
-    DisposableEffect(Unit) {
-        val prev = activity?.requestedOrientation
-        // Lock to landscape for the whole game session — prevents portrait flip-flop.
-        // rememberSaveable on showTankGame (in Calculatorcityview) handles any one-time
-        // Activity recreation that may result from the first orientation change.
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        onDispose { activity?.requestedOrientation = prev ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+    // Reset/seed the close-ready gate when activeApp changes.
+    LaunchedEffect(activeApp) {
+        val a = activeApp
+        appCloseReady = (a != null && a !in GATED_CLOSE_APPS)
     }
 
-    // ── State ─────────────────────────────────────────────────────────────────
-    var canvasW       by remember { mutableStateOf(0f) }
-    var canvasH       by remember { mutableStateOf(0f) }
-    var sizeReady     by remember { mutableStateOf(false) }
-    // Mutable runtime copy of TERRAIN_POINTS — deformed by explosions during play
-    var terrainPoints by remember { mutableStateOf(TERRAIN_POINTS) }
-
-    var tanks      by remember { mutableStateOf(emptyList<TankState>()) }
-    var proj       by remember { mutableStateOf<Projectile?>(null) }
-    var explosions by remember { mutableStateOf(emptyList<Explosion>()) }
-    var phase      by remember { mutableStateOf(Phase.INIT) }
-    var turnCount  by remember { mutableIntStateOf(0) }
-    var gunJammed  by remember { mutableStateOf(false) }
-    var statusMsg  by remember { mutableStateOf("") }
-
-    // Button hold-state (set by UI, read by game loop)
-    var moveLeft   by remember { mutableStateOf(false) }
-    var moveRight  by remember { mutableStateOf(false) }
-    var aimUp      by remember { mutableStateOf(false) }
-    var aimDown    by remember { mutableStateOf(false) }
-
-    // ── Terrain helpers (inline, capture canvasW/H/terrainPoints) ────────────
-    fun groundY(px: Float): Float {
-        if (canvasW <= 0f) return canvasH * 0.72f
-        val xn  = (px / canvasW).coerceIn(0f, 1f)
-        val pts = terrainPoints   // runtime state — updates when explosions deform terrain
-        if (xn <= pts.first().first) return pts.first().second * canvasH
-        if (xn >= pts.last().first)  return pts.last().second  * canvasH
-        var i = 0
-        while (i < pts.size - 1 && pts[i + 1].first < xn) i++
-        val (x0, y0) = pts[i]; val (x1, y1) = pts[i + 1]
-        val t = (xn - x0) / (x1 - x0)
-        return (y0 + t * (y1 - y0)) * canvasH
-    }
-    fun tankTopY(tx: Float) = groundY(tx) - TANK_H
-
-    // Crater a small dip in the terrain around explosion x (normalized coords)
-    fun deformTerrain(ex: Float) {
-        val xn = (ex / canvasW).coerceIn(0f, 1f)
-        terrainPoints = terrainPoints.map { (px, py) ->
-            val dist = kotlin.math.abs(px - xn)
-            if (dist < 0.10f) {
-                val t = 1f - dist / 0.10f
-                px to (py + 0.038f * t * t).coerceAtMost(0.90f)
-            } else px to py
+    // Auto-close timer — only runs once the gate is open.
+    LaunchedEffect(activeApp, appCloseReady) {
+        val a = activeApp ?: return@LaunchedEffect
+        if (!appCloseReady) return@LaunchedEffect
+        val ms = if (a in SHORT_APPS) 5_000L else 10_000L
+        delay(ms)
+        if (activeApp == a) {
+            visited = visited + a
+            activeApp = null
         }
     }
 
-    // ── Spawn initial tanks once canvas size is known ─────────────────────────
-    LaunchedEffect(sizeReady) {
-        if (!sizeReady) return@LaunchedEffect
-        tanks = listOf(
-            TankState(id = 0, x = canvasW * 0.22f, hp = PLAYER_MAX_HP, isPlayer = true),
-            TankState(id = 1, x = canvasW * 0.85f, hp = ENEMY_HP,      isPlayer = false)
-        )
-        delay(700)
-        phase     = Phase.PLAYER_TURN
-        statusMsg = "Your turn — aim and fire"
-    }
-
-    // ── Main game loop (physics + movement) ───────────────────────────────────
-    LaunchedEffect(Unit) {
-        var lastMs = System.currentTimeMillis()
-        while (true) {
-            delay(16)
-            val now = System.currentTimeMillis()
-            val dt  = ((now - lastMs) / 1000f).coerceAtMost(0.05f)
-            lastMs  = now
-
-            if (!sizeReady || canvasW == 0f) continue
-            val ph = phase  // local snapshot — avoids repeated reads
-
-            // ── Player movement + aiming ───────────────────────────────────
-            if (ph == Phase.PLAYER_TURN) {
-                val p = tanks.firstOrNull { it.isPlayer } ?: continue
-                var nx = p.x; var na = p.gunAngle
-                if (moveLeft)               nx = p.x - TANK_MOVE_SPEED * dt
-                if (moveRight)              nx = (p.x + TANK_MOVE_SPEED * dt).coerceAtMost(canvasW - TANK_W / 2f)
-                if (!gunJammed && aimUp)    na = (p.gunAngle + 70f * dt).coerceAtMost(175f)
-                if (!gunJammed && aimDown)  na = (p.gunAngle - 70f * dt).coerceAtLeast(5f)
-
-                // Escape gate check — player drives left into the gate (gate is on the left)
-                if (nx <= canvasW * ESCAPE_X) {
-                    phase     = Phase.ESCAPED
-                    statusMsg = "You escaped!"
-                    continue
-                }
-                nx = nx.coerceAtLeast(TANK_W / 2f)  // normal left wall if past gate
-
-                if (nx != p.x || na != p.gunAngle)
-                    tanks = tanks.map { if (it.isPlayer) it.copy(x = nx, gunAngle = na) else it }
-            }
-
-            // ── Explosion age-out ──────────────────────────────────────────
-            if (explosions.isNotEmpty())
-                explosions = explosions
-                    .map  { it.copy(age = it.age + dt * 1.8f) }
-                    .filter { it.age < 1f }
-
-            // ── Projectile physics ─────────────────────────────────────────
-            val p = proj
-            if (p != null && (ph == Phase.PROJECTILE_FLYING || ph == Phase.ENEMY_PROJECTILE)) {
-                val nx  = p.x  + p.vx * dt
-                val ny  = p.y  + p.vy * dt
-                val nvy = p.vy + GRAVITY * dt
-
-                // Left / right out of bounds — shot missed
-                if (nx < -20f || nx > canvasW + 20f || ny > canvasH + 30f) {
-                    proj  = null
-                    phase = if (p.fromPlayer) nextPhaseAfterPlayerShot(++turnCount, tanks, gunJammed).also {
-                        if (it == Phase.REINFORCEMENTS) statusMsg = "Enemy reinforcements!"
-                        if (it == Phase.GUN_JAMMED_NOTICE) { gunJammed = true; statusMsg = "Your gun jammed!" }
-                        if (it == Phase.ENEMY_THINKING)   statusMsg = "Enemy aiming..."
-                    } else {
-                        statusMsg = "Your turn"; Phase.PLAYER_TURN
-                    }
-                    continue
-                }
-
-                // Terrain collision
-                if (ny >= groundY(nx)) {
-                    explosions = explosions + Explosion(nx, groundY(nx))
-                    deformTerrain(nx)   // crater the ground at impact
-
-                    // Apply blast damage
-                    tanks = tanks.mapNotNull { t ->
-                        val dist = hypot(t.x - nx, tankTopY(t.x) - ny)
-                        val dmg  = if (dist < EXPLOSION_RADIUS) 1 else 0
-                        val newHp = t.hp - dmg
-                        when {
-                            newHp > 0  -> t.copy(hp = newHp)
-                            t.isPlayer -> t.copy(hp = 0)   // keep player alive to show game-over
-                            else       -> null              // remove destroyed enemy
-                        }
-                    }
-                    proj = null
-
-                    // Check player death
-                    if ((tanks.firstOrNull { it.isPlayer }?.hp ?: 0) <= 0) {
-                        phase     = Phase.GAME_OVER
-                        statusMsg = "Tank destroyed..."
-                        continue
-                    }
-
-                    // Advance turn machine
-                    phase = if (p.fromPlayer) nextPhaseAfterPlayerShot(++turnCount, tanks, gunJammed).also { next ->
-                        if (next == Phase.REINFORCEMENTS) {
-                            statusMsg = "Enemy reinforcements!"
-                            spawnEnemyTank(tanks, canvasW).let { tanks = it }
-                        }
-                        if (next == Phase.GUN_JAMMED_NOTICE) { gunJammed = true; statusMsg = "Your gun jammed!" }
-                        if (next == Phase.ENEMY_THINKING)     statusMsg = "Enemy aiming..."
-                    } else {
-                        statusMsg = "Your turn"; Phase.PLAYER_TURN
-                    }
-                    continue
-                }
-
-                proj = p.copy(x = nx, y = ny, vy = nvy)
-            }
+    // "time flies in the apps..." banner → onComplete after a beat.
+    LaunchedEffect(finishing) {
+        if (finishing) {
+            delay(2_200L)
+            onComplete()
         }
     }
 
-    // ── Enemy AI: aim + fire after thinking delay ─────────────────────────────
-    LaunchedEffect(phase) {
-        if (phase != Phase.ENEMY_THINKING) return@LaunchedEffect
-        val enemies = tanks.filter { !it.isPlayer && it.hp > 0 }
-        val player  = tanks.firstOrNull { it.isPlayer } ?: return@LaunchedEffect
-        if (enemies.isEmpty()) { phase = Phase.PLAYER_TURN; statusMsg = "Your turn"; return@LaunchedEffect }
+    val allVisited = visited.containsAll(ALL_APP_NAMES)
 
-        statusMsg = "Enemy aiming..."
-        delay(1100 + Random.nextLong(0, 700))
-
-        val shooter = enemies.random()
-        val adx  = abs(player.x - shooter.x)          // horizontal gap (always +ve)
-        val dy   = tankTopY(player.x) - (tankTopY(shooter.x) - 2f)  // +ve = player is lower
-        val dirX = sign(player.x - shooter.x)          // ±1 — direction to player
-
-        // Physics-based aiming: solve tan(θ) from the standard ballistic equation.
-        // A·tan²(θ) - adx·tan(θ) + (A - dy) = 0,  where A = ½g·adx²/v²
-        val speed = MAX_SHOOT_SPEED * (0.55f + Random.nextFloat() * 0.40f)
-        val v2    = speed.toDouble() * speed.toDouble()
-        val g     = GRAVITY.toDouble()
-        val A     = 0.5 * g * adx.toDouble() * adx.toDouble() / v2
-        val disc  = adx.toDouble() * adx.toDouble() - 4.0 * A * (A - dy.toDouble())
-
-        val baseAngle: Double = if (disc < 0.0) {
-            // Target out of range — 45° gives max range
-            Math.PI / 4.0
-        } else {
-            val sq = sqrt(disc)
-            val s1 = (adx.toDouble() + sq) / (2.0 * A)   // high-arc
-            val s2 = (adx.toDouble() - sq) / (2.0 * A)   // low-arc
-            // Mix low/high arc for variety; clamp to reasonable upward angles
-            val s  = if (Random.nextFloat() < 0.25f && s1 > 0.1) s1 else s2.coerceAtLeast(0.05)
-            atan(s)
-        }
-
-        // ±8° noise — accurate enough to be a real threat, missing enough to be fun
-        val noise    = Math.toRadians((Random.nextFloat() * 16f - 8f).toDouble())
-        val finalAng = (baseAngle + noise).coerceIn(0.10, Math.PI / 2.0 - 0.05)
-
-        proj  = Projectile(
-            x = shooter.x, y = tankTopY(shooter.x) - 2f,
-            vx = (speed * cos(finalAng) * dirX).toFloat(),
-            vy = -(speed * sin(finalAng)).toFloat(),   // always negative = always fires upward
-            fromPlayer = false
-        )
-        phase     = Phase.ENEMY_PROJECTILE
-        statusMsg = "Incoming!"
-    }
-
-    // ── Reinforcements pause ──────────────────────────────────────────────────
-    LaunchedEffect(phase) {
-        if (phase != Phase.REINFORCEMENTS) return@LaunchedEffect
-        delay(2200)
-        // Check if gun jam also fires this turn
-        if (turnCount >= GUN_JAM_TURN && !gunJammed) {
-            gunJammed = true; phase = Phase.GUN_JAMMED_NOTICE; statusMsg = "Your gun jammed!"
-        } else {
-            phase = Phase.ENEMY_THINKING; statusMsg = "Enemy aiming..."
-        }
-    }
-
-    // ── Gun jammed notice ─────────────────────────────────────────────────────
-    LaunchedEffect(phase) {
-        if (phase != Phase.GUN_JAMMED_NOTICE) return@LaunchedEffect
-        delay(2800)
-        phase     = Phase.PLAYER_TURN
-        statusMsg = "Move only — find a way out"
-    }
-
-    // ── UI ────────────────────────────────────────────────────────────────────
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color(0xFF060606))
-    ) {
-        // Main canvas
-        Canvas(Modifier.fillMaxSize()) {
-            // Capture size on first draw
-            if (canvasW != size.width || canvasH != size.height) {
-                canvasW   = size.width
-                canvasH   = size.height
-                sizeReady = true
-            }
-            if (!sizeReady) return@Canvas
-
-            drawSky(size.width, size.height)
-            drawTerrain(::groundY, size.width, size.height)
-            drawEscapeGate(::groundY, size.width)
-            tanks.forEach { t -> drawTank(t, tankTopY(t.x), gunJammed && t.isPlayer) }
-            proj?.let { drawProjectile(it) }
-            explosions.forEach { e -> drawExplosion(e) }
-        }
-
-        // Status bar
-        if (statusMsg.isNotEmpty()) {
-            Text(
-                text       = statusMsg,
-                color      = Color(0xFFEEEEEE),
-                fontSize   = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier   = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 6.dp)
-                    .background(Color(0xCC000000), RoundedCornerShape(6.dp))
-                    .padding(horizontal = 14.dp, vertical = 3.dp)
+    // Calculator install progress — runs once when the user has visited every
+    // other app. Mirrors the Phase-1 install animation so the player gets the
+    // same "icon downloading" beat before they can tap to exit.
+    val installProgress = remember { Animatable(0f) }
+    LaunchedEffect(allVisited) {
+        if (allVisited && installProgress.value < 1f) {
+            installProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = INSTALL_DURATION_MS, easing = LinearEasing)
             )
         }
+    }
 
-        // HP display
-        HpDisplay(tanks = tanks, modifier = Modifier.align(Alignment.TopStart).padding(8.dp))
+    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF101418))) {
+        AsyncImage(
+            model = "file:///android_asset/$ICON_DIR_FRESH/background.svg",
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
 
-        // Turn counter (top-right, not intrusive)
-        if (phase != Phase.INIT && phase != Phase.GAME_OVER && phase != Phase.ESCAPED) {
-            Text(
-                text     = "Turn $turnCount",
-                color    = Color(0x55FFFFFF),
-                fontSize = 11.sp,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 6.dp, end = 42.dp)
-            )
-        }
+        Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+            Spacer(modifier = Modifier.height(20.dp))
 
-        // Controls (only during player turn)
-        if (phase == Phase.PLAYER_TURN) {
-            if (!gunJammed) {
-                val playerPower = tanks.firstOrNull { it.isPlayer }?.power ?: 0.65f
-                Row(
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 80.dp)
-                        .background(Color(0xDD050505), RoundedCornerShape(8.dp))
-                        .border(1.dp, Color(0xFF444444), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 10.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("PWR", color = Color(0xFFAAAAAA), fontSize = 11.sp,
-                        modifier = Modifier.padding(end = 6.dp))
-                    Slider(
-                        value         = playerPower,
-                        onValueChange = { p -> tanks = tanks.map { if (it.isPlayer) it.copy(power = p) else it } },
-                        valueRange    = 0.2f..1.0f,
-                        colors        = SliderDefaults.colors(
-                            thumbColor            = Color(0xFFFFFFFF),
-                            activeTrackColor      = Color(0xFFCCCCCC),
-                            inactiveTrackColor    = Color(0xFF333333)
-                        ),
-                        modifier = Modifier.width(160.dp)
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                if (allVisited) {
+                    item {
+                        InstallingCalcTile(
+                            label = "Just A Calculator",
+                            progress = installProgress.value,
+                            onClick = { finishing = true }
+                        )
+                    }
+                }
+                items(GRID_APPS, key = { it.name }) { app ->
+                    val used = app.name in visited
+                    val dir = if (used) ICON_DIR_USED else ICON_DIR_FRESH
+                    IconTile(
+                        label = app.label,
+                        assetPath = "file:///android_asset/$dir/${app.name}.svg",
+                        enabled = !used,
+                        onClick = { activeApp = app.name }
                     )
                 }
             }
 
-            TankControls(
-                gunJammed   = gunJammed,
-                onMoveLeft  = { moveLeft  = it },
-                onMoveRight = { moveRight = it },
-                onAimUp     = { aimUp     = it },
-                onAimDown   = { aimDown   = it },
-                onFire = {
-                    if (!gunJammed) {
-                        val p = tanks.firstOrNull { it.isPlayer } ?: return@TankControls
-                        val rad   = Math.toRadians(p.gunAngle.toDouble())
-                        val speed = MAX_SHOOT_SPEED * p.power
-                        proj  = Projectile(
-                            x = p.x, y = tankTopY(p.x) - 2f,
-                            vx = (speed * cos(rad)).toFloat(),
-                            vy = -(speed * sin(rad)).toFloat(),
-                            fromPlayer = true
-                        )
-                        phase     = Phase.PROJECTILE_FLYING
-                        statusMsg = ""
-                    }
-                },
-                modifier = Modifier.align(Alignment.BottomCenter)
-            )
+            DockBar(visited = visited, onTap = { activeApp = it })
         }
 
-        // End-game overlay
-        if (phase == Phase.GAME_OVER || phase == Phase.ESCAPED) {
-            GameEndOverlay(
-                escaped    = phase == Phase.ESCAPED,
-                onContinue = { if (phase == Phase.ESCAPED) onComplete() else onExit() }
-            )
-        }
-
-        // Exit button
-        Box(
-            Modifier
-                .align(Alignment.TopEnd)
-                .padding(6.dp)
-                .size(30.dp)
-                .background(Color(0x66000000), CircleShape)
-                .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onExit() },
-            contentAlignment = Alignment.Center
-        ) {
-            Text("✕", color = Color(0x88FFFFFF), fontSize = 14.sp)
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// State-machine helper: what phase comes after the player fires?
-// Called *after* turnCount has already been incremented.
-// ─────────────────────────────────────────────────────────────────────────────
-private fun nextPhaseAfterPlayerShot(
-    newTurn: Int,
-    tanks: List<TankState>,
-    gunJammed: Boolean
-): Phase = when {
-    newTurn in REINFORCE_AT_TURNS      -> Phase.REINFORCEMENTS
-    newTurn >= GUN_JAM_TURN && !gunJammed -> Phase.GUN_JAMMED_NOTICE
-    tanks.none { !it.isPlayer && it.hp > 0 } -> Phase.PLAYER_TURN   // all enemies dead (rare early)
-    else                               -> Phase.ENEMY_THINKING
-}
-
-private fun spawnEnemyTank(current: List<TankState>, canvasW: Float): List<TankState> {
-    val newId  = (current.maxOfOrNull { it.id } ?: 0) + 1
-    val spawnX = canvasW * (0.82f + Random.nextFloat() * 0.10f)
-    return current + TankState(id = newId, x = spawnX, hp = ENEMY_HP, isPlayer = false, gunAngle = 130f)
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Drawing
-// ─────────────────────────────────────────────────────────────────────────────
-
-private fun DrawScope.drawSky(w: Float, h: Float) {
-    // Deep black gradient — barely perceptible, like staring into a dark screen
-    val bands = 20
-    for (i in 0 until bands) {
-        val frac  = i.toFloat() / bands
-        val lum   = 0.02f + frac * 0.06f   // 2%–8% brightness
-        drawRect(
-            Color(lum, lum, lum, 1f),
-            topLeft = Offset(0f, h * frac * 0.62f),
-            size    = Size(w, h * 0.62f / bands + 1f)
-        )
-    }
-    // Faint distant ridge — slightly lighter than the sky, no colour
-    val ridge = Path().apply {
-        moveTo(0f, h * 0.53f)
-        cubicTo(w * 0.20f, h * 0.42f, w * 0.35f, h * 0.51f, w * 0.50f, h * 0.46f)
-        cubicTo(w * 0.65f, h * 0.41f, w * 0.80f, h * 0.53f, w * 1.0f,  h * 0.48f)
-        lineTo(w, h); lineTo(0f, h); close()
-    }
-    drawPath(ridge, Color(0xFF111111))
-}
-
-private fun DrawScope.drawTerrain(groundY: (Float) -> Float, w: Float, h: Float) {
-    val steps = 120
-    val fill = Path().apply {
-        moveTo(0f, groundY(0f))
-        for (i in 1..steps) lineTo(i * w / steps, groundY(i * w / steps))
-        lineTo(w, h); lineTo(0f, h); close()
-    }
-    // Terrain body — very dark, just above pure black
-    drawPath(fill, Color(0xFF141414))
-    val line = Path().apply {
-        moveTo(0f, groundY(0f))
-        for (i in 1..steps) lineTo(i * w / steps, groundY(i * w / steps))
-    }
-    // Soft inner glow just below the surface edge
-    drawPath(line, Color(0x1AFFFFFF), style = Stroke(width = 10f))
-    // Crisp white outline on the surface
-    drawPath(line, Color(0xFFE8E8E8), style = Stroke(width = 2.5f))
-}
-
-private fun DrawScope.drawEscapeGate(groundY: (Float) -> Float, w: Float) {
-    val gx = w * ESCAPE_X
-    val gy = groundY(gx)
-    val gh = 58f; val gw = 6f
-    // Subtle dark-gray posts — deliberately hard to spot until you look for them
-    val postColor = Color(0xFF2A2A2A)
-    drawRect(postColor,          topLeft = Offset(gx - gw - 3f, gy - gh), size = Size(gw, gh))
-    drawRect(postColor,          topLeft = Offset(gx + 3f,      gy - gh), size = Size(gw, gh))
-    drawRect(postColor,          topLeft = Offset(gx - gw - 3f, gy - gh), size = Size(gw * 2f + 6f, 4f))
-    // Just a hair of outline so it reads as a structure rather than terrain noise
-    drawRect(Color(0x33FFFFFF),  topLeft = Offset(gx - gw - 3f, gy - gh), size = Size(gw, gh),           style = Stroke(1f))
-    drawRect(Color(0x33FFFFFF),  topLeft = Offset(gx + 3f,      gy - gh), size = Size(gw, gh),           style = Stroke(1f))
-}
-
-private fun DrawScope.drawTank(t: TankState, topY: Float, gunBroken: Boolean) {
-    val cx      = t.x
-    val dim     = if (t.hp == 1) 0.45f else 1f
-    // Player = bright white outline; enemy = mid-gray
-    val outline = if (t.isPlayer) Color(1f, 1f, 1f, dim) else Color(0.60f, 0.60f, 0.60f, dim)
-    val fill    = Color(0f, 0f, 0f, 0.95f)
-
-    // Tracks — filled dark rect + outline
-    val trackTL = Offset(cx - TANK_W / 2f, topY + TANK_H * 0.72f)
-    val trackSz = Size(TANK_W, TANK_H * 0.33f)
-    drawRect(fill,    topLeft = trackTL, size = trackSz)
-    drawRect(outline, topLeft = trackTL, size = trackSz, style = Stroke(width = 1.5f))
-
-    // Body hull
-    val hullTL = Offset(cx - TANK_W / 2f + 3f, topY)
-    val hullSz = Size(TANK_W - 6f, TANK_H * 0.72f)
-    drawRect(fill,    topLeft = hullTL, size = hullSz)
-    drawRect(outline, topLeft = hullTL, size = hullSz, style = Stroke(width = 2f))
-    // Top-edge highlight shading
-    drawRect(Color(1f, 1f, 1f, 0.10f * dim), topLeft = hullTL, size = Size(hullSz.width, 3f))
-
-    // Turret
-    val turrC = Offset(cx, topY + TANK_H * 0.22f)
-    val turrR = TANK_H * 0.40f
-    drawCircle(fill,    radius = turrR, center = turrC)
-    drawCircle(outline, radius = turrR, center = turrC, style = Stroke(width = 2f))
-
-    // Barrel
-    val barColor = if (gunBroken) Color(0.30f, 0.30f, 0.30f, dim) else outline
-    val rad = Math.toRadians(t.gunAngle.toDouble())
-    drawLine(
-        barColor, strokeWidth = 4f,
-        start = turrC,
-        end   = Offset(
-            (cx + BARREL_LEN * cos(rad)).toFloat(),
-            (topY + TANK_H * 0.22f - BARREL_LEN * sin(rad)).toFloat()
-        )
-    )
-
-    // HP pips above tank
-    for (i in 0 until t.hp.coerceAtLeast(0)) {
-        drawCircle(outline, radius = 3.5f, center = Offset(cx - (t.hp - 1) * 5f + i * 10f, topY - 9f))
-    }
-
-    // Gun broken indicator — ×
-    if (gunBroken) {
-        val iy = topY - 26f; val r = 6f
-        drawLine(Color(0.7f, 0.7f, 0.7f, 0.9f), Offset(cx - r, iy - r), Offset(cx + r, iy + r), strokeWidth = 2.5f)
-        drawLine(Color(0.7f, 0.7f, 0.7f, 0.9f), Offset(cx + r, iy - r), Offset(cx - r, iy + r), strokeWidth = 2.5f)
-    }
-}
-
-private fun DrawScope.drawProjectile(p: Projectile) {
-    // Player shell = bright white; enemy shell = mid-gray so you can tell them apart
-    val core = if (p.fromPlayer) Color(0xFFFFFFFF) else Color(0xFF999999)
-    drawCircle(core.copy(alpha = 0.20f), radius = 10f, center = Offset(p.x, p.y))
-    drawCircle(core.copy(alpha = 0.55f), radius = 6f,  center = Offset(p.x, p.y))
-    drawCircle(core,                     radius = 3.5f, center = Offset(p.x, p.y))
-}
-
-private fun DrawScope.drawExplosion(e: Explosion) {
-    val alpha = (1f - e.age).coerceIn(0f, 1f)
-    val r     = EXPLOSION_RADIUS * (0.3f + e.age * 0.7f)
-    val c     = Offset(e.x, e.y)
-    // Expanding rings — white on black looks like a stark inked blast
-    drawCircle(Color(1f, 1f, 1f, alpha * 0.55f), r,         center = c, style = Stroke(width = 3f))
-    drawCircle(Color(1f, 1f, 1f, alpha * 0.30f), r * 0.65f, center = c, style = Stroke(width = 2f))
-    drawCircle(Color(1f, 1f, 1f, alpha * 0.18f), r * 0.35f, center = c)
-    // Initial white flash at the moment of impact
-    if (e.age < 0.18f) {
-        val flash = (1f - e.age / 0.18f) * 0.75f
-        drawCircle(Color(1f, 1f, 1f, flash), r * 0.20f, center = c)
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Controls
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-private fun TankControls(
-    gunJammed: Boolean,
-    onMoveLeft:  (Boolean) -> Unit,
-    onMoveRight: (Boolean) -> Unit,
-    onAimUp:     (Boolean) -> Unit,
-    onAimDown:   (Boolean) -> Unit,
-    onFire:      () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier.fillMaxWidth().padding(bottom = 20.dp, start = 40.dp, end = 40.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment     = Alignment.Bottom
-    ) {
-        // Move buttons (always visible)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            HoldButton("◀", Color(0xFF111111)) { onMoveLeft(it) }
-            HoldButton("▶", Color(0xFF111111)) { onMoveRight(it) }
-        }
-
-        // Centre: FIRE or jammed notice
-        if (!gunJammed) {
+        // Active app surface.
+        val current = activeApp
+        if (current != null) {
             Box(
-                Modifier
-                    .size(68.dp)
-                    .background(Color(0xFF0A0A0A), CircleShape)
-                    .border(2.dp, Color(0xFFEEEEEE), CircleShape)
-                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onFire() },
-                contentAlignment = Alignment.Center
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { }
             ) {
-                Text("FIRE", color = Color(0xFFEEEEEE), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-            }
-        } else {
-            Text(
-                "GUN JAMMED",
-                color      = Color(0xFFCCCCCC),
-                fontSize   = 13.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign  = TextAlign.Center,
-                modifier   = Modifier
-                    .background(Color(0xDD0A0A0A), RoundedCornerShape(8.dp))
-                    .border(1.dp, Color(0xFF555555), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-            )
-        }
-
-        // Aim buttons (hidden when gun is jammed)
-        if (!gunJammed) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                HoldButton("▲", Color(0xFF111111)) { onAimUp(it) }
-                HoldButton("▼", Color(0xFF111111)) { onAimDown(it) }
-            }
-        } else {
-            Spacer(Modifier.width(112.dp))
-        }
-    }
-}
-
-@Composable
-private fun HoldButton(label: String, baseColor: Color, onDown: (Boolean) -> Unit) {
-    Box(
-        Modifier
-            .size(52.dp)
-            .background(baseColor, RoundedCornerShape(10.dp))
-            .border(1.5.dp, Color(0xFFBBBBBB), RoundedCornerShape(10.dp))
-            .pointerInput(onDown) {
-                awaitPointerEventScope {
-                    while (true) {
-                        val ev = awaitPointerEvent()
-                        when (ev.type) {
-                            PointerEventType.Press   -> onDown(true)
-                            PointerEventType.Release -> onDown(false)
-                            else                     -> {}
-                        }
+                AppShell(
+                    name = current,
+                    openAd = { donationOpen = true },
+                    onReadyToClose = { appCloseReady = true },
+                    onClose = {
+                        visited = visited + current
+                        activeApp = null
                     }
-                }
-            },
-        contentAlignment = Alignment.Center
-    ) {
-        Text(label, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// HUD
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-private fun HpDisplay(tanks: List<TankState>, modifier: Modifier = Modifier) {
-    Column(modifier.padding(4.dp)) {
-        tanks.firstOrNull { it.isPlayer }?.let { p ->
-            HpRow(label = "YOU", hp = p.hp, maxHp = PLAYER_MAX_HP, color = Color(0xFFEEEEEE))
-        }
-        val enemies = tanks.filter { !it.isPlayer }
-        if (enemies.isNotEmpty()) {
-            HpRow(
-                label = "ENEMY ×${enemies.size}",
-                hp    = enemies.sumOf { it.hp },
-                maxHp = enemies.size * ENEMY_HP,
-                color = Color(0xFF888888)
-            )
-        }
-    }
-}
-
-@Composable
-private fun HpRow(label: String, hp: Int, maxHp: Int, color: Color) {
-    Row(
-        Modifier
-            .background(Color(0xCC050505), RoundedCornerShape(4.dp))
-            .padding(horizontal = 8.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text("$label  ", color = color.copy(alpha = 0.7f), fontSize = 11.sp)
-        val filled = hp.coerceIn(0, maxHp)
-        val empty  = (maxHp - filled).coerceAtLeast(0)
-        repeat(filled) {
-            Box(
-                Modifier.padding(end = 2.dp).size(10.dp, 8.dp)
-                    .background(color, RoundedCornerShape(2.dp))
-            )
-        }
-        repeat(empty) {
-            Box(
-                Modifier.padding(end = 2.dp).size(10.dp, 8.dp)
-                    .border(1.dp, color.copy(alpha = 0.25f), RoundedCornerShape(2.dp))
-            )
-        }
-    }
-    Spacer(Modifier.height(4.dp))
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// End-game overlay
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-private fun GameEndOverlay(escaped: Boolean, onContinue: () -> Unit) {
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color(0xCC000000)),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier
-                .background(Color(0xFF050505), RoundedCornerShape(16.dp))
-                .border(1.dp, Color(0xFF444444), RoundedCornerShape(16.dp))
-                .padding(horizontal = 36.dp, vertical = 28.dp)
-        ) {
-            Text(
-                if (escaped) "You got out." else "Tank destroyed.",
-                color      = if (escaped) Color(0xFFEEEEEE) else Color(0xFF888888),
-                fontSize   = 26.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.height(10.dp))
-            Text(
-                if (escaped)
-                    "You couldn't win the fight.\nBut you didn't have to."
-                else
-                    "Sometimes you can't win.\nBut you can always run.",
-                color     = Color(0x88FFFFFF),
-                fontSize  = 14.sp,
-                textAlign = TextAlign.Center
-            )
-            Spacer(Modifier.height(22.dp))
-            Box(
-                Modifier
-                    .background(Color(0xFF0A0A0A), RoundedCornerShape(8.dp))
-                    .border(1.dp, Color(0xFFAAAAAA), RoundedCornerShape(8.dp))
-                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onContinue() }
-                    .padding(horizontal = 28.dp, vertical = 10.dp)
-            ) {
-                Text(
-                    if (escaped) "Continue" else "Try again",
-                    color      = Color(0xFFDDDDDD),
-                    fontSize   = 15.sp,
-                    fontWeight = FontWeight.SemiBold
                 )
             }
         }
+
+        // Donation landing page — same surface the in-app banners open in Phase-1.
+        if (donationOpen) {
+            DonationLandingPage(
+                onDismiss = { donationOpen = false },
+                onDonate = {
+                    val intent = Intent(
+                        Intent.ACTION_VIEW,
+                        Uri.parse("https://play.google.com/store/apps/details?id=com.fictioncutshort.justacalculator")
+                    )
+                    try { context.startActivity(intent) } catch (_: Throwable) {}
+                }
+            )
+        }
+
+        // Completion banner — appears at the moment the user taps the new calc
+        // tile, before the city retakes the screen.
+        if (finishing) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xCC0A1430)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "time flies in the apps...",
+                    color = Color(0xFFE9F2FF),
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = FontFamily.Monospace,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun IconTile(
+    label: String,
+    assetPath: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clickable(
+                enabled = enabled,
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ) { onClick() }
+            .padding(vertical = 4.dp)
+    ) {
+        AsyncImage(
+            model = assetPath,
+            contentDescription = label,
+            modifier = Modifier.size(56.dp).clip(RoundedCornerShape(14.dp))
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(label, color = Color.White, fontSize = 11.sp, textAlign = TextAlign.Center)
+    }
+}
+
+/** Just-A-Calculator install tile — matches the Phase-1 install animation. */
+@Composable
+private fun InstallingCalcTile(
+    label: String,
+    progress: Float,
+    onClick: () -> Unit
+) {
+    val installing = progress < 1f
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clickable(
+                enabled = !installing,
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ) { onClick() }
+            .padding(vertical = 4.dp)
+    ) {
+        Box(
+            modifier = Modifier.size(56.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Image(
+                painter = androidx.compose.ui.res.painterResource(id = R.drawable.calc_app_icon),
+                contentDescription = label,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(14.dp))
+                    .alpha(if (installing) 0.35f else 1f)
+            )
+            if (installing) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val stroke = 4.dp.toPx()
+                    val arcSize = androidx.compose.ui.geometry.Size(
+                        size.width - stroke,
+                        size.height - stroke
+                    )
+                    val topLeft = androidx.compose.ui.geometry.Offset(stroke / 2f, stroke / 2f)
+                    drawArc(
+                        color = Color.White.copy(alpha = 0.25f),
+                        startAngle = -90f,
+                        sweepAngle = 360f,
+                        useCenter = false,
+                        topLeft = topLeft,
+                        size = arcSize,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(
+                            width = stroke,
+                            cap = androidx.compose.ui.graphics.StrokeCap.Round
+                        )
+                    )
+                    drawArc(
+                        color = Color.White,
+                        startAngle = -90f,
+                        sweepAngle = 360f * progress.coerceIn(0f, 1f),
+                        useCenter = false,
+                        topLeft = topLeft,
+                        size = arcSize,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(
+                            width = stroke,
+                            cap = androidx.compose.ui.graphics.StrokeCap.Round
+                        )
+                    )
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(label, color = Color.White, fontSize = 11.sp, textAlign = TextAlign.Center)
+    }
+}
+
+@Composable
+private fun DockBar(visited: Set<String>, onTap: (String) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .height(78.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(Color(0x55101820)),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        for (app in DOCK_APPS) {
+            val used = app.name in visited
+            val dir = if (used) ICON_DIR_USED else ICON_DIR_FRESH
+            AsyncImage(
+                model = "file:///android_asset/$dir/${app.name}.svg",
+                contentDescription = app.label,
+                modifier = Modifier
+                    .size(54.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable(
+                        enabled = !used,
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { onTap(app.name) }
+            )
+        }
+    }
+}
+
+// Dispatcher for the active-app surface. Each app composable is responsible for
+// its own internal popups; it can call openAd() to surface the donation page.
+// A floating close (X) button is overlaid on top of every app's content so the
+// user can always escape, even before the auto-close timer fires.
+@Composable
+private fun AppShell(
+    name: String,
+    openAd: () -> Unit,
+    onReadyToClose: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Box(modifier = Modifier.fillMaxSize().background(Color(0xFFF2F4F7))) {
+        when (name) {
+            "fbook"     -> AppSocialFacebook()
+            "gram"      -> AppSocialInstagram()
+            "tok"       -> AppSocialTikTok()
+            "youtube"   -> AppSocialYouTube()
+            "airbnb"    -> AppAirbnb()
+            "amazon"    -> AppAmazon()
+            "birds"     -> AppNagBox(title = "Purchase more birds?", openAd = openAd)
+            "candy"     -> AppNagBox(title = "Need more lives? Need more golden bars!", openAd = openAd)
+            "calc"      -> AppCalculator()
+            "camera"    -> AppCamera(openAd = openAd)
+            "discord"   -> AppDiscord(onClose = onClose)
+            "duo"       -> AppDuolingo(openAd = openAd, onReadyToClose = onReadyToClose)
+            "mail"      -> AppMail(openAd = openAd)
+            "message"   -> AppMessages()
+            "phone"     -> AppPhone()
+            "phonebook" -> AppContacts()
+            "TEMU"      -> AppTemu()
+            "tetris"    -> AppTetris()
+            else        -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(name, color = Color.Black)
+            }
+        }
+
+        // User-driven close — always available, regardless of auto-close timer.
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(end = 10.dp, top = 6.dp)
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.55f))
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() }
+                ) { onClose() },
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                "×",
+                color = Color.White,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+// ── Per-app stubs — content built out incrementally below ────────────────────
+
+@Composable
+private fun AppSocialFacebook() {
+    // 4 placeholder posts repeated 3× (≈12 cards) so the user can scroll for a
+    // while; copy will be supplied later.
+    val posts = remember { (0 until 12).map { i -> i % 4 } }
+    Column(modifier = Modifier.fillMaxSize().background(Color(0xFFF0F2F5)).statusBarsPadding()) {
+        Box(modifier = Modifier.fillMaxWidth().background(Color.White).padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
+            Text("facebook", color = Color(0xFF1877F2), fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+        }
+        LazyColumn(modifier = Modifier.fillMaxSize().padding(top = 6.dp)) {
+            items(posts.size) { idx ->
+                val n = posts[idx]
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color.White)
+                        .padding(12.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(modifier = Modifier.size(38.dp).clip(CircleShape).background(Color(0xFFD0D7E2)))
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text("User name placeholder ${n + 1}", color = Color(0xFF1C1E21), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            Text("3h · 🌐", color = Color(0xFF65676B), fontSize = 11.sp)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Post text placeholder ${n + 1} — caption will go here.",
+                        color = Color(0xFF1C1E21), fontSize = 14.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(16f / 10f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xFFCBD5DC))
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
+                        for (s in listOf("👍 Like", "💬 Comment", "↗ Share")) {
+                            Text(s, color = Color(0xFF65676B), fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+@Composable
+private fun AppSocialInstagram() {
+    val posts = remember { (0 until 12).map { i -> i % 4 } }
+    Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
+        Box(modifier = Modifier.fillMaxWidth().padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
+            Text("Instagram", color = Color.Black, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+        }
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(posts.size) { idx ->
+                val n = posts[idx]
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(modifier = Modifier.size(34.dp).clip(CircleShape).background(Color(0xFFFFC1E3)))
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text("user_${n + 1}_placeholder", color = Color.Black, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .background(Color(0xFFE3E0DA))
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Text("♡", color = Color.Black, fontSize = 22.sp)
+                        Text("💬", color = Color.Black, fontSize = 18.sp)
+                        Text("↗", color = Color.Black, fontSize = 20.sp)
+                    }
+                    Text(
+                        "user_${n + 1}_placeholder · caption placeholder",
+                        color = Color.Black, fontSize = 13.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+            }
+        }
+    }
+}
+@Composable
+private fun AppSocialTikTok() {
+    // Vertical full-bleed cards, one per post, scrollable.
+    val posts = remember { (0 until 12).map { i -> i % 4 } }
+    LazyColumn(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        items(posts.size) { idx ->
+            val n = posts[idx]
+            val bg = listOf(
+                Color(0xFF1B1A38), Color(0xFF3A1B30),
+                Color(0xFF1B2E2A), Color(0xFF2A2A1B)
+            )[n]
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(540.dp)
+                    .background(bg)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(16.dp)
+                ) {
+                    Text("@user_${n + 1}_placeholder", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("caption placeholder #${n + 1}", color = Color.White, fontSize = 13.sp)
+                }
+                Column(
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(18.dp)
+                ) {
+                    Text("♡", color = Color.White, fontSize = 26.sp)
+                    Text("💬", color = Color.White, fontSize = 22.sp)
+                    Text("↗", color = Color.White, fontSize = 24.sp)
+                }
+            }
+        }
+    }
+}
+@Composable
+private fun AppSocialYouTube() {
+    val posts = remember { (0 until 12).map { i -> i % 4 } }
+    Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
+        Box(modifier = Modifier.fillMaxWidth().padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(modifier = Modifier.width(28.dp).height(20.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFFFF0000)))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("YouTube", color = Color.Black, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(posts.size) { idx ->
+                val n = posts[idx]
+                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(16f / 9f)
+                            .background(Color(0xFFD8D8D8))
+                    )
+                    Row(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                        Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(Color(0xFFB7C6D6)))
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Video title placeholder ${n + 1}", color = Color.Black, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            Text("channel placeholder · 12K views · 4 days ago", color = Color(0xFF606060), fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+@Composable
+private fun AppAirbnb() {
+    // A scrolling list of nothing-but-fees, the joke being that the booking
+    // total is buried under endless service charges.
+    val labels = listOf(
+        "Cleaning fee", "Service fee", "Platform fee", "Convenience fee",
+        "Booking protection", "Guest verification fee", "Local taxes",
+        "Resort fee", "Linen surcharge", "Towel rental", "Wi-Fi access fee",
+        "Smart-lock fee", "Parking fee", "Early-check-in fee", "Late check-out fee",
+        "Pet-not-allowed deposit", "Extra-guest fee", "Trash removal",
+        "Air-conditioning surcharge", "Heating surcharge", "Welcome-basket fee",
+        "Damage-protection plan", "Currency conversion fee", "Payment processing fee",
+        "Host courtesy fee", "Property-tax pass-through", "Insurance levy",
+        "Eco-fee", "Service-recovery fee", "Concierge gratuity",
+        "Booking-confirmation fee", "App-usage fee", "Loyalty-tier upgrade",
+        "Service-fee service fee", "Fee-disclosure fee", "Total."
+    )
+    Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
+        Box(modifier = Modifier.fillMaxWidth().background(Color(0xFFFF385C)).padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
+            Text("Reservation summary", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        }
+        LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+            items(labels) { lbl ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(lbl, color = Color(0xFF222222), fontSize = 14.sp)
+                    Text("$${(7..149).random()}", color = Color(0xFF555555), fontSize = 14.sp)
+                }
+                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFEAEAEA)))
+            }
+        }
+    }
+}
+@Composable
+private fun AppAmazon() {
+    // Half-a-dozen products, every one labelled "Amazon's Choice".
+    data class Prod(val title: String, val price: String, val swatch: Color)
+    val items = listOf(
+        Prod("Universal phone charger (probably)", "$12.99", Color(0xFF7B8794)),
+        Prod("Set of 3 microfibre cloths",          "$6.49",  Color(0xFFAEC7B5)),
+        Prod("LED desk lamp, no instructions",      "$23.00", Color(0xFFF1E0A6)),
+        Prod("Cable organiser (color may vary)",    "$3.99",  Color(0xFF9FB3C8)),
+        Prod("Stainless steel mug, 12oz",           "$14.49", Color(0xFFB7A38C)),
+        Prod("Bluetooth earbuds, 4★ avg.",          "$19.99", Color(0xFF6E7A8A))
+    )
+    Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
+        Box(modifier = Modifier.fillMaxWidth().background(Color(0xFF131921)).padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
+            Text("amazon", color = Color(0xFFFF9900), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        }
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(items) { p ->
+                Row(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                    Box(modifier = Modifier.size(86.dp).clip(RoundedCornerShape(6.dp)).background(p.swatch))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(Color(0xFF232F3E))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text("Amazon's Choice", color = Color(0xFFFF9900), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(p.title, color = Color(0xFF111111), fontSize = 14.sp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(p.price, color = Color(0xFFB12704), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFEAEAEA)))
+            }
+        }
+    }
+}
+@Composable
+private fun AppCalculator() {
+    // Minimal four-function calculator. Builds an expression by tapping digits
+    // and operators; "=" evaluates. Operator precedence is intentionally naive.
+    var display by remember { mutableStateOf("0") }
+    var pending by remember { mutableStateOf<Double?>(null) }
+    var op by remember { mutableStateOf<Char?>(null) }
+    var justEval by remember { mutableStateOf(false) }
+
+    fun tap(c: Char) {
+        when (c) {
+            in '0'..'9' -> {
+                if (display == "0" || justEval) { display = c.toString(); justEval = false }
+                else display += c
+            }
+            '.' -> { if (!display.contains('.')) display += "." }
+            'C' -> { display = "0"; pending = null; op = null; justEval = false }
+            '+', '-', '×', '÷' -> {
+                pending = display.toDoubleOrNull() ?: 0.0
+                op = c
+                justEval = true
+            }
+            '=' -> {
+                val cur = display.toDoubleOrNull() ?: 0.0
+                val p = pending; val o = op
+                if (p != null && o != null) {
+                    val r = when (o) {
+                        '+' -> p + cur
+                        '-' -> p - cur
+                        '×' -> p * cur
+                        '÷' -> if (cur != 0.0) p / cur else 0.0
+                        else -> cur
+                    }
+                    display = if (r == r.toLong().toDouble()) r.toLong().toString() else r.toString()
+                    pending = null; op = null; justEval = true
+                }
+            }
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF1A1B1F))) {
+        Box(
+            modifier = Modifier.fillMaxWidth().padding(16.dp).height(120.dp),
+            contentAlignment = Alignment.BottomEnd
+        ) {
+            Text(display, color = Color.White, fontSize = 56.sp, fontWeight = FontWeight.Light)
+        }
+        val rows = listOf(
+            listOf("C", "(", ")", "÷"),
+            listOf("7", "8", "9", "×"),
+            listOf("4", "5", "6", "-"),
+            listOf("1", "2", "3", "+"),
+            listOf("0", ".", "=")
+        )
+        Column(modifier = Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (row in rows) {
+                Row(modifier = Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for ((i, label) in row.withIndex()) {
+                        val w = if (label == "0") 2f else 1f
+                        Box(
+                            modifier = Modifier
+                                .weight(w)
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(if (label in setOf("+","-","×","÷","=")) Color(0xFFFF9F0A) else Color(0xFF2C2C2E))
+                                .clickable(
+                                    indication = null,
+                                    interactionSource = remember(label + i) { MutableInteractionSource() }
+                                ) { tap(label[0]) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(label, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+@Composable
+private fun AppCamera(openAd: () -> Unit) {
+    // Plain dark "viewfinder" (no scan animation per spec). After 5s an upgrade
+    // popup appears; tapping the CTA opens the donation/Play-Store landing.
+    var showUpgrade by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { delay(5_000L); showUpgrade = true }
+
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.18f))
+        )
+        if (showUpgrade) {
+            Box(
+                modifier = Modifier.fillMaxSize().background(Color(0xCC000000)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0xFFF5F5F7))
+                        .padding(horizontal = 24.dp, vertical = 26.dp)
+                ) {
+                    Text("Want better photos?", color = Color(0xFF101418), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Upgrade your phone today!", color = Color(0xFF36404B), fontSize = 14.sp)
+                    Spacer(modifier = Modifier.height(18.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(Color(0xFF1976D2))
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() }
+                            ) { openAd() }
+                            .padding(horizontal = 24.dp, vertical = 12.dp)
+                    ) {
+                        Text("Upgrade", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+    }
+}
+@Composable
+private fun AppDiscord(onClose: () -> Unit) {
+    // The user automatically attempts to send a file; the "bot" replies with a
+    // Nitro upsell error. Loop a few exchanges then crash to home.
+    data class Line(val who: String, val text: String, val isError: Boolean)
+    var lines by remember { mutableStateOf(listOf<Line>()) }
+    var crashed by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        val seq = listOf(
+            Line("you", "[attaching file.zip]", false),
+            Line("Clyde",  "Error — Subscribe to Discord Nitro to share this file.", true),
+            Line("you", "[retrying file.zip]", false),
+            Line("Clyde",  "Error — Subscribe to Discord Nitro to share this file.", true),
+            Line("you", "[attaching photo.png]", false),
+            Line("Clyde",  "Error — Subscribe to Discord Nitro to share this file.", true),
+            Line("you", "[retrying photo.png]", false),
+            Line("Clyde",  "Error — Subscribe to Discord Nitro to share this file.", true),
+        )
+        for (l in seq) {
+            delay(1_100L)
+            lines = lines + l
+        }
+        delay(800L)
+        crashed = true
+        delay(900L)
+        onClose()
+    }
+
+    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF36393F)).statusBarsPadding()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().background(Color(0xFF2F3136)).padding(start = 12.dp, top = 12.dp, end = 56.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(modifier = Modifier.size(28.dp).clip(CircleShape).background(Color(0xFF5865F2)))
+            Spacer(modifier = Modifier.width(10.dp))
+            Text("# general", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Column(
+            modifier = Modifier.weight(1f).padding(12.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            for ((i, line) in lines.withIndex()) {
+                val color = if (line.isError) Color(0xFFFFC0C0) else Color(0xFFDCDDDE)
+                Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "${line.who}: ",
+                        color = if (line.who == "Clyde") Color(0xFF5865F2) else Color(0xFFB9BBBE),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(line.text, color = color, fontSize = 13.sp)
+                }
+                if (i == lines.lastIndex && line.isError) {
+                    Box(
+                        modifier = Modifier
+                            .padding(start = 56.dp, top = 2.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xFF5865F2))
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text("Get Nitro", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+        if (crashed) {
+            Box(
+                modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.85f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("Discord has stopped.", color = Color.White, fontSize = 18.sp)
+            }
+        }
+    }
+}
+@Composable
+private fun AppDuolingo(openAd: () -> Unit, onReadyToClose: () -> Unit) {
+    // Icelandic word-ordering exercise that the game rigs against the user: every
+    // CHECK is marked wrong (even the correct order), burning a life. After 3 lives
+    // are gone, an "Upgrade to Duolingo Plus" modal pops up with a CTA that routes
+    // through the donation landing page like all the other ads in building 3.
+    val prompt = "The cat drinks milk."
+    val correct = listOf("Kötturinn", "drekkur", "mjólkina")
+    val distractors = listOf("bíllinn", "borðar", "epli", "vatnið")
+    val pickWords = remember { (correct + distractors).shuffled() }
+
+    var placed by remember { mutableStateOf(listOf<String>()) }
+    var lives by remember { mutableStateOf(3) }
+    var showWrongFlash by remember { mutableStateOf(false) }
+    var showUpgrade by remember { mutableStateOf(false) }
+
+    // Wrong-answer flash auto-clears after a beat; the wrong answer is then wiped
+    // from the placed row so the user can take another doomed swing.
+    LaunchedEffect(showWrongFlash) {
+        if (showWrongFlash) {
+            delay(1_200L)
+            placed = emptyList()
+            showWrongFlash = false
+            if (lives <= 0) showUpgrade = true
+        }
+    }
+
+    // Signal the outer auto-close gate the moment the upgrade modal appears.
+    LaunchedEffect(showUpgrade) {
+        if (showUpgrade) onReadyToClose()
+    }
+
+    Box(modifier = Modifier.fillMaxSize().background(Color(0xFFFFFCEF)).statusBarsPadding()) {
+        Column(modifier = Modifier.fillMaxSize().padding(start = 16.dp, end = 56.dp, top = 16.dp, bottom = 16.dp)) {
+            // Header row: prompt label on the left, lives (hearts) on the right.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("Translate this sentence", color = Color(0xFF3C3C3C), fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (i in 0 until 3) {
+                        Text(
+                            if (i < lives) "♥" else "♡",
+                            color = if (i < lives) Color(0xFFFF4B4B) else Color(0xFFBDBDBD),
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.White)
+                    .padding(16.dp)
+            ) {
+                Text(prompt, color = Color(0xFF111111), fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Placed-words row (the answer being built).
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFFFFFFFF))
+                    .padding(10.dp)
+            ) {
+                Row(modifier = Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+                    for ((i, w) in placed.withIndex()) {
+                        DuoChip(text = w, onClick = {
+                            if (!showWrongFlash) placed = placed.toMutableList().also { it.removeAt(i) }
+                        })
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(28.dp))
+
+            // Pick-list (two rows).
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                for (w in pickWords.take(4)) {
+                    if (w in placed) {
+                        Box(modifier = Modifier.weight(1f).height(40.dp))
+                    } else {
+                        Box(modifier = Modifier.weight(1f)) {
+                            DuoChip(text = w, onClick = { if (!showWrongFlash) placed = placed + w })
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                for (w in pickWords.drop(4)) {
+                    if (w in placed) {
+                        Box(modifier = Modifier.weight(1f).height(40.dp))
+                    } else {
+                        Box(modifier = Modifier.weight(1f)) {
+                            DuoChip(text = w, onClick = { if (!showWrongFlash) placed = placed + w })
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(28.dp))
+            val checkEnabled = placed.isNotEmpty() && !showWrongFlash && lives > 0
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(if (checkEnabled) Color(0xFF58CC02) else Color(0xFFC8E6A0))
+                    .clickable(
+                        enabled = checkEnabled,
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) {
+                        // Every answer is wrong. Burn a life and flash.
+                        lives = (lives - 1).coerceAtLeast(0)
+                        showWrongFlash = true
+                    }
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("CHECK", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        // Wrong-answer banner across the bottom.
+        if (showWrongFlash) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(Color(0xFFFFD8D8))
+                    .padding(16.dp)
+            ) {
+                Text("Oops! That's not right.", color = Color(0xFFCC2929), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(2.dp))
+                Text("Correct answer: Kötturinn drekkur mjólkina", color = Color(0xFFCC2929), fontSize = 12.sp)
+            }
+        }
+
+        // Out-of-lives upsell modal.
+        if (showUpgrade) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xCC000000))
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { /* absorb */ },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(28.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color.White)
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("You're out of lives!", color = Color(0xFF111111), fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Upgrade to Duolingo Plus to get unlimited lives.",
+                        color = Color(0xFF555555),
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(18.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(Color(0xFFFFC800))
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() }
+                            ) { openAd() }
+                            .padding(vertical = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "Upgrade Now",
+                            color = Color(0xFF111111),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DuoChip(text: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFFE5E5E5))
+            .clickable(
+                indication = null,
+                interactionSource = remember(text) { MutableInteractionSource() }
+            ) { onClick() }
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Text(text, color = Color(0xFF222222), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+    }
+}
+private data class MailMsg(
+    val sender: String,
+    val subject: String,
+    val body: String,
+    val cta: String?,
+)
+
+private val DOOR3_MAILS = listOf(
+    MailMsg(
+        sender = "eBay",
+        subject = "eBay: There's still time to share your feedback!",
+        body = "Your review matters\n\nYour feedback helps fellow buyers make informed decisions and strengthens the eBay community. Take a moment to share feedback on your recent purchase – it's quick, easy, and makes a big impact.",
+        cta = "Rate Now",
+    ),
+    MailMsg(
+        sender = "Experian",
+        subject = "Experian: Update to your credit score.",
+        body = "Hello, your Experian credit score has changed!\nKnowing your score can help you see where you stand with your finances.\n\nRemember, checking your score will never harm it.",
+        cta = "Check score now",
+    ),
+    MailMsg(
+        sender = "Spotify",
+        subject = "Spotify: Rihanna is coming to your town!",
+        body = "Rihanna and 5+ other artists you love are heading out on tour! Don't miss their gigs near you.",
+        cta = "View events",
+    ),
+    MailMsg(
+        sender = "Grand Dental Clinic",
+        subject = "Grand Dental Clinic hasn't seen you in a while",
+        body = "This is a gentle reminder that you are now overdue for your routine dental & hygiene appointment.\n\nIt's important to maintain healthy teeth and gums and to do this we advise that you attend regular examinations with your Dentist and/or Hygienist. This will help prevent dental problems in the future and ensure you always have a great smile.\n\nTake a moment to book a dental appointment by using our online booking facility and choose the appointment that suits you.",
+        cta = "Book Now",
+    ),
+    MailMsg(
+        sender = "AliExpress",
+        subject = "AliExpress: To pair with what you purchased",
+        body = "Find items to match your Computer Peripherals",
+        cta = "AliExpress",
+    ),
+    MailMsg(
+        sender = "Google",
+        subject = "Google: New Google Account login.",
+        body = "There was a new login to your google account from London at 13:00, Microsoft Edge on Mac.",
+        cta = "It wasn't me",
+    ),
+    MailMsg(
+        sender = "Virgin Atlantic",
+        subject = "Virgin Atlantic: Up to 36,000 reasons to apply",
+        body = "Love travel? Us too! So why not earn points for every trip you book, and even your morning coffee and weekly shop*, to spend on your next adventure.\n\nThere are now only a few days left to take out a Virgin Atlantic Reward+ Credit Card and earn up to 36,000 Virgin Points. Apply before 18th May",
+        cta = "Apply",
+    ),
+    MailMsg(
+        sender = "Wise",
+        subject = "Wise: Ready to earn a return?",
+        body = "You've been busy using your Wise account, but there's one feature you're yet to try — Interest.\n\nUse it to give your money a boost, with a variable* rate of 3.22% on GBP, 1.80% on EUR and 3.39% on USD. Any returns will be added each working day, ready to spend and send straight away.",
+        cta = "Turn on Interest",
+    ),
+    MailMsg(
+        sender = "Udemy",
+        subject = "Udemy: the smartest way to get ahead",
+        body = "30% off for a limited time\n\nThey turned on OOO. You upskilled. Get ahead before the September hiring rush. Terms apply.*",
+        cta = "Enroll now",
+    ),
+    MailMsg(
+        sender = "LinkedIn",
+        subject = "LinkedIn: Here's your verification code 992374",
+        body = "Enter the 6-digit code below to verify your identity and regain access to your LinkedIn account.\n\n992374\n\nThanks for helping us keep your account secure.\nThe LinkedIn Team\n\nWhen and where this happened:\nDate: April 4, 2026 at 3:58 PM GMT\nOperating System: Mac OS X\nBrowser: Edge",
+        cta = null,
+    ),
+)
+
+@Composable
+private fun AppMail(openAd: () -> Unit) {
+    var open by remember { mutableStateOf<Int?>(null) }
+    val o = open
+
+    if (o == null) {
+        Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
+            Box(modifier = Modifier.fillMaxWidth().background(Color(0xFFC5221F)).padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
+                Text("Inbox", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            }
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(DOOR3_MAILS.size) { idx ->
+                    val m = DOOR3_MAILS[idx]
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember(idx) { MutableInteractionSource() }
+                            ) { open = idx }
+                            .padding(14.dp)
+                    ) {
+                        Text(m.sender, color = Color(0xFF111111), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(m.subject, color = Color(0xFF333333), fontSize = 13.sp, maxLines = 2)
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            m.body.substringBefore('\n').take(80),
+                            color = Color(0xFF888888), fontSize = 12.sp, maxLines = 1
+                        )
+                    }
+                    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFEAEAEA)))
+                }
+            }
+        }
+    } else {
+        val m = DOOR3_MAILS[o]
+        Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().background(Color(0xFFC5221F)).padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "←",
+                    color = Color.White,
+                    fontSize = 22.sp,
+                    modifier = Modifier
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() }
+                        ) { open = null }
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text("Inbox", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            }
+            Column(
+                modifier = Modifier
+                    .padding(16.dp)
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(m.subject, color = Color(0xFF111111), fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(6.dp))
+                Text("From: ${m.sender}", color = Color(0xFF555555), fontSize = 12.sp)
+                Spacer(modifier = Modifier.height(14.dp))
+                Text(m.body, color = Color(0xFF222222), fontSize = 14.sp)
+                m.cta?.let { label ->
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFFC5221F))
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() }
+                            ) { openAd() }
+                            .padding(horizontal = 22.dp, vertical = 12.dp)
+                    ) {
+                        Text(
+                            label,
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+private data class TextMsg(val fromMe: Boolean, val body: String, val time: String)
+private data class TextThread(
+    val who: String,
+    val previewSubtitle: String,
+    val previewTime: String,
+    val messages: List<TextMsg>,
+)
+
+private val DOOR3_THREADS: List<TextThread> = run {
+    val ebayCodes = listOf(
+        "26 Mar, 09:14" to "152940",
+        "8 Apr, 18:32"  to "381027",
+        "15 Apr, 22:11" to "742815",
+        "20 Apr, 07:28" to "918302",
+        "23 Apr, 13:55" to "503671",
+        "1 May, 19:41"  to "227648",
+        "5 May, 10:03"  to "839502",
+        "8 May, 12:47"  to "461078",
+        "10 May, 21:19" to "612394",
+        "13 May, 08:55" to "750183",
+        "17 May, 14:38" to "284601",
+        "19 May, 11:12" to "967304",
+        "22 May, 16:30" to "319287",
+        "24 May, 20:48" to "405871",
+        "Today, 11:09"  to "678021",
+    )
+    val ebayThread = TextThread(
+        who = "eBay",
+        previewSubtitle = "eBay: Your security code is 678021. Do not share this code.",
+        previewTime = "Today, 11:09",
+        messages = ebayCodes.map { (t, code) ->
+            TextMsg(false, "eBay: Your security code is $code. Do not share this code.", t)
+        }
+    )
+
+    val amexThread = TextThread(
+        who = "Amex",
+        previewSubtitle = "NEVER share this One-Time Code: 591037. Amex will never call…",
+        previewTime = "23 May, 19:48",
+        messages = listOf(
+            TextMsg(false, "Amex Safe Key code is 482301 for £119.40 transaction attempt for card ending 4859. Never share this code.", "1 Apr, 14:22"),
+            TextMsg(false, "NEVER share this One-Time Code: 731204. Amex will never call to ask for it. If released to someone or not requested, call us using Contact Us on Amex website.", "1 Apr, 14:23"),
+            TextMsg(false, "Amex Safe Key code is 209875 for £18.20 transaction attempt for card ending 4859. Never share this code.", "12 Apr, 09:51"),
+            TextMsg(false, "Amex Safe Key code is 957240 for £49.90 transaction attempt for card ending 4859. Never share this code.", "28 Apr, 22:14"),
+            TextMsg(false, "NEVER share this One-Time Code: 372039. Amex will never call to ask for it. If released to someone or not requested, call us using Contact Us on Amex website.", "5 May, 17:09"),
+            TextMsg(false, "Amex Safe Key code is 681432 for £6.75 transaction attempt for card ending 4859. Never share this code.", "18 May, 12:00"),
+            TextMsg(false, "NEVER share this One-Time Code: 591037. Amex will never call to ask for it. If released to someone or not requested, call us using Contact Us on Amex website.", "23 May, 19:48"),
+        )
+    )
+
+    val wixThread = TextThread(
+        who = "Wix",
+        previewSubtitle = "476105 is your Wix confirmation code.",
+        previewTime = "23 May, 18:33",
+        messages = listOf(
+            TextMsg(false, "382018 is your Wix confirmation code.", "20 Mar, 10:12"),
+            TextMsg(false, "519774 is your Wix confirmation code.", "4 Apr, 22:01"),
+            TextMsg(false, "640281 is your Wix confirmation code.", "19 Apr, 14:30"),
+            TextMsg(false, "207189 is your Wix confirmation code.", "2 May, 09:17"),
+            TextMsg(false, "853624 is your Wix confirmation code.", "14 May, 11:48"),
+            TextMsg(false, "476105 is your Wix confirmation code.", "23 May, 18:33"),
+        )
+    )
+
+    val linkedInThread = TextThread(
+        who = "LinkedIn",
+        previewSubtitle = "Hi there! Thanks for being an active LinkedIn member…",
+        previewTime = "Today, 09:12",
+        messages = listOf(
+            TextMsg(
+                false,
+                "Hi there! Thanks for being an active LinkedIn member. We'd like to offer you another 1-month free trial of LinkedIn Premium.",
+                "Today, 09:12"
+            ),
+        )
+    )
+
+    val mumThread = TextThread(
+        who = "Mum",
+        previewSubtitle = "Are we still on for Saturday?",
+        previewTime = "Today, 09:30",
+        messages = listOf(
+            TextMsg(false, "Can you talk today?", "Thu 21 May, 11:02"),
+            TextMsg(true,  "Sorry, working.",     "Thu 21 May, 11:08"),
+            TextMsg(false, "Hey, haven't heard from you for a while, hope you're doing ok.", "Sun 24 May, 19:44"),
+            TextMsg(true,  "Hey, sorry, work has been a lot. Can you talk on Saturday?",     "Mon 25 May, 21:15"),
+            TextMsg(true,  "Are we still on for Saturday?",                                  "Today, 09:30"),
+        )
+    )
+
+    val beckyThread = TextThread(
+        who = "Becky - Manager",
+        previewSubtitle = "Sure, will be there",
+        previewTime = "Today, 10:11",
+        messages = listOf(
+            TextMsg(false, "Hey, can you come in extra today? We're short.",                  "Wed 20 May, 08:12"),
+            TextMsg(true,  "yes, can be there in 30 minutes.",                                "Wed 20 May, 08:14"),
+            TextMsg(true,  "Hey Becky, sorry, I'm running a little late. Will be there in 10.","Wed 20 May, 09:24"),
+            TextMsg(false, "Have you booked Saturday off?",                                   "Today, 10:02"),
+            TextMsg(true,  "Yeah, need me to work?",                                          "Today, 10:05"),
+            TextMsg(false, "Yeah, we've got the big boss coming in, can you do 05:00 – 13:00?","Today, 10:07"),
+            TextMsg(true,  "Sure, will be there",                                             "Today, 10:11"),
+        )
+    )
+
+    // Inbox order: most-recent first.
+    listOf(ebayThread, beckyThread, mumThread, linkedInThread, amexThread, wixThread)
+}
+
+@Composable
+private fun AppMessages() {
+    var open by remember { mutableStateOf<Int?>(null) }
+    val o = open
+
+    if (o == null) {
+        Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
+            Box(modifier = Modifier.fillMaxWidth().background(Color(0xFF1976D2)).padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
+                Text("Messages", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            }
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(DOOR3_THREADS.size) { idx ->
+                    val t = DOOR3_THREADS[idx]
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember(idx) { MutableInteractionSource() }
+                            ) { open = idx }
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(Color(0xFFBFD7EA)))
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(t.who, color = Color(0xFF111111), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                Text(t.previewTime, color = Color(0xFF999999), fontSize = 11.sp)
+                            }
+                            Text(t.previewSubtitle, color = Color(0xFF777777), fontSize = 12.sp, maxLines = 1)
+                        }
+                    }
+                    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFEAEAEA)))
+                }
+            }
+        }
+    } else {
+        val t = DOOR3_THREADS[o]
+        Column(modifier = Modifier.fillMaxSize().background(Color(0xFFF7F7F7)).statusBarsPadding()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().background(Color(0xFF1976D2)).padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "←",
+                    color = Color.White, fontSize = 22.sp,
+                    modifier = Modifier
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() }
+                        ) { open = null }
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(t.who, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            }
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                var lastTime = ""
+                for (m in t.messages) {
+                    if (m.time != lastTime) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Text(m.time, color = Color(0xFF888888), fontSize = 10.sp)
+                        }
+                        lastTime = m.time
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = if (m.fromMe) Arrangement.End else Arrangement.Start
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .padding(horizontal = 4.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(if (m.fromMe) Color(0xFF1976D2) else Color(0xFFE5E5EA))
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                m.body,
+                                color = if (m.fromMe) Color.White else Color(0xFF111111),
+                                fontSize = 13.sp,
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+        }
+    }
+}
+@Composable
+private fun AppPhone() {
+    // Plain dial-pad. Per spec the phone app "doesn't do anything new" — just a
+    // visual so the user can see they tapped it. Number keys are anchored to the
+    // lower half of the screen like a real dialer.
+    val rows = listOf(
+        listOf("1","2","3"), listOf("4","5","6"),
+        listOf("7","8","9"), listOf("*","0","#")
+    )
+    Column(
+        modifier = Modifier.fillMaxSize().background(Color(0xFF101418)).statusBarsPadding(),
+    ) {
+        // Number-entry display area at the top
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 28.dp, top = 24.dp, end = 56.dp, bottom = 24.dp)
+                .height(72.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("", color = Color.White, fontSize = 28.sp)
+        }
+        // Spacer pushes the keypad to the bottom half of the screen.
+        Spacer(modifier = Modifier.weight(1f))
+        Column(
+            modifier = Modifier.padding(horizontal = 32.dp).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            for (r in rows) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    for (d in r) {
+                        Box(
+                            modifier = Modifier
+                                .size(70.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF1F2630)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(d, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Light)
+                        }
+                    }
+                }
+            }
+        }
+        // Big green call button area, anchored above bottom safe-area padding.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 18.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF2EAE5C)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("✆", color = Color.White, fontSize = 24.sp)
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+@Composable
+private fun AppContacts() {
+    // Mix of normal-person contacts and a handful of ad entries with a tiny
+    // "AD" marker — same layout regardless of contact-permission outcome.
+    data class Row(val name: String, val isAd: Boolean)
+    val rows = remember {
+        val plain = listOf(
+            "Mum", "Dad", "Becky - Manager", "Jamie", "Sam", "Emily", "Alex",
+            "Chris", "Priya", "Liam", "Ava", "Noah", "Olivia", "Ethan",
+            "Sophie", "Marcus", "Hannah", "Tom (Pub Quiz)", "Aunt Karen",
+            "Dr. Patel", "Landlord", "Plumber Steve"
+        ).map { Row(it, isAd = false) }
+        val ads = listOf(
+            "The Insurance Lawyer",
+            "The Teeth Doctor",
+            "The Best Car Recovery",
+            "Cheapest Locksmith In Town",
+            "Cash-For-Phones (24h)"
+        ).map { Row(it, isAd = true) }
+        // Sort plain contacts alphabetically so the list reads like a real
+        // address book; ads are interleaved by shuffling them into the result.
+        val sorted = plain.sortedBy { it.name }
+        val mixed = sorted.toMutableList()
+        for ((i, ad) in ads.withIndex()) {
+            val pos = ((i + 1) * (mixed.size + 1) / (ads.size + 1)).coerceIn(0, mixed.size)
+            mixed.add(pos, ad)
+        }
+        mixed
+    }
+    Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
+        Box(modifier = Modifier.fillMaxWidth().background(Color(0xFF263238)).padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
+            Text("Contacts", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        }
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(rows) { r ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(modifier = Modifier.size(36.dp).clip(CircleShape).background(Color(0xFFE0E0E0)))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(r.name, color = Color(0xFF111111), fontSize = 15.sp, modifier = Modifier.weight(1f))
+                    if (r.isAd) {
+                        Text(
+                            "AD",
+                            color = Color(0xFF888888).copy(alpha = 0.55f),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFEAEAEA)))
+            }
+        }
+    }
+}
+@Composable
+private fun AppTemu() {
+    // Single full-bleed banner. The 5-second auto-close is handled by the
+    // global SHORT_APPS timer in TankGame().
+    Box(modifier = Modifier.fillMaxSize().background(Color(0xFFFF7A1A)), contentAlignment = Alignment.Center) {
+        Text(
+            "PAY FOR SHIPPING ONLY",
+            color = Color.White,
+            fontSize = 34.sp,
+            fontWeight = FontWeight.ExtraBold,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+@Composable
+private fun AppTetris() {
+    // Minimal-but-functional Tetris on a 6×10 board. Each filled cell is rendered
+    // as a phone-app icon — both for the currently-falling piece and for locked
+    // cells on the board. Standard tetromino shapes (I/O/T/J/L/S/Z) spawn at the
+    // top in random orientation; left/right/rotate/drop controls live below the
+    // playfield. Filled rows clear; piece can't spawn → game over.
+    val cols = 6
+    val rows = 10
+    val iconPool = remember {
+        listOf(
+            "fbook", "gram", "tok", "youtube", "airbnb", "amazon",
+            "discord", "duo", "calc", "camera", "candy", "birds", "TEMU"
+        )
+    }
+    val shapes = remember {
+        listOf(
+            listOf(0 to 0, 1 to 0, 2 to 0, 3 to 0), // I
+            listOf(0 to 0, 1 to 0, 0 to 1, 1 to 1), // O
+            listOf(0 to 0, 1 to 0, 2 to 0, 1 to 1), // T
+            listOf(0 to 0, 1 to 0, 2 to 0, 0 to 1), // J
+            listOf(0 to 0, 1 to 0, 2 to 0, 2 to 1), // L
+            listOf(1 to 0, 2 to 0, 0 to 1, 1 to 1), // S
+            listOf(0 to 0, 1 to 0, 1 to 1, 2 to 1), // Z
+        )
+    }
+
+    var board by remember { mutableStateOf(Array(rows) { arrayOfNulls<String>(cols) }) }
+    var pieceCells by remember { mutableStateOf<List<Pair<Int, Int>>>(emptyList()) }
+    var pieceIcons by remember { mutableStateOf<List<String>>(emptyList()) }
+    var gameOver by remember { mutableStateOf(false) }
+    var score by remember { mutableStateOf(0) }
+
+    fun isFree(c: Int, r: Int): Boolean {
+        if (c < 0 || c >= cols || r < 0 || r >= rows) return false
+        return board[r][c] == null
+    }
+    fun fits(cells: List<Pair<Int, Int>>): Boolean = cells.all { isFree(it.first, it.second) }
+
+    fun spawn() {
+        val shape = shapes.random()
+        val maxC = shape.maxOf { it.first }
+        val offset = ((cols - 1 - maxC) / 2).coerceAtLeast(0)
+        val cells = shape.map { (c, r) -> Pair(c + offset, r) }
+        if (!fits(cells)) {
+            gameOver = true
+            pieceCells = emptyList()
+            pieceIcons = emptyList()
+            return
+        }
+        pieceCells = cells
+        pieceIcons = cells.map { iconPool.random() }
+    }
+
+    fun lockPiece() {
+        if (pieceCells.isEmpty()) return
+        val nb = Array(rows) { board[it].copyOf() }
+        for ((i, cell) in pieceCells.withIndex()) {
+            val (c, r) = cell
+            if (r in 0 until rows && c in 0 until cols) nb[r][c] = pieceIcons[i]
+        }
+        // Clear full rows: keep the ones with any empty cell; collapse downward.
+        val keep = (0 until rows).filter { r -> nb[r].any { it == null } }
+        val cleared = rows - keep.size
+        val cleaned = Array(rows) { arrayOfNulls<String>(cols) }
+        var dst = rows - 1
+        for (r in keep.reversed()) {
+            cleaned[dst] = nb[r]
+            dst--
+        }
+        board = cleaned
+        if (cleared > 0) score += cleared * 100
+        pieceCells = emptyList()
+        pieceIcons = emptyList()
+    }
+
+    fun tryMove(dc: Int, dr: Int): Boolean {
+        if (pieceCells.isEmpty()) return false
+        val next = pieceCells.map { Pair(it.first + dc, it.second + dr) }
+        return if (fits(next)) { pieceCells = next; true } else false
+    }
+
+    fun tryRotate() {
+        if (pieceCells.isEmpty()) return
+        // Rotate 90° clockwise around the piece's first cell. Cheap and works
+        // adequately for these small tetrominoes inside a 6-wide board.
+        val pivot = pieceCells[0]
+        val next = pieceCells.map { (c, r) ->
+            val dx = c - pivot.first
+            val dy = r - pivot.second
+            Pair(pivot.first - dy, pivot.second + dx)
+        }
+        if (fits(next)) pieceCells = next
+    }
+
+    fun hardDrop() {
+        while (tryMove(0, 1)) { /* keep dropping */ }
+        lockPiece()
+        spawn()
+    }
+
+    // Game loop — gravity + spawn.
+    LaunchedEffect(Unit) {
+        spawn()
+        while (true) {
+            delay(700L)
+            if (gameOver) break
+            if (pieceCells.isEmpty()) {
+                spawn()
+            } else if (!tryMove(0, 1)) {
+                lockPiece()
+                spawn()
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().background(Color(0xFF0F1729)).statusBarsPadding().padding(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(end = 56.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("TETRIS", color = Color(0xFFFFCC00), fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+            Text(
+                if (gameOver) "GAME OVER" else "Score $score",
+                color = if (gameOver) Color(0xFFFF6464) else Color(0xFFCCD6E8),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(cols.toFloat() / rows.toFloat())
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF1A2440))
+        ) {
+            // Empty-cell grid.
+            Column(modifier = Modifier.fillMaxSize()) {
+                for (r in 0 until rows) {
+                    Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                        for (c in 0 until cols) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxSize()
+                                    .padding(1.dp)
+                                    .background(Color(0xFF243056))
+                            )
+                        }
+                    }
+                }
+            }
+            // Filled cells — locked board first, falling piece on top.
+            Column(modifier = Modifier.fillMaxSize()) {
+                for (r in 0 until rows) {
+                    Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                        for (c in 0 until cols) {
+                            val locked = board[r][c]
+                            val activeIdx = pieceCells.indexOf(Pair(c, r))
+                            val pieceIcon = if (activeIdx >= 0) pieceIcons.getOrNull(activeIdx) else null
+                            val drawIcon = pieceIcon ?: locked
+                            Box(modifier = Modifier.weight(1f).fillMaxSize().padding(2.dp)) {
+                                if (drawIcon != null) {
+                                    AsyncImage(
+                                        model = "file:///android_asset/$ICON_DIR_FRESH/$drawIcon.svg",
+                                        contentDescription = null,
+                                        modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(3.dp))
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Game-over scrim
+            if (gameOver) {
+                Box(
+                    modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("GAME OVER", color = Color(0xFFFFD8D8), fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        // Controls
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            TetrisCtl("◀", enabled = !gameOver) { tryMove(-1, 0) }
+            TetrisCtl("⟲", enabled = !gameOver) { tryRotate() }
+            TetrisCtl("▼", enabled = !gameOver) { hardDrop() }
+            TetrisCtl("▶", enabled = !gameOver) { tryMove(1, 0) }
+        }
+    }
+}
+
+@Composable
+private fun TetrisCtl(label: String, enabled: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(56.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (enabled) Color(0xFF1A2440) else Color(0xFF101820))
+            .clickable(
+                enabled = enabled,
+                indication = null,
+                interactionSource = remember(label) { MutableInteractionSource() }
+            ) { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun AppNagBox(title: String, openAd: () -> Unit) {
+    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF101418)), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color(0xFFF7EAD0))
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() }
+                ) { openAd() }
+                .padding(horizontal = 26.dp, vertical = 22.dp)
+        ) {
+            Text(title, color = Color(0xFF14202F), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun AppStub(label: String) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text(label, color = Color(0xFF14202F), fontSize = 18.sp)
     }
 }

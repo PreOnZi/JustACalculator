@@ -257,6 +257,9 @@ private fun validTowerSpots(
 
 @Composable
 fun TowerDefenseGame(onComplete: () -> Unit) {
+    // No runtime permissions are needed for tower-defense — keep the system
+    // permission dialog out of the entry flow so it only appears in the
+    // buildings / phase-1 beats that actually use the underlying APIs.
     var levelIdx       by remember { mutableIntStateOf(0) }
     var resetKey       by remember { mutableIntStateOf(0) }
     var totalReached   by remember { mutableIntStateOf(0) }

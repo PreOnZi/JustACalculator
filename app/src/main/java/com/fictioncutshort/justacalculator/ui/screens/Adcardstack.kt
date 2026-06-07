@@ -246,10 +246,15 @@ fun AdCardStack(
     // Persist city phase only when transitioning into it, not on initial composition
     var previousPhase by remember { mutableStateOf(phase) }
     LaunchedEffect(phase) {
+        android.util.Log.d("JustACalc", "TANK-DEBUG AdCardStack phase=$phase (prev=$previousPhase)")
         if (phase == AdCardPhase.CITY && previousPhase != AdCardPhase.CITY) {
             onCityEntered()
         }
         previousPhase = phase
+    }
+    DisposableEffect(Unit) {
+        android.util.Log.d("JustACalc", "TANK-DEBUG AdCardStack ENTER composition (startAtCity=$startAtCity, phase=$phase)")
+        onDispose { android.util.Log.d("JustACalc", "TANK-DEBUG AdCardStack LEAVE composition") }
     }
 
     // Hint nudge: auto-nudges the top card left/right after 2s idle

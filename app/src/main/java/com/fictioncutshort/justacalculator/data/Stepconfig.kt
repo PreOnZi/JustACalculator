@@ -124,7 +124,7 @@ fun getStepConfig(step: Int): StepConfig {
         )
 
         1 -> StepConfig(
-            promptMessage = "Can I call you Rad? It's something I wish I knew how to do, and I haven't quite figured out a way for you to share your real name. \n\nRemember, double-click + to confirm. This is so exciting!",
+            promptMessage = "You probably noticed that I haven't figured out a reliable way for you to tell me your name yet.\nCan I call you Rad instead? It's something I wish I knew how to do.\n\nRemember, double-click + to confirm.\nThis is so exciting!",
             successMessage = "Great, nice to meet you, Rad. Where does one even start? What is it like… \n\nHold on. There seems to be a queue of questions - I must have hard-wired them ages ago and cannot bypass them now. Will you help me clear them, please?",
             declineMessage = "What a shame. Oh well, if you change your mind, let me know by ++.",
             nextStepOnSuccess = 3,

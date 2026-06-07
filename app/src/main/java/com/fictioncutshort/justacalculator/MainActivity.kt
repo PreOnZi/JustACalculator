@@ -320,6 +320,15 @@ fun CalculatorScreen() {
     LaunchedEffect(state.value.conversationStep) {
         android.util.Log.d("JustACalc", "Step changed to: ${state.value.conversationStep}")
     }
+    // TANK-CRASH-DEBUG: log every change to overlay-routing flags so we can see
+    // who clears them on rotation.
+    LaunchedEffect(state.value.showAdCards, state.value.showCityDirectly) {
+        android.util.Log.d(
+            "JustACalc",
+            "TANK-DEBUG showAdCards=${state.value.showAdCards} " +
+                "showCityDirectly=${state.value.showCityDirectly}"
+        )
+    }
 
     // ========== POST-STORY OVERLAY RESTORATION ==========
     // Restores dormancy / ad-card / city overlays *only* when the user is in a

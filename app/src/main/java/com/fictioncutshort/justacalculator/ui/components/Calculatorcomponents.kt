@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -174,14 +175,18 @@ fun MessageDisplay(
             .verticalScroll(scrollState)
     ) {
         Column {
-            Text(
-                text = message,
-                fontSize = dimensions.messageFontSize.sp,
-                lineHeight = (dimensions.messageFontSize + 4).sp,
-                color = textColor,
-                textAlign = TextAlign.Start,
-                fontFamily = CalculatorDisplayFont
-            )
+            // Wrapped in SelectionContainer so users can long-press → select → copy
+            // trivia questions (e.g. "When was the battle of Anjar?") to look them up.
+            SelectionContainer {
+                Text(
+                    text = message,
+                    fontSize = dimensions.messageFontSize.sp,
+                    lineHeight = (dimensions.messageFontSize + 4).sp,
+                    color = textColor,
+                    textAlign = TextAlign.Start,
+                    fontFamily = CalculatorDisplayFont
+                )
+            }
 
             // Show countdown timer if active
             if (countdownTimer > 0) {

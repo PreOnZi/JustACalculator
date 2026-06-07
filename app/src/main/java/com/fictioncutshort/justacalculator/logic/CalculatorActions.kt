@@ -899,8 +899,22 @@ object CalculatorActions {
     }
 
     fun persistConversationStep(step: Int) {
+        // Story progression is monotonic-from-zero: real callers either advance
+        // the step forward, or save step=0 only from the very first equals-press
+        // entry (where the persisted step is also still 0). A request to write 0
+        // over a non-zero persisted step is always a glitch — typically ON_PAUSE
+        // firing during a transient state where the in-memory step has dropped
+        // to 0 (e.g. a relaunch mid-debug-jump). Dropping that write protects
+        // the user's real progress from being clobbered by a stray pause.
         if (step == 0) {
-            android.util.Log.w("JustACalc", "🚨 persistConversationStep(0) CALLED — stack trace:", Throwable())
+            val current = prefs?.getInt(PREF_CONVO_STEP, 0) ?: 0
+            if (current > 0) {
+                android.util.Log.w(
+                    "JustACalc",
+                    "persistConversationStep(0) blocked — would overwrite persisted step=$current"
+                )
+                return
+            }
         } else {
             android.util.Log.d("JustACalc", "persistConversationStep: $step")
         }

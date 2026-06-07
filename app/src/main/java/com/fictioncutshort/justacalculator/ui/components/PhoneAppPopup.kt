@@ -204,16 +204,23 @@ fun GrowingBirdsPopup(onClose: () -> Unit) {
 /**
  * Slim banner at the top of the screen styled as a system notification from
  * JustACalculator. Auto-dismisses after [autoHideMs] unless tapped first.
+ *
+ * When [persistent] is true, the banner ignores both timers and taps — it only
+ * disappears when its owner clears it. Used for first-time onboarding nudges
+ * that a tester missed because they vanished mid-exploration.
  */
 @Composable
 fun CalcFakeNotification(
     body: String,
     onDismiss: () -> Unit,
-    autoHideMs: Long = 4000L
+    autoHideMs: Long = 4000L,
+    persistent: Boolean = false
 ) {
-    LaunchedEffect(body) {
-        delay(autoHideMs)
-        onDismiss()
+    if (!persistent) {
+        LaunchedEffect(body) {
+            delay(autoHideMs)
+            onDismiss()
+        }
     }
     Box(
         modifier = Modifier
@@ -228,7 +235,10 @@ fun CalcFakeNotification(
                 .padding(horizontal = 12.dp, vertical = 8.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(Color(0xEE2A2A2A))
-                .clickable(onClick = onDismiss)
+                .then(
+                    if (persistent) Modifier
+                    else Modifier.clickable(onClick = onDismiss)
+                )
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {

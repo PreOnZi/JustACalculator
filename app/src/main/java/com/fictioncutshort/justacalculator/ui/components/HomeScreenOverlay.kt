@@ -112,6 +112,12 @@ fun HomeScreenOverlay(
     // Active app/popup state declared early so gridPages can react to it.
     var activeApp by remember { mutableStateOf<String?>(null) }
     var fakeNotification by remember { mutableStateOf<Pair<String, Long>?>(null) }
+    // Sticky onboarding nudge — survives icon taps and never auto-hides; only
+    // cleared by the action it asks for (open phone app, then dial the magic
+    // number). A tester missed the original 7s/14s nudges because they vanished
+    // mid-exploration. While this is non-null, the icon-tap funny notifications
+    // are suppressed so they can't displace it.
+    var persistentNotification by remember { mutableStateOf<String?>(null) }
     var keypadInitialNumber by remember { mutableStateOf("") }
     var dialedNumber by remember { mutableStateOf("") }
     var exploreNotifFired by remember { mutableStateOf(false) }
@@ -181,19 +187,29 @@ fun HomeScreenOverlay(
         delay(EXPLORATION_TIMEOUT_MS)
         if (!exploreNotifFired) {
             exploreNotifFired = true
-            val msg = "ok, I think I got it. Go to the phone app."
-            fakeNotification = msg to 7_000L
+            persistentNotification = "ok, I think I got it. Go to the phone app."
+            fakeNotification = null
         }
     }
 
     // Once the user opens the phone app *after* the explore-nudge has fired,
-    // push the second nudge with the magic number. Banner stays up longer so
-    // the user has time to read the 9-digit number before it disappears.
+    // swap the persistent banner for the dial-the-magic-number nudge. It stays
+    // up until the magic number is actually dialed (see fakecall LaunchedEffect
+    // below), so the user can't lose it by tapping around.
     LaunchedEffect(activeApp, exploreNotifFired) {
         if (activeApp == "phone" && exploreNotifFired && !dialNotifFired) {
             dialNotifFired = true
-            val msg = "Now, dial $MAGIC_CALL_NUMBER and place a call"
-            fakeNotification = msg to 14_000L
+            persistentNotification = "Now, dial $MAGIC_CALL_NUMBER and place a call"
+            fakeNotification = null
+        }
+    }
+
+    // Magic number dialed — the fake-call screen takes over, so clear the
+    // sticky dial nudge. From here on the icon-tap funny notifications work
+    // normally again.
+    LaunchedEffect(activeApp) {
+        if (activeApp == "fakecall") {
+            persistentNotification = null
         }
     }
 
@@ -261,7 +277,13 @@ fun HomeScreenOverlay(
                         handleIconTap(
                             name = name,
                             setApp = { activeApp = it },
-                            setNotification = { msg -> fakeNotification = msg?.let { it to 4_000L } }
+                            setNotification = { msg ->
+                                // Don't let funny per-icon notifications displace
+                                // a sticky onboarding nudge.
+                                if (persistentNotification == null) {
+                                    fakeNotification = msg?.let { it to 4_000L }
+                                }
+                            }
                         )
                     }
                 )
@@ -292,7 +314,13 @@ fun HomeScreenOverlay(
                 handleIconTap(
                     name = name,
                     setApp = { activeApp = it },
-                    setNotification = { msg -> fakeNotification = msg?.let { it to 4_000L } }
+                    setNotification = { msg ->
+                        // Don't let funny per-icon notifications displace
+                        // a sticky onboarding nudge.
+                        if (persistentNotification == null) {
+                            fakeNotification = msg?.let { it to 4_000L }
+                        }
+                    }
                 )
             })
         }
@@ -344,9 +372,17 @@ fun HomeScreenOverlay(
         }
 
         // ── Fake calculator notification (top of screen, over everything) ────
+        // Sticky onboarding nudge takes precedence: it can't be tapped away or
+        // displaced by per-icon funny notifications underneath.
+        val sticky = persistentNotification
         val note = fakeNotification
-        if (note != null) {
-            CalcFakeNotification(
+        when {
+            sticky != null -> CalcFakeNotification(
+                body = sticky,
+                persistent = true,
+                onDismiss = {}
+            )
+            note != null -> CalcFakeNotification(
                 body = note.first,
                 autoHideMs = note.second,
                 onDismiss = { fakeNotification = null }

@@ -935,6 +935,10 @@ private fun KeyExamineOverlay(
 fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
     val context = LocalContext.current
 
+    // No runtime permissions are needed for the maze; left to the phase-1
+    // narrative and the specific buildings that actually use the underlying
+    // APIs (camera in Door 4, etc.).
+
     // ── Mutable layout/world holders (swapped on each red-trap regeneration) ──
     val worldHolder  = remember { mutableStateOf(buildWorldGrid(MazeLayout(0), 0)) }
     val keysHolder   = remember { mutableStateOf(placeKeys(worldHolder.value, MazeLayout(0))) }

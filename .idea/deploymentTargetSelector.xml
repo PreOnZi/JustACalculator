@@ -15,7 +15,7 @@
       </SelectionState>
       <SelectionState runConfigName="DefaultPreview">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2026-05-18T11:34:12.029962Z">
+        <DropdownSelection timestamp="2026-05-18T15:50:39.646215Z">
           <Target type="DEFAULT_BOOT">
             <handle>
               <DeviceId pluginId="LocalEmulator" identifier="path=/Users/ondrejzika/.android/avd/7_inch_Tablet.avd" />
