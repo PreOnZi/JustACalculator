@@ -198,6 +198,27 @@ private val LAMP_FP_L: List<FloatArray> = run {
 }
 private const val LAMP_R = 12f   // collision radius around the lamp post
 
+// Stickman collision — circular footprints around each decorative figure. Must
+// match Cityglrenderer.kt's addStickmen / addStickmenLandscape world positions.
+// [cx, cz, radius]
+private const val STICKMAN_R = 30f
+private val STICKMAN_FP: List<FloatArray> = listOf(
+    floatArrayOf(PC1, PRA - BD_V - 30f, STICKMAN_R),       // behind row A (col 1)
+    floatArrayOf(PC3, PRA - BD_V - 30f, STICKMAN_R),       // behind row A (col 3)
+    floatArrayOf((PC2 + PC3) * 0.5f, PRE, STICKMAN_R),     // between damaged buildings
+    floatArrayOf((PC1 + PC2) * 0.5f, PRE, STICKMAN_R),     // between damaged buildings
+    floatArrayOf(-150f, PRE + BD_V + 90f,  STICKMAN_R),    // south rubble field
+    floatArrayOf( 175f, PRE + BD_V + 120f, STICKMAN_R),    // south rubble field
+)
+private val STICKMAN_FP_L: List<FloatArray> = listOf(
+    floatArrayOf(LSC1, LSRA - BD_V - 30f, STICKMAN_R),
+    floatArrayOf(LSC3, LSRA - BD_V - 30f, STICKMAN_R),
+    floatArrayOf((LSC2 + LSC3) * 0.5f, LSRE, STICKMAN_R),
+    floatArrayOf((LSC1 + LSC2) * 0.5f, LSRE, STICKMAN_R),
+    floatArrayOf(LSC2, LSRE + BD_V + 90f,  STICKMAN_R),
+    floatArrayOf(LSC3, LSRE + BD_V + 120f, STICKMAN_R),
+)
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DOOR INTERACTION — entry order, riddle data, proximity
 // ─────────────────────────────────────────────────────────────────────────────
@@ -335,12 +356,30 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
     // sits at the player position on subsequent entries.
     var landingToPlayerBlend by remember { mutableStateOf(if (introAlreadyDone) 1f else 0f) }
 
-    // Camera / player state (camera IS the player — first-person)
+    // Camera / player state (camera IS the player — first-person).
+    // Position is persisted per-orientation in the calc_city prefs so it
+    // survives backgrounding, process death, and full app closure — on re-entry
+    // the player resumes exactly where they left off (once the intro is done).
     val startX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
     val startZ = if (isLandscape) PLAYER_START_Z_L else PLAYER_START_Z
-    var pX     by remember { mutableStateOf(startX) }
-    var pZ     by remember { mutableStateOf(startZ) }
-    var camYaw by remember { mutableStateOf(0f) }
+    val posKey = if (isLandscape) "L" else "P"
+    var pX     by rememberSaveable { mutableStateOf(if (introAlreadyDone) cityPrefs.getFloat("pos_x_$posKey", startX) else startX) }
+    var pZ     by rememberSaveable { mutableStateOf(if (introAlreadyDone) cityPrefs.getFloat("pos_z_$posKey", startZ) else startZ) }
+    var camYaw by rememberSaveable { mutableStateOf(if (introAlreadyDone) cityPrefs.getFloat("pos_yaw_$posKey", 0f) else 0f) }
+
+    // Persist position ~1×/s so even a swipe-kill loses at most a second of walk.
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            if (introDone) {
+                cityPrefs.edit()
+                    .putFloat("pos_x_$posKey", pX)
+                    .putFloat("pos_z_$posKey", pZ)
+                    .putFloat("pos_yaw_$posKey", camYaw)
+                    .apply()
+            }
+        }
+    }
 
     // Single joystick input
     var joyX by remember { mutableStateOf(0f) }
@@ -414,6 +453,9 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
     var showDoor4        by rememberSaveable { mutableStateOf(false) }
     var showBuilding5Map by rememberSaveable { mutableStateOf(false) }
     var showBuilding6Game by rememberSaveable { mutableStateOf(false) }
+    var showBuilding7Filter by rememberSaveable { mutableStateOf(false) }
+    var showBuilding8Casino by rememberSaveable { mutableStateOf(false) }
+    var showBuilding9Flappy by rememberSaveable { mutableStateOf(false) }
     var tankGameCompleted by remember { mutableStateOf(prefs.getBoolean("td_b3_done", false)) }
     var bridgePieces     by remember { mutableIntStateOf(prefs.getInt("bridge_pieces", if (prefs.getBoolean("td_b1_done", false)) 1 else 0)) }
     var forceAerial      by remember { mutableStateOf(false) }
@@ -502,6 +544,9 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
             4 -> showDoor4 = true
             5 -> showBuilding5Map = true
             6 -> showBuilding6Game = true
+            7 -> showBuilding7Filter = true
+            8 -> showBuilding8Casino = true
+            9 -> showBuilding9Flappy = true
             else -> {
                 entryProgress++
                 prefs.edit().putInt("entry_progress", entryProgress).apply()
@@ -518,8 +563,8 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
     // Reset every door's slide-up fraction whenever no minigame is open. Covers
     // both "minigame finished" and "fresh entry into the city" — ensures the
     // doors are closed when the player can see them.
-    LaunchedEffect(showTowerDefense, showMaze, showTankGame, showDoor4, showBuilding5Map, showBuilding6Game) {
-        val anyOpen = showTowerDefense || showMaze || showTankGame || showDoor4 || showBuilding5Map || showBuilding6Game
+    LaunchedEffect(showTowerDefense, showMaze, showTankGame, showDoor4, showBuilding5Map, showBuilding6Game, showBuilding7Filter, showBuilding8Casino, showBuilding9Flappy) {
+        val anyOpen = showTowerDefense || showMaze || showTankGame || showDoor4 || showBuilding5Map || showBuilding6Game || showBuilding7Filter || showBuilding8Casino || showBuilding9Flappy
         if (!anyOpen) {
             for (i in renderer.doorOpenFraction.indices) renderer.doorOpenFraction[i] = 0f
         }
@@ -711,6 +756,11 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     for (lp in lfp) {
                         val dxl = tx - lp[0]; val dzl = tz - lp[1]
                         if (dxl*dxl + dzl*dzl < LAMP_R*LAMP_R) return true
+                    }
+                    val sfp = if (isLandscape) STICKMAN_FP_L else STICKMAN_FP
+                    for (sp in sfp) {
+                        val dxs = tx - sp[0]; val dzs = tz - sp[1]
+                        if (dxs*dxs + dzs*dzs < sp[2]*sp[2]) return true
                     }
                     // Landscape: wall at X=95..115 blocks except at gap Z=265..335
                     if (isLandscape && tx < L_WALL_E && !(tz > L_GAP_N && tz < L_GAP_S)) return true
@@ -1211,9 +1261,9 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
             )
         }
 
-        // ── Building 6 platformer minigame ────────────────────────────────────
+        // ── Building 6 — 3D crowd-runner (prototype; replaces the old 2D mode) ─
         if (showBuilding6Game) {
-            Building6Game(
+            Building6Runner(
                 onComplete = {
                     showBuilding6Game = false
                     entryProgress++
@@ -1232,6 +1282,65 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                 onExit = {
                     showBuilding6Game = false
                     doorCooldownDigit = 6
+                }
+            )
+        }
+
+        // ── Building 7 — vanity face-filter mirror ────────────────────────────
+        if (showBuilding7Filter) {
+            Building7VanityRoom(
+                onComplete = {
+                    showBuilding7Filter = false
+                    entryProgress++
+                    prefs.edit().putInt("entry_progress", entryProgress).apply()
+                    prefs.edit().putBoolean("building_done_7", true).apply()
+                    renderer.needsRebuild = true
+                    doorCooldownDigit = 7
+                    pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
+                    pZ = if (isLandscape) PLAYER_START_Z_L else PLAYER_START_Z
+                    camYaw = 0f
+                }
+            )
+        }
+
+        // ── Building 8 — gambling room skeleton ───────────────────────────────
+        if (showBuilding8Casino) {
+            Building8Casino(
+                onComplete = {
+                    showBuilding8Casino = false
+                    entryProgress++
+                    prefs.edit().putInt("entry_progress", entryProgress).apply()
+                    prefs.edit().putBoolean("building_done_8", true).apply()
+                    renderer.needsRebuild = true
+                    doorCooldownDigit = 8
+                    pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
+                    pZ = if (isLandscape) PLAYER_START_Z_L else PLAYER_START_Z
+                    camYaw = 0f
+                },
+                onExit = {
+                    showBuilding8Casino = false
+                    doorCooldownDigit = 8
+                }
+            )
+        }
+
+        // ── Building 9 — flappy-style skeleton ────────────────────────────────
+        if (showBuilding9Flappy) {
+            FlappyBirdGame(
+                onComplete = {
+                    showBuilding9Flappy = false
+                    entryProgress++
+                    prefs.edit().putInt("entry_progress", entryProgress).apply()
+                    prefs.edit().putBoolean("building_done_9", true).apply()
+                    renderer.needsRebuild = true
+                    doorCooldownDigit = 9
+                    pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
+                    pZ = if (isLandscape) PLAYER_START_Z_L else PLAYER_START_Z
+                    camYaw = 0f
+                },
+                onExit = {
+                    showBuilding9Flappy = false
+                    doorCooldownDigit = 9
                 }
             )
         }
@@ -1620,6 +1729,22 @@ private fun RiddleDialog(
             Spacer(modifier = Modifier.height(14.dp))
 
             MiniKeyboard(allowMinus = riddle.allowMinus, onKey = ::handleKey)
+
+            // Building 7 ("vanity") entry disclosure — deliberately small and
+            // low-contrast, tucked under the keypad. By entering the door the
+            // player consents to being photographed inside and to those images
+            // being reused elsewhere in the app.
+            if (digit == 7) {
+                Text(
+                    "By entering you consent to being photographed inside and to those images being used elsewhere in this app.",
+                    color = Color(0xFF2E2E2E),
+                    fontSize = 7.sp,
+                    lineHeight = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 8.dp, start = 4.dp, end = 4.dp)
+                )
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 

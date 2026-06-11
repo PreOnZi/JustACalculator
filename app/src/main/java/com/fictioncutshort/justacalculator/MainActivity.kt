@@ -367,7 +367,26 @@ fun CalculatorScreen() {
             && currentStepOnLaunch == 167
             && currentStepOnLaunch !in preStoryBranchSteps
 
-        if (postStorySafe) {
+        // Once the player has entered Calculator City, re-entry is STICKY: on
+        // every relaunch drop them straight back into the city at the progress
+        // they left (persisted in the calc_city prefs). This must win over the
+        // stricter step==167 post-story gate below, because the in-city building
+        // minigames can move conversationStep off 167 while the player is still
+        // legitimately in the city — under the old gate that misclassified them
+        // as "not post-story" and the else-branch wiped in_city_phase, bouncing
+        // them back to the calculator. We still exclude explicit replay/restart
+        // and pre-story branch steps so a stale flag can't hijack a fresh run.
+        val cityRestore = inCityPhaseInPrefs
+            && !needsRestartInPrefs
+            && currentStepOnLaunch !in preStoryBranchSteps
+
+        if (cityRestore) {
+            state.value = state.value.copy(
+                showAdCards = true,
+                showCityDirectly = true,
+                allButtonsRad = false
+            )
+        } else if (postStorySafe) {
             // Dormancy restoration: only if the rant-end timestamp is set and
             // enough time has elapsed.
             val dormancyPhase = DormancyManager.getCurrentPhase(context)

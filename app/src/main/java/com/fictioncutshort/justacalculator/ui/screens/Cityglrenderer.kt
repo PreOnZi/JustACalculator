@@ -100,6 +100,12 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     private var damagedGroupsB: List<ObjGroup> = emptyList()   // buildd2
     private var damagedGroupsC: List<ObjGroup> = emptyList()   // buildd3
     private var mainBuildingGroups: List<ObjGroup> = emptyList()
+    // Stickman figures scattered OUTSIDE the city (south rubble, between the
+    // damaged buildings, and standing on the lava). Tagged aerialSkip so they
+    // only appear once the player is down in the city (cellStage == 3,
+    // aerialMode == false) — never from the intro/fly-over aerial pose.
+    private var stickmanGroups:  List<ObjGroup> = emptyList()
+    private var stickman2Groups: List<ObjGroup> = emptyList()
     // Per-interactive-building (digits 1..9) "completed" flag — drives the
     // window colour to BLACK once the user has cleared that building. Read
     // every frame in the render loop so no scene rebuild is needed when it
@@ -262,6 +268,8 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         try { damagedGroupsB  = ObjLoader.load(a, "models/builddamage/buildd2.obj",  "models/builddamage/buildd2.mtl") } catch (_: Throwable) {}
         try { damagedGroupsC  = ObjLoader.load(a, "models/builddamage/buildd3.obj",  "models/builddamage/buildd3.mtl") } catch (_: Throwable) {}
         try { mainBuildingGroups = ObjLoader.load(a, "models/mainbuilding.obj", "models/mainbuilding.mtl") } catch (_: Throwable) {}
+        try { stickmanGroups  = ObjLoader.load(a, "models/stickman.obj",  "models/stickman.mtl") } catch (_: Throwable) {}
+        try { stickman2Groups = ObjLoader.load(a, "models/stickman2.obj", "models/stickman2.mtl") } catch (_: Throwable) {}
         for (i in 0 until 10) {
             try { debrisGroups[i] = ObjLoader.load(a, "models/debris/debris${i+1}.obj", "models/debris/debris${i+1}.mtl") } catch (_: Throwable) {}
         }
@@ -457,6 +465,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         addGreenNorth()
         addRadButton(80f * buildingHeightScale)
         addDebris()
+        addStickmen()
         if (bridgePieces > 0) addBridge(bridgePieces)
         run {
             // Intersection grid follows whichever cell the scene is using.
@@ -551,6 +560,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
 
         // Debris on east operator column gaps
         addDebrisLandscape(lC4, lRA, lRB, lRC, lRD, lRE)
+        addStickmenLandscape(lC1, lC2, lC3, lRA, lRE)
 
         // Landscape intersection grid: between lC1..lC4 in X, between
         // lRA..lRE in Z — derived from the same active cell as the buildings.
@@ -1396,6 +1406,82 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 addDebrisInstance(px, pz, scale, yaw, col[0] * tintBase, col[1] * tintBase, col[2] * tintBase, fog = 0.28f)
             }
         }
+    }
+
+    // ── Stickman figures (decorative, outside the city) ───────────────────────
+    // Each stickman OBJ is Y-up and roughly centred on the XZ origin. We scale
+    // the model so its full height maps to `targetH` world units, then drop the
+    // model's lowest vertex onto `groundY` so the feet rest on the surface
+    // (ground = 0, lava surface ≈ 22). Per-group Kd from the MTL drives the
+    // colour (red body / black limbs), and aerialSkip hides them from the
+    // aerial intro + post-building fly-over.
+    private val STICKMAN_MIN_Y  = -4.305f
+    private val STICKMAN_H      =  8.726f
+    private val STICKMAN2_MIN_Y = -1.516f
+    private val STICKMAN2_H     =  1.600f
+
+    private fun addCharacterInstance(
+        groups: List<ObjGroup>, modelMinY: Float, modelHeight: Float,
+        cx: Float, cz: Float, groundY: Float, targetH: Float, yawRad: Float, fog: Float
+    ) {
+        if (groups.isEmpty()) return
+        val scale = targetH / modelHeight
+        val liftY = -modelMinY * scale + groundY
+        val cy = cos(yawRad.toDouble()).toFloat()
+        val sy = sin(yawRad.toDouble()).toFloat()
+        for (g in groups) {
+            val src = g.verts
+            val out = FloatArray(src.size)
+            var i = 0
+            while (i < src.size) {
+                val xs = src[i]     * scale
+                val ys = src[i + 1] * scale
+                val zs = src[i + 2] * scale
+                out[i    ] =  xs * cy + zs * sy + cx
+                out[i + 1] =  ys + liftY
+                out[i + 2] = -xs * sy + zs * cy + cz
+                i += 3
+            }
+            // Keep the model's authored per-material colour (Kd from the MTL).
+            meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3,
+                g.r, g.g, g.b, 1f, fog, aerialSkip = true))
+        }
+    }
+
+    // Target world height — about half the surrounding ruins (digit/damaged
+    // buildings render ~350-400 units tall).
+    private val STICKMAN_TARGET_H = 168f
+
+    // Portrait: 3 of each stickman spread across the three "outside the city"
+    // zones — tucked behind the top (row A) buildings, in the gaps between the
+    // row-E damaged buildings, and out in the south rubble field below the city.
+    private fun addStickmen() {
+        if (stickmanGroups.isEmpty() && stickman2Groups.isEmpty()) return
+        val h = STICKMAN_TARGET_H
+        // ── Hiding behind the top row (just north of the row-A buildings) ────
+        addCharacterInstance(stickmanGroups,  STICKMAN_MIN_Y,  STICKMAN_H,  C1, RA - BD - 30f, 0f, h, 0.5f,  fog = 0.32f)
+        addCharacterInstance(stickman2Groups, STICKMAN2_MIN_Y, STICKMAN2_H, C3, RA - BD - 30f, 0f, h, -1.0f, fog = 0.32f)
+        // ── Between the damaged buildings (row E gaps) ───────────────────────
+        addCharacterInstance(stickmanGroups,  STICKMAN_MIN_Y,  STICKMAN_H,  (C2 + C3) * 0.5f, RE, 0f, h, 2.3f,  fog = 0.30f)
+        addCharacterInstance(stickman2Groups, STICKMAN2_MIN_Y, STICKMAN2_H, (C1 + C2) * 0.5f, RE, 0f, h, -0.4f, fog = 0.30f)
+        // ── Under the city (south rubble field) ──────────────────────────────
+        addCharacterInstance(stickmanGroups,  STICKMAN_MIN_Y,  STICKMAN_H,  -150f, RE + BD + 90f,  0f, h, 3.4f, fog = 0.30f)
+        addCharacterInstance(stickman2Groups, STICKMAN2_MIN_Y, STICKMAN2_H,  175f, RE + BD + 120f, 0f, h, 1.2f, fog = 0.30f)
+    }
+
+    // Landscape: same three zones in the rotated layout.
+    private fun addStickmenLandscape(lC1: Float, lC2: Float, lC3: Float, lRA: Float, lRE: Float) {
+        if (stickmanGroups.isEmpty() && stickman2Groups.isEmpty()) return
+        val h = STICKMAN_TARGET_H
+        // ── Hiding behind the top row (north of the row-A buildings) ─────────
+        addCharacterInstance(stickmanGroups,  STICKMAN_MIN_Y,  STICKMAN_H,  lC1, lRA - BD - 30f, 0f, h, 0.4f,  fog = 0.32f)
+        addCharacterInstance(stickman2Groups, STICKMAN2_MIN_Y, STICKMAN2_H, lC3, lRA - BD - 30f, 0f, h, -0.9f, fog = 0.32f)
+        // ── Between the damaged buildings (row lRE gaps) ─────────────────────
+        addCharacterInstance(stickmanGroups,  STICKMAN_MIN_Y,  STICKMAN_H,  (lC2 + lC3) * 0.5f, lRE, 0f, h, 2.1f,  fog = 0.30f)
+        addCharacterInstance(stickman2Groups, STICKMAN2_MIN_Y, STICKMAN2_H, (lC1 + lC2) * 0.5f, lRE, 0f, h, -0.3f, fog = 0.30f)
+        // ── South of the damaged row (rubble field) ──────────────────────────
+        addCharacterInstance(stickmanGroups,  STICKMAN_MIN_Y,  STICKMAN_H,  lC2, lRE + BD + 90f,  0f, h, 3.2f, fog = 0.30f)
+        addCharacterInstance(stickman2Groups, STICKMAN2_MIN_Y, STICKMAN2_H, lC3, lRE + BD + 120f, 0f, h, 1.0f, fog = 0.30f)
     }
 
     // ── Player orb ────────────────────────────────────────────────────────────

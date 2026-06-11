@@ -75,6 +75,10 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
 
+    // ML Kit on-device face detection — drives Building 7's vanity filter
+    // (landmark anchoring for PNG overlays). On-device, offline, no API key.
+    implementation("com.google.mlkit:face-detection:16.1.7")
+
     // Coil for image loading (SVGs from assets, used by HomeScreenOverlay)
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.coil-kt:coil-svg:2.7.0")
