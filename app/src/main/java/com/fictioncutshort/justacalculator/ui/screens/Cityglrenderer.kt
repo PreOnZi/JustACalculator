@@ -69,7 +69,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     @Volatile var darknessLevel = 0f
 
     private var prog=0; private var aPos=0; private var uMVP=0
-    private var uCol=0; private var uFog=0; private var uAerial=0
+    private var uCol=0; private var uFog=0; private var uAerial=0; private var uGray=0
 
     private data class Mesh(
         val buf: FloatBuffer, val mode: Int, val cnt: Int,
@@ -147,6 +147,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         uniform vec4  uColor;
         uniform float uFog;
         uniform float uAerial;
+        uniform float uGray;
         varying float vDepth;
         varying float vY;
         void main(){
@@ -155,6 +156,9 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             vec3 fogC = vec3(0.29, 0.22, 0.16);
             vec3 col  = uColor.rgb * ao;
             col = mix(col, fogC, fog);
+            // Easter-egg grayscale (code 1134206): desaturate the whole city.
+            float luma = dot(col, vec3(0.299, 0.587, 0.114));
+            col = mix(col, vec3(luma), uGray);
             gl_FragColor = vec4(col, uColor.a);
         }""".trimIndent()
 
@@ -195,7 +199,12 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     // Features
     private val LAVA_S: Float get() = CITY_N - 40f
     private val LAVA_N: Float get() = LAVA_S - 360f
-    private val WALL_X: Float get() = CITY_W - 20f
+    // Extra walkable lane west of the city. Building 7 sits in the westmost
+    // column with a WEST-facing door; without this gap the door opens straight
+    // into the perimeter wall and is unreachable. Pushing the wall ~one street
+    // width west opens a lane the player can step into to trigger the door.
+    val WEST_LANE = 150f
+    private val WALL_X: Float get() = CITY_W - 20f - WEST_LANE
 
     private val BH = 280f
 
@@ -249,6 +258,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         uCol    = GLES20.glGetUniformLocation(prog, "uColor")
         uFog    = GLES20.glGetUniformLocation(prog, "uFog")
         uAerial = GLES20.glGetUniformLocation(prog, "uAerial")
+        uGray   = GLES20.glGetUniformLocation(prog, "uGray")
         loadModels()
         buildScene()
     }
@@ -282,8 +292,14 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
 
     override fun onDrawFrame(gl: GL10?) {
         if (needsRebuild) { needsRebuild = false; buildScene() }
+        // Easter-egg background colour (707) + grayscale (1134206) — both read
+        // live so a tweak made on the calculator shows next time the city draws.
+        val clearRgb = com.fictioncutshort.justacalculator.logic.EasterEggTheme.cityClearRgb()
+        GLES20.glClearColor(clearRgb[0], clearRgb[1], clearRgb[2], 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
         GLES20.glUseProgram(prog)
+        GLES20.glUniform1f(uGray,
+            if (com.fictioncutshort.justacalculator.logic.EasterEggTheme.grayscale) 1f else 0f)
 
         val proj = FloatArray(16); val view = FloatArray(16); val mvp = FloatArray(16)
         Matrix.perspectiveM(proj, 0, fov, sw.toFloat() / sh.toFloat(), 0.5f, 3000f)
@@ -821,7 +837,11 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     // model's authored Kd. Windows are handled per-frame in the render loop —
     // here we just pass the day-blue placeholder and tag with windowDigit.
     private fun mainBuildingBaseColor(materialName: String, g: ObjGroup): FloatArray = when (materialName) {
-        "Material"     -> floatArrayOf(0.91f, 0.89f, 0.85f)   // body → cream digit-button colour
+        // Body → cream digit-button colour, or the easter-egg number colour
+        // (code 58008) when one is chosen. The digit buildings ARE the number
+        // buttons in the city, so recolouring them mirrors the calculator.
+        "Material"     -> com.fictioncutshort.justacalculator.logic.EasterEggTheme.cityNumberRgbOrNull()
+            ?: floatArrayOf(0.91f, 0.89f, 0.85f)
         "Material.001" -> floatArrayOf(0.30f, 0.78f, 0.80f)   // windows (day) — overridden per-frame
         else           -> floatArrayOf(g.r, g.g, g.b)         // ridge / sidewalk / accents stay model-authored
     }

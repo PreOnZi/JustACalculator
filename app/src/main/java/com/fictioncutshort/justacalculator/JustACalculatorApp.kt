@@ -5,6 +5,7 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.SvgDecoder
 import com.fictioncutshort.justacalculator.logic.CalculatorActions
+import com.fictioncutshort.justacalculator.logic.EasterEggTheme
 
 /**
  * Application entry point.
@@ -27,6 +28,7 @@ class JustACalculatorApp : Application(), ImageLoaderFactory {
         super.onCreate()
         android.util.Log.d("JustACalc", "🟢 Application.onCreate — initializing CalculatorActions")
         CalculatorActions.init(applicationContext)
+        EasterEggTheme.init(applicationContext)
     }
 
     override fun newImageLoader(): ImageLoader {

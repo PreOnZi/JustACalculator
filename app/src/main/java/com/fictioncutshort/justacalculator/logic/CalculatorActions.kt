@@ -1182,6 +1182,149 @@ object CalculatorActions {
 
         return false
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // EASTER-EGG CODES — 58008 (button colour) / 707 (background) / 1134206 (grayscale)
+    // Confirmed with ++ from the normal calculator. See EasterEggTheme.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /** The calculator's reactions to a sneaky visual change. */
+    private val EASTER_EGG_COMMENTS = listOf(
+        "Hmm, that's new.",
+        "Not sure I like this",
+        "Is this a final decision?",
+        "Ok, now you're jsut playing..."
+    )
+
+    /**
+     * True while the current step is auto-progressing (or queued to). The
+     * easter-egg codes are disabled here so a stray ++ can't both fire a tweak
+     * and collide with a pending step transition.
+     */
+    private fun easterEggsBlocked(s: CalculatorState): Boolean {
+        if (s.conversationStep in AUTO_PROGRESS_STEPS) return true
+        return getStepConfig(s.conversationStep).autoProgressDelay > 0L
+    }
+
+    /**
+     * Acts on a confirmed (++'d) number if it matches an easter-egg code.
+     * @return true when the number was recognised as a code.
+     */
+    private fun tryEasterEggCode(code: String, state: MutableState<CalculatorState>): Boolean {
+        // The first `+` of the ++ was applied as an operator on the LCD; drop
+        // that snapshot so nothing tries to undo it after we take over.
+        preSingleOpSnapshot = null
+        return when (code) {
+            "58008" -> { openEasterEggConsole(state, 1); true }   // number-button colour
+            "707"   -> { openEasterEggConsole(state, 2); true }   // background colour
+            "1134206" -> {                                        // grayscale toggle
+                EasterEggTheme.toggleGrayscale()
+                easterEggCommentAndRewrite(state)
+                true
+            }
+            else -> false
+        }
+    }
+
+    private fun openEasterEggConsole(state: MutableState<CalculatorState>, type: Int) {
+        state.value = state.value.copy(
+            showEasterEggConsole = true,
+            easterEggConsoleType = type,
+            number1 = "0",
+            number2 = "",
+            operation = null,
+            operationHistory = "",
+            isReadyForNewOperation = true
+        )
+    }
+
+    /**
+     * Input while the easter-egg console is open. Digits build the selection,
+     * ++ confirms it, 99++ exits without applying. Applying a colour (0 = reset
+     * to original) closes the console so the calculator's comment and the
+     * restored story line are visible underneath.
+     */
+    private fun handleEasterEggConsoleInput(state: MutableState<CalculatorState>, action: String) {
+        val current = state.value
+        when (action) {
+            in listOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9") -> {
+                val newNum = if (current.number1 == "0") action else current.number1 + action
+                state.value = current.copy(number1 = newNum)
+            }
+            "+" -> {
+                val now = System.currentTimeMillis()
+                if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
+                    val input = current.number1.trimEnd('.')
+                    lastOp = null
+                    lastOpTimeMillis = 0L
+                    if (input == "99") {
+                        state.value = current.copy(
+                            showEasterEggConsole = false,
+                            easterEggConsoleType = 0,
+                            number1 = "0"
+                        )
+                        return
+                    }
+                    applyEasterEggSelection(state, input)
+                } else {
+                    lastOp = "+"
+                    lastOpTimeMillis = now
+                }
+            }
+            "C", "DEL" -> state.value = current.copy(number1 = "0")
+        }
+    }
+
+    private fun applyEasterEggSelection(state: MutableState<CalculatorState>, input: String) {
+        val current = state.value
+        val index = input.toIntOrNull() ?: return
+        val maxIndex = if (current.easterEggConsoleType == 1)
+            EasterEggTheme.NUMBER_PRESETS.lastIndex
+        else
+            EasterEggTheme.BACKGROUND_PRESETS.lastIndex
+        if (index < 0 || index > maxIndex) {
+            // Out-of-range choice: clear the entry, keep the console open.
+            state.value = current.copy(number1 = "0")
+            return
+        }
+        if (current.easterEggConsoleType == 1) {
+            EasterEggTheme.selectNumberColor(index)
+        } else {
+            EasterEggTheme.selectBackground(index)
+        }
+        state.value = current.copy(
+            showEasterEggConsole = false,
+            easterEggConsoleType = 0,
+            number1 = "0"
+        )
+        easterEggCommentAndRewrite(state)
+    }
+
+    /**
+     * The calculator quips about the change, then re-types whatever story line
+     * was on screen before so the conversation can pick straight back up. The
+     * pendingAutoMessage hook (handlePostTypingProgress) restores the line
+     * without touching conversationStep, and copy() preserves the step's
+     * awaiting flags — so a step still expecting ++/a number stays that way.
+     * Out of conversation there is no line to restore (fullMessage is blank),
+     * so the quip just shows briefly.
+     */
+    private fun easterEggCommentAndRewrite(state: MutableState<CalculatorState>) {
+        val current = state.value
+        state.value = current.copy(
+            // Wipe the half-entered "code +" off the LCD so only the comment shows.
+            number1 = "0",
+            number2 = "",
+            operation = null,
+            operationHistory = "",
+            isReadyForNewOperation = true,
+            message = "",
+            fullMessage = EASTER_EGG_COMMENTS.random(),
+            isTyping = true,
+            pendingAutoMessage = current.fullMessage
+        )
+    }
+
     private fun getSafeStep(step: Int): Int {
         // Preserve the user's exact position for all interactive/known steps.
         // Only remap steps that are truly transient and can't be resumed.
@@ -1924,6 +2067,12 @@ object CalculatorActions {
             handleCalculatorInput(state, action)
             return
         }
+        // If the easter-egg colour console is open, it owns all input.
+        if (current.showEasterEggConsole) {
+            handleEasterEggConsoleInput(state, action)
+            return
+        }
+
         // If console is open, handle console input
         if (current.showConsole) {
             when (action) {
@@ -1958,6 +2107,16 @@ object CalculatorActions {
             val now = System.currentTimeMillis()
             if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
                 val enteredNumber = current.number1.trimEnd('.')
+                // Easter-egg colour/grayscale codes. These take priority over a
+                // story ++ (they fire even when the calculator is awaiting a
+                // ++ answer) but are disabled mid-autoprogression so they can't
+                // race a step transition. The original story line is restored
+                // afterwards by easterEggCommentAndRewrite.
+                if (!easterEggsBlocked(current) && tryEasterEggCode(enteredNumber, state)) {
+                    lastOp = null
+                    lastOpTimeMillis = 0L
+                    return
+                }
                 if (enteredNumber == "353942320485") {
                     // Open console from anywhere!
                     // Steps 112 (downloads-file path) and 1121 (no-file
@@ -3281,6 +3440,23 @@ object CalculatorActions {
 
     private fun handleCalculatorInput(state: MutableState<CalculatorState>, action: String) {
         val current = state.value
+        // Easter-egg codes also work in pure-calculator mode (post-story). The
+        // normal calculator has no ++ gesture, so detect the double-tap here:
+        // a code confirmed with ++ fires the tweak; otherwise the + falls
+        // through to the usual single-press operator behaviour below.
+        if (action == "+") {
+            val now = System.currentTimeMillis()
+            if (lastOp == "+" && (now - lastOpTimeMillis) <= DOUBLE_PRESS_WINDOW_MS) {
+                val code = current.number1.trimEnd('.')
+                if (tryEasterEggCode(code, state)) {
+                    lastOp = null
+                    lastOpTimeMillis = 0L
+                    return
+                }
+            }
+            lastOp = "+"
+            lastOpTimeMillis = now
+        }
         when (action) {
             in "0".."9" -> handleDigitSimple(state, action)
             "." -> handleDecimal(state)

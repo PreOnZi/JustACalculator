@@ -312,6 +312,16 @@ data class CalculatorState(
     /** True after entering admin code (12340) */
     val adminCodeEntered: Boolean = false,
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // EASTER-EGG CONSOLE - Hidden colour/grayscale tweaks (codes 58008 / 707)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** True when the easter-egg colour console overlay is visible. */
+    val showEasterEggConsole: Boolean = false,
+
+    /** Which easter-egg console: 1 = number-button colour, 2 = background colour. */
+    val easterEggConsoleType: Int = 0,
+
     /** True after disabling banner ads in console */
     val bannersDisabled: Boolean = false,
 

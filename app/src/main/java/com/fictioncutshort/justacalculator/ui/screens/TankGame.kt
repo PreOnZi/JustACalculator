@@ -1,12 +1,13 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.tween
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -19,11 +20,14 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -35,65 +39,63 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.fictioncutshort.justacalculator.R
 import com.fictioncutshort.justacalculator.ui.components.DonationLandingPage
 import kotlinx.coroutines.delay
 
 // Visual style + behavior tags ────────────────────────────────────────────────
 private const val ICON_DIR_FRESH = "phonescreen/phonedetour"
 private const val ICON_DIR_USED  = "phonescreen/tankgame"
-private const val RETURN_NAME    = "_return_calc"
 
-// Apps that auto-close in 5s (purely-popup style); everything else closes in 10s.
-private val SHORT_APPS = setOf("birds", "candy", "TEMU")
+// The giftcard + degrimer icons always render from the colour ("fresh") set —
+// they have no black-and-white variant and must look the same everywhere.
+private const val GIFTCARD_ICON = "file:///android_asset/$ICON_DIR_FRESH/giftcard.svg"
+private const val DEGRIMER_ICON = "file:///android_asset/$ICON_DIR_FRESH/degrimer.svg"
 
-// Apps that opt OUT of the standard auto-close timer until they explicitly
-// signal they're done (via the onReadyToClose callback). Used by Duolingo so
-// the timer can't yank the user out before the upgrade modal has appeared.
-private val GATED_CLOSE_APPS = setOf("duo")
+// SharedPreferences (shared with the city) — giftcards persist across entries.
+private const val PREFS_NAME = "calc_city"
+private const val KEY_GIFTCARDS = "b3_giftcards"
 
-// How long the install animation runs on the Just-A-Calculator tile that shows
-// after every other app has been visited.
-private const val INSTALL_DURATION_MS = 3000
+// When true, scrollable lists briefly freeze (the phone's "lag"). Toggled by
+// TankGame; read by each LazyColumn via `userScrollEnabled = !LocalScrollLag.current`.
+private val LocalScrollLag = compositionLocalOf { false }
 
 private data class PhoneApp(val name: String, val label: String)
 
 // Grid order matches the original home screen, minus the apps the user asked
 // to drop (gemini, gpt, pictures, spotify, uber).
 private val GRID_APPS = listOf(
-    PhoneApp("airbnb",  "Airbnb"),
-    PhoneApp("fbook",   "Facebook"),
-    PhoneApp("calc",    "Calculator"),
-    PhoneApp("gram",    "Instagram"),
-    PhoneApp("TEMU",    "Temu"),
-    PhoneApp("camera",  "Camera"),
-    PhoneApp("amazon",  "Amazon"),
-    PhoneApp("youtube", "YouTube"),
-    PhoneApp("discord", "Discord"),
-    PhoneApp("tok",     "TikTok"),
-    PhoneApp("birds",   "Angry Birds"),
-    PhoneApp("candy",   "Candy Crush"),
-    PhoneApp("duo",     "Duolingo"),
+    PhoneApp("dumbazon",  "Dumbazon"),
+    PhoneApp("halflingo",     "Halflingo"),
     PhoneApp("tetris",  "Tetris"),
+    PhoneApp("innergram",    "Innergram"),
+    PhoneApp("tuktak",     "TukTak"),
+    PhoneApp("discocord", "Discocord"),
+    PhoneApp("mute",    "Mute"),
 )
+
+// Dumbazon stays re-openable (it's the shop) — its tile is never disabled, even
+// though opening it still counts toward "all apps visited".
+private const val STICKY_OPEN_APP = "dumbazon"
 
 private val DOCK_APPS = listOf(
     PhoneApp("phone",     "Phone"),
@@ -116,56 +118,71 @@ private val ALL_APP_NAMES = (GRID_APPS + DOCK_APPS).map { it.name }.toSet()
 @Composable
 fun TankGame(onComplete: () -> Unit) {
     val context = LocalContext.current
-    // No runtime permissions are needed for the tank game; each app's own
-    // permission gag (if any) lives inside that app, not at building entry.
+    val prefs = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+
+    // Persistent giftcards balance (the building's economy).
+    var giftcards by remember { mutableIntStateOf(prefs.getInt(KEY_GIFTCARDS, 0)) }
+    fun setGiftcards(n: Int) {
+        giftcards = n.coerceAtLeast(0)
+        prefs.edit().putInt(KEY_GIFTCARDS, giftcards).apply()
+    }
+    fun addGiftcards(n: Int) = setGiftcards(giftcards + n)
+
     var activeApp by remember { mutableStateOf<String?>(null) }
     var visited by remember { mutableStateOf(setOf<String>()) }
     var donationOpen by remember { mutableStateOf(false) }
-    var finishing by remember { mutableStateOf(false) }
-    // Gates the auto-close timer for apps in GATED_CLOSE_APPS. Resets per-app
-    // on open; for ungated apps it's set true immediately; for gated apps it
-    // stays false until the app calls onReadyToClose.
-    var appCloseReady by remember { mutableStateOf(false) }
-
-    // Reset/seed the close-ready gate when activeApp changes.
-    LaunchedEffect(activeApp) {
-        val a = activeApp
-        appCloseReady = (a != null && a !in GATED_CLOSE_APPS)
-    }
-
-    // Auto-close timer — only runs once the gate is open.
-    LaunchedEffect(activeApp, appCloseReady) {
-        val a = activeApp ?: return@LaunchedEffect
-        if (!appCloseReady) return@LaunchedEffect
-        val ms = if (a in SHORT_APPS) 5_000L else 10_000L
-        delay(ms)
-        if (activeApp == a) {
-            visited = visited + a
-            activeApp = null
-        }
-    }
-
-    // "time flies in the apps..." banner → onComplete after a beat.
-    LaunchedEffect(finishing) {
-        if (finishing) {
-            delay(2_200L)
-            onComplete()
-        }
-    }
+    // Apps no longer auto-close. Each one stays open until the user dismisses it
+    // with its own close (×) button, which marks it visited (see onClose below).
 
     val allVisited = visited.containsAll(ALL_APP_NAMES)
 
-    // Calculator install progress — runs once when the user has visited every
-    // other app. Mirrors the Phase-1 install animation so the player gets the
-    // same "icon downloading" beat before they can tap to exit.
-    val installProgress = remember { Animatable(0f) }
-    LaunchedEffect(allVisited) {
-        if (allVisited && installProgress.value < 1f) {
-            installProgress.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(durationMillis = INSTALL_DURATION_MS, easing = LinearEasing)
-            )
+    // ── Notifications (non-dismissable; cleared only by being actioned) ──────
+    var tetrisNotif by remember { mutableStateOf(false) }
+    var tetrisNotifDone by remember { mutableStateOf(false) }
+    var amaxNotif by remember { mutableStateOf(false) }
+    var amaxDone by remember { mutableStateOf(false) }
+    var sawMessages by remember { mutableStateOf(false) }
+    // Tetris "play for free" pitch ~15s after the phone opens.
+    LaunchedEffect(Unit) { delay(15_000L); if (!tetrisNotifDone) tetrisNotif = true }
+    // Amax scam text right after the user closes the Messages app.
+    LaunchedEffect(sawMessages) {
+        if (sawMessages && !amaxDone) { delay(1_200L); amaxNotif = true }
+    }
+
+    // "Virus" link overlay (colour flicker + random vibration). Whatever app was
+    // open stays open underneath, so an email-triggered one returns to the inbox.
+    var virusActive by remember { mutableStateOf(false) }
+
+    // End sequence: Dumbazon "closed for today" → degrimer download → "clean"
+    // (costs half the giftcards) → onComplete (aerial). 0 none·1·2·3 done.
+    var endPhase by remember { mutableIntStateOf(0) }
+    LaunchedEffect(endPhase) {
+        when (endPhase) {
+            1 -> { delay(2_000L); endPhase = 2 }
+            2 -> { delay(2_800L); setGiftcards(giftcards / 2); endPhase = 3 }
+            3 -> { delay(900L); onComplete() }
         }
+    }
+
+    // System lag → laggy scrolling: lists briefly freeze every couple of seconds
+    // (Tetris adds its own random freeze/speed-ups). Exposed via LocalScrollLag.
+    var scrollLag by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay((1500..3000).random().toLong())
+            scrollLag = true
+            delay((120..260).random().toLong())
+            scrollLag = false
+        }
+    }
+
+    // One notification at a time (Tetris first), only over the home screen. While
+    // shown it blocks the home so no other app can be opened.
+    val pendingNotif: String? = when {
+        activeApp != null -> null
+        tetrisNotif -> "tetris"
+        amaxNotif -> "amax"
+        else -> null
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color(0xFF101418))) {
@@ -176,56 +193,87 @@ fun TankGame(onComplete: () -> Unit) {
             modifier = Modifier.fillMaxSize()
         )
 
-        Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            Spacer(modifier = Modifier.height(20.dp))
+        CompositionLocalProvider(LocalScrollLag provides scrollLag) {
+            Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                GiftcardCounter(giftcards, modifier = Modifier.padding(horizontal = 16.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(4),
-                modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                if (allVisited) {
-                    item {
-                        InstallingCalcTile(
-                            label = "Just A Calculator",
-                            progress = installProgress.value,
-                            onClick = { finishing = true }
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(4),
+                    modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    items(GRID_APPS, key = { it.name }) { app ->
+                        // Dumbazon is sticky: never disabled and keeps its colour
+                        // icon until the very end, but still counts as visited.
+                        val sticky = app.name == STICKY_OPEN_APP
+                        val used = app.name in visited && !sticky
+                        val dir = if (app.name in visited && !sticky) ICON_DIR_USED else ICON_DIR_FRESH
+                        IconTile(
+                            label = app.label,
+                            assetPath = "file:///android_asset/$dir/${app.name}.svg",
+                            enabled = !used,
+                            onClick = { activeApp = app.name }
                         )
                     }
                 }
-                items(GRID_APPS, key = { it.name }) { app ->
-                    val used = app.name in visited
-                    val dir = if (used) ICON_DIR_USED else ICON_DIR_FRESH
-                    IconTile(
-                        label = app.label,
-                        assetPath = "file:///android_asset/$dir/${app.name}.svg",
-                        enabled = !used,
-                        onClick = { activeApp = app.name }
+
+                DockBar(visited = visited, onTap = { activeApp = it })
+            }
+
+            // Active app surface.
+            val current = activeApp
+            if (current != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { }
+                ) {
+                    AppShell(
+                        name = current,
+                        giftcards = giftcards,
+                        addGiftcards = { addGiftcards(it) },
+                        openAd = { donationOpen = true },
+                        triggerVirus = { virusActive = true },
+                        allVisited = allVisited,
+                        onCloseForToday = { endPhase = 1 },
+                        onClose = {
+                            visited = visited + current
+                            if (current == "message") sawMessages = true
+                            activeApp = null
+                        }
                     )
                 }
             }
-
-            DockBar(visited = visited, onTap = { activeApp = it })
         }
 
-        // Active app surface.
-        val current = activeApp
-        if (current != null) {
+        // Blocking notification — dims + absorbs taps on the home screen so no
+        // app can be opened until the notification is actioned. Hangs at the top.
+        if (pendingNotif != null) {
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
+                modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.25f))
                     .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { }
+            )
+            Box(
+                modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(top = 6.dp)
+                    .align(Alignment.TopCenter)
             ) {
-                AppShell(
-                    name = current,
-                    openAd = { donationOpen = true },
-                    onReadyToClose = { appCloseReady = true },
-                    onClose = {
-                        visited = visited + current
-                        activeApp = null
-                    }
-                )
+                when (pendingNotif) {
+                    "tetris" -> NotifBanner(
+                        icon = "file:///android_asset/$ICON_DIR_FRESH/tetris.svg",
+                        title = "Tetris",
+                        body = "Win Dumbazon giftcards, play for free!",
+                        onClick = { tetrisNotif = false; tetrisNotifDone = true; activeApp = "tetris" }
+                    )
+                    "amax" -> NotifBanner(
+                        icon = "file:///android_asset/$ICON_DIR_FRESH/message.svg",
+                        title = "Amax",
+                        body = "Free giftcards here: hxxp://amax-free-cards.win/claim",
+                        onClick = { amaxNotif = false; amaxDone = true; virusActive = true }
+                    )
+                }
             }
         }
 
@@ -243,24 +291,18 @@ fun TankGame(onComplete: () -> Unit) {
             )
         }
 
-        // Completion banner — appears at the moment the user taps the new calc
-        // tile, before the city retakes the screen.
-        if (finishing) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0xCC0A1430)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "time flies in the apps...",
-                    color = Color(0xFFE9F2FF),
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    fontFamily = FontFamily.Monospace,
-                    textAlign = TextAlign.Center
-                )
-            }
+        // "Virus" link — flickers, vibrates, then drops the user back where they
+        // were, 20% of their giftcards lighter.
+        if (virusActive) {
+            VirusOverlay(onDone = {
+                setGiftcards((giftcards * 0.8f).toInt())
+                virusActive = false
+            })
+        }
+
+        // End sequence (closed → degrimer → clean → aerial).
+        if (endPhase >= 1) {
+            EndSequenceOverlay(phase = endPhase)
         }
     }
 }
@@ -287,77 +329,6 @@ private fun IconTile(
             contentDescription = label,
             modifier = Modifier.size(56.dp).clip(RoundedCornerShape(14.dp))
         )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(label, color = Color.White, fontSize = 11.sp, textAlign = TextAlign.Center)
-    }
-}
-
-/** Just-A-Calculator install tile — matches the Phase-1 install animation. */
-@Composable
-private fun InstallingCalcTile(
-    label: String,
-    progress: Float,
-    onClick: () -> Unit
-) {
-    val installing = progress < 1f
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .clickable(
-                enabled = !installing,
-                indication = null,
-                interactionSource = remember { MutableInteractionSource() }
-            ) { onClick() }
-            .padding(vertical = 4.dp)
-    ) {
-        Box(
-            modifier = Modifier.size(56.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Image(
-                painter = androidx.compose.ui.res.painterResource(id = R.drawable.calc_app_icon),
-                contentDescription = label,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(RoundedCornerShape(14.dp))
-                    .alpha(if (installing) 0.35f else 1f)
-            )
-            if (installing) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val stroke = 4.dp.toPx()
-                    val arcSize = androidx.compose.ui.geometry.Size(
-                        size.width - stroke,
-                        size.height - stroke
-                    )
-                    val topLeft = androidx.compose.ui.geometry.Offset(stroke / 2f, stroke / 2f)
-                    drawArc(
-                        color = Color.White.copy(alpha = 0.25f),
-                        startAngle = -90f,
-                        sweepAngle = 360f,
-                        useCenter = false,
-                        topLeft = topLeft,
-                        size = arcSize,
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(
-                            width = stroke,
-                            cap = androidx.compose.ui.graphics.StrokeCap.Round
-                        )
-                    )
-                    drawArc(
-                        color = Color.White,
-                        startAngle = -90f,
-                        sweepAngle = 360f * progress.coerceIn(0f, 1f),
-                        useCenter = false,
-                        topLeft = topLeft,
-                        size = arcSize,
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(
-                            width = stroke,
-                            cap = androidx.compose.ui.graphics.StrokeCap.Round
-                        )
-                    )
-                }
-            }
-        }
         Spacer(modifier = Modifier.height(4.dp))
         Text(label, color = Color.White, fontSize = 11.sp, textAlign = TextAlign.Center)
     }
@@ -396,41 +367,42 @@ private fun DockBar(visited: Set<String>, onTap: (String) -> Unit) {
 
 // Dispatcher for the active-app surface. Each app composable is responsible for
 // its own internal popups; it can call openAd() to surface the donation page.
-// A floating close (X) button is overlaid on top of every app's content so the
-// user can always escape, even before the auto-close timer fires.
+// A floating close (X) button is overlaid on top of every app's content — it is
+// the only way to close an app (there is no auto-close), and it marks it visited.
 @Composable
 private fun AppShell(
     name: String,
+    giftcards: Int,
+    addGiftcards: (Int) -> Unit,
     openAd: () -> Unit,
-    onReadyToClose: () -> Unit,
+    triggerVirus: () -> Unit,
+    allVisited: Boolean,
+    onCloseForToday: () -> Unit,
     onClose: () -> Unit,
 ) {
     Box(modifier = Modifier.fillMaxSize().background(Color(0xFFF2F4F7))) {
         when (name) {
-            "fbook"     -> AppSocialFacebook()
-            "gram"      -> AppSocialInstagram()
-            "tok"       -> AppSocialTikTok()
-            "youtube"   -> AppSocialYouTube()
-            "airbnb"    -> AppAirbnb()
-            "amazon"    -> AppAmazon()
-            "birds"     -> AppNagBox(title = "Purchase more birds?", openAd = openAd)
-            "candy"     -> AppNagBox(title = "Need more lives? Need more golden bars!", openAd = openAd)
-            "calc"      -> AppCalculator()
-            "camera"    -> AppCamera(openAd = openAd)
-            "discord"   -> AppDiscord(onClose = onClose)
-            "duo"       -> AppDuolingo(openAd = openAd, onReadyToClose = onReadyToClose)
-            "mail"      -> AppMail(openAd = openAd)
-            "message"   -> AppMessages()
-            "phone"     -> AppPhone()
-            "phonebook" -> AppContacts()
-            "TEMU"      -> AppTemu()
-            "tetris"    -> AppTetris()
-            else        -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            "innergram"   -> AppSocialInstagram()
+            "tuktak"      -> AppSocialTikTok()
+            "dumbazon"    -> AppAmazon(
+                giftcards = giftcards,
+                allVisited = allVisited,
+                onCloseForToday = onCloseForToday,
+            )
+            "discocord"   -> AppDiscord(onClose = onClose)
+            "halflingo"   -> AppDuolingo(addGiftcards = addGiftcards, onClose = onClose)
+            "mail"        -> AppMail(addGiftcards = addGiftcards, triggerVirus = triggerVirus, openAd = openAd)
+            "message"     -> AppMessages()
+            "phone"       -> AppPhone()
+            "phonebook"   -> AppContacts(addGiftcards = addGiftcards)
+            "mute"        -> AppTemu()
+            "tetris"      -> AppTetris(addGiftcards = addGiftcards, giftcards = giftcards, onClose = onClose)
+            else          -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(name, color = Color.Black)
             }
         }
 
-        // User-driven close — always available, regardless of auto-close timer.
+        // User-driven close — the only way out of an app.
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
@@ -457,107 +429,81 @@ private fun AppShell(
 
 // ── Per-app stubs — content built out incrementally below ────────────────────
 
+// The made-up users shared across Innergram and TukTak.
+private val SOCIAL_NAMES = listOf("BestUser", "Innergram_Official", "MarytheInfluencer", "SexyMan")
+
 @Composable
-private fun AppSocialFacebook() {
-    // 4 placeholder posts repeated 3× (≈12 cards) so the user can scroll for a
-    // while; copy will be supplied later.
-    val posts = remember { (0 until 12).map { i -> i % 4 } }
-    Column(modifier = Modifier.fillMaxSize().background(Color(0xFFF0F2F5)).statusBarsPadding()) {
-        Box(modifier = Modifier.fillMaxWidth().background(Color.White).padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
-            Text("facebook", color = Color(0xFF1877F2), fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+private fun AppSocialInstagram() {
+    val context = LocalContext.current
+    // 2 of the player's Building-7 selfies (newest first), shown as real posts.
+    val myPics = remember { loadVanityCapturePaths(context, 2) }
+    val placeholders = remember { (0 until 10).toList() }
+
+    Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
+        Box(modifier = Modifier.fillMaxWidth().padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
+            Text("Innergram", color = Color.Black, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
         }
-        LazyColumn(modifier = Modifier.fillMaxSize().padding(top = 6.dp)) {
-            items(posts.size) { idx ->
-                val n = posts[idx]
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color.White)
-                        .padding(12.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(modifier = Modifier.size(38.dp).clip(CircleShape).background(Color(0xFFD0D7E2)))
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text("User name placeholder ${n + 1}", color = Color(0xFF1C1E21), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                            Text("3h · 🌐", color = Color(0xFF65676B), fontSize = 11.sp)
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "Post text placeholder ${n + 1} — caption will go here.",
-                        color = Color(0xFF1C1E21), fontSize = 14.sp
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(16f / 10f)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(Color(0xFFCBD5DC))
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-                        for (s in listOf("👍 Like", "💬 Comment", "↗ Share")) {
-                            Text(s, color = Color(0xFF65676B), fontSize = 12.sp)
-                        }
-                    }
-                }
+        LazyColumn(modifier = Modifier.fillMaxSize(), userScrollEnabled = !LocalScrollLag.current) {
+            items(myPics.size) { idx ->
+                InstaPost(
+                    name = SOCIAL_NAMES[idx % SOCIAL_NAMES.size],
+                    imageFile = java.io.File(myPics[idx]),
+                    caption = "feeling cute today"
+                )
+            }
+            items(placeholders.size) { idx ->
+                InstaPost(
+                    name = SOCIAL_NAMES[(idx + myPics.size) % SOCIAL_NAMES.size],
+                    imageFile = null,
+                    caption = "caption placeholder"
+                )
             }
         }
     }
 }
+
 @Composable
-private fun AppSocialInstagram() {
-    val posts = remember { (0 until 12).map { i -> i % 4 } }
-    Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
-        Box(modifier = Modifier.fillMaxWidth().padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
-            Text("Instagram", color = Color.Black, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+private fun InstaPost(name: String, imageFile: java.io.File?, caption: String) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(modifier = Modifier.size(34.dp).clip(CircleShape).background(Color(0xFFFFC1E3)))
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(name, color = Color.Black, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(posts.size) { idx ->
-                val n = posts[idx]
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(modifier = Modifier.size(34.dp).clip(CircleShape).background(Color(0xFFFFC1E3)))
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text("user_${n + 1}_placeholder", color = Color.Black, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(1f)
-                            .background(Color(0xFFE3E0DA))
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        Text("♡", color = Color.Black, fontSize = 22.sp)
-                        Text("💬", color = Color.Black, fontSize = 18.sp)
-                        Text("↗", color = Color.Black, fontSize = 20.sp)
-                    }
-                    Text(
-                        "user_${n + 1}_placeholder · caption placeholder",
-                        color = Color.Black, fontSize = 13.sp,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                }
+        Box(modifier = Modifier.fillMaxWidth().aspectRatio(1f).background(Color(0xFFE3E0DA))) {
+            if (imageFile != null) {
+                AsyncImage(
+                    model = imageFile,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
         }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text("♡", color = Color.Black, fontSize = 22.sp)
+            Text("💬", color = Color.Black, fontSize = 18.sp)
+            Text("↗", color = Color.Black, fontSize = 20.sp)
+        }
+        Text("$name · $caption", color = Color.Black, fontSize = 13.sp,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+        Spacer(modifier = Modifier.height(12.dp))
     }
 }
 @Composable
 private fun AppSocialTikTok() {
     // Vertical full-bleed cards, one per post, scrollable.
     val posts = remember { (0 until 12).map { i -> i % 4 } }
-    LazyColumn(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().background(Color.Black),
+        userScrollEnabled = !LocalScrollLag.current
+    ) {
         items(posts.size) { idx ->
             val n = posts[idx]
             val bg = listOf(
@@ -575,7 +521,7 @@ private fun AppSocialTikTok() {
                         .align(Alignment.BottomStart)
                         .padding(16.dp)
                 ) {
-                    Text("@user_${n + 1}_placeholder", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Text("@${SOCIAL_NAMES[n % SOCIAL_NAMES.size]}", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.height(4.dp))
                     Text("caption placeholder #${n + 1}", color = Color.White, fontSize = 13.sp)
                 }
@@ -592,236 +538,136 @@ private fun AppSocialTikTok() {
         }
     }
 }
-@Composable
-private fun AppSocialYouTube() {
-    val posts = remember { (0 until 12).map { i -> i % 4 } }
-    Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
-        Box(modifier = Modifier.fillMaxWidth().padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(modifier = Modifier.width(28.dp).height(20.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFFFF0000)))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("YouTube", color = Color.Black, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(posts.size) { idx ->
-                val n = posts[idx]
-                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp)) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(16f / 9f)
-                            .background(Color(0xFFD8D8D8))
-                    )
-                    Row(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                        Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(Color(0xFFB7C6D6)))
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Video title placeholder ${n + 1}", color = Color.Black, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                            Text("channel placeholder · 12K views · 4 days ago", color = Color(0xFF606060), fontSize = 12.sp)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-@Composable
-private fun AppAirbnb() {
-    // A scrolling list of nothing-but-fees, the joke being that the booking
-    // total is buried under endless service charges.
-    val labels = listOf(
-        "Cleaning fee", "Service fee", "Platform fee", "Convenience fee",
-        "Booking protection", "Guest verification fee", "Local taxes",
-        "Resort fee", "Linen surcharge", "Towel rental", "Wi-Fi access fee",
-        "Smart-lock fee", "Parking fee", "Early-check-in fee", "Late check-out fee",
-        "Pet-not-allowed deposit", "Extra-guest fee", "Trash removal",
-        "Air-conditioning surcharge", "Heating surcharge", "Welcome-basket fee",
-        "Damage-protection plan", "Currency conversion fee", "Payment processing fee",
-        "Host courtesy fee", "Property-tax pass-through", "Insurance levy",
-        "Eco-fee", "Service-recovery fee", "Concierge gratuity",
-        "Booking-confirmation fee", "App-usage fee", "Loyalty-tier upgrade",
-        "Service-fee service fee", "Fee-disclosure fee", "Total."
-    )
-    Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
-        Box(modifier = Modifier.fillMaxWidth().background(Color(0xFFFF385C)).padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
-            Text("Reservation summary", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-        }
-        LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-            items(labels) { lbl ->
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(lbl, color = Color(0xFF222222), fontSize = 14.sp)
-                    Text("$${(7..149).random()}", color = Color(0xFF555555), fontSize = 14.sp)
-                }
-                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFEAEAEA)))
-            }
-        }
-    }
-}
-@Composable
-private fun AppAmazon() {
-    // Half-a-dozen products, every one labelled "Amazon's Choice".
-    data class Prod(val title: String, val price: String, val swatch: Color)
-    val items = listOf(
-        Prod("Universal phone charger (probably)", "$12.99", Color(0xFF7B8794)),
-        Prod("Set of 3 microfibre cloths",          "$6.49",  Color(0xFFAEC7B5)),
-        Prod("LED desk lamp, no instructions",      "$23.00", Color(0xFFF1E0A6)),
-        Prod("Cable organiser (color may vary)",    "$3.99",  Color(0xFF9FB3C8)),
-        Prod("Stainless steel mug, 12oz",           "$14.49", Color(0xFFB7A38C)),
-        Prod("Bluetooth earbuds, 4★ avg.",          "$19.99", Color(0xFF6E7A8A))
-    )
-    Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
-        Box(modifier = Modifier.fillMaxWidth().background(Color(0xFF131921)).padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
-            Text("amazon", color = Color(0xFFFF9900), fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        }
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(items) { p ->
-                Row(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                    Box(modifier = Modifier.size(86.dp).clip(RoundedCornerShape(6.dp)).background(p.swatch))
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(3.dp))
-                                .background(Color(0xFF232F3E))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text("Amazon's Choice", color = Color(0xFFFF9900), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(p.title, color = Color(0xFF111111), fontSize = 14.sp)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(p.price, color = Color(0xFFB12704), fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFEAEAEA)))
-            }
-        }
-    }
-}
-@Composable
-private fun AppCalculator() {
-    // Minimal four-function calculator. Builds an expression by tapping digits
-    // and operators; "=" evaluates. Operator precedence is intentionally naive.
-    var display by remember { mutableStateOf("0") }
-    var pending by remember { mutableStateOf<Double?>(null) }
-    var op by remember { mutableStateOf<Char?>(null) }
-    var justEval by remember { mutableStateOf(false) }
+// Dumbazon product. `margin` is how many giftcards the price always sits ABOVE
+// the player's balance — different per phone, so each stays just out of reach.
+private data class DumbProduct(
+    val title: String, val desc: String, val image: String, val swatch: Color, val margin: Int,
+)
+private const val PHONE_DIR = "file:///android_asset/phonescreen/phonedetour"
+private val DUMB_PRODUCTS = listOf(
+    DumbProduct("iQoOo 12", "NEW best fast Android phone, BEST camera 18GB RAM, microSD, headphone jack, charger included.", "$PHONE_DIR/phone1.svg", Color(0xFF8C9AA6), 9),
+    DumbProduct("UltraPhone 20 pro", "Flagship phone, best camera, fastest Android 15, 23GB ROM, free screen protector, Spotify, YouTube.", "$PHONE_DIR/phone2.svg", Color(0xFFB7A38C), 29),
+    DumbProduct("PhoneMaster 4 Lite", "Ultra fast Android phone iOS, iPhone, 4k screen camera, 56GB RAM, 95Hz display.", "$PHONE_DIR/phone3.svg", Color(0xFF6E7A8A), 99),
+    DumbProduct("TelMuch 55", "Best new device smartwatch flushable camera, 1080pppp display, bright screen, IP69 nice. ", "$PHONE_DIR/phone4.svg", Color(0xFFAEC7B5), 249),
+)
 
-    fun tap(c: Char) {
-        when (c) {
-            in '0'..'9' -> {
-                if (display == "0" || justEval) { display = c.toString(); justEval = false }
-                else display += c
-            }
-            '.' -> { if (!display.contains('.')) display += "." }
-            'C' -> { display = "0"; pending = null; op = null; justEval = false }
-            '+', '-', '×', '÷' -> {
-                pending = display.toDoubleOrNull() ?: 0.0
-                op = c
-                justEval = true
-            }
-            '=' -> {
-                val cur = display.toDoubleOrNull() ?: 0.0
-                val p = pending; val o = op
-                if (p != null && o != null) {
-                    val r = when (o) {
-                        '+' -> p + cur
-                        '-' -> p - cur
-                        '×' -> p * cur
-                        '÷' -> if (cur != 0.0) p / cur else 0.0
-                        else -> cur
-                    }
-                    display = if (r == r.toLong().toDouble()) r.toLong().toString() else r.toString()
-                    pending = null; op = null; justEval = true
-                }
-            }
-        }
+@Composable
+private fun AppAmazon(giftcards: Int, allVisited: Boolean, onCloseForToday: () -> Unit) {
+    var openProduct by remember { mutableStateOf<Int?>(null) }
+    var payMsg by remember { mutableStateOf<String?>(null) }
+
+    // Once every app has been opened, simply RE-OPENING Dumbazon trips the end
+    // sequence ("closed for today" → degrimer), no purchase tap required.
+    LaunchedEffect(allVisited) { if (allVisited) onCloseForToday() }
+
+    fun priceOf(p: DumbProduct) = giftcards + p.margin   // always just out of reach
+
+    fun onPay(p: DumbProduct) {
+        if (allVisited) onCloseForToday()
+        else payMsg = "You need ${p.margin} more giftcards to check out."
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF1A1B1F))) {
-        Box(
-            modifier = Modifier.fillMaxWidth().padding(16.dp).height(120.dp),
-            contentAlignment = Alignment.BottomEnd
+    Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().background(Color(0xFF131921))
+                .padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(display, color = Color.White, fontSize = 56.sp, fontWeight = FontWeight.Light)
+            Text("dumbazon", color = Color(0xFFFF9900), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AsyncImage(model = GIFTCARD_ICON, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("$giftcards", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
         }
-        val rows = listOf(
-            listOf("C", "(", ")", "÷"),
-            listOf("7", "8", "9", "×"),
-            listOf("4", "5", "6", "-"),
-            listOf("1", "2", "3", "+"),
-            listOf("0", ".", "=")
-        )
-        Column(modifier = Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (row in rows) {
-                Row(modifier = Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for ((i, label) in row.withIndex()) {
-                        val w = if (label == "0") 2f else 1f
-                        Box(
-                            modifier = Modifier
-                                .weight(w)
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(18.dp))
-                                .background(if (label in setOf("+","-","×","÷","=")) Color(0xFFFF9F0A) else Color(0xFF2C2C2E))
-                                .clickable(
-                                    indication = null,
-                                    interactionSource = remember(label + i) { MutableInteractionSource() }
-                                ) { tap(label[0]) },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(label, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Medium)
+
+        val op = openProduct
+        if (op == null) {
+            Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
+                // Big featured banner (placeholder image).
+                Box(
+                    modifier = Modifier.fillMaxWidth().aspectRatio(16f / 8f)
+                        .clip(RoundedCornerShape(10.dp)).background(Color(0xFFFFE2B0)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("Upgrade your life.\nPay with giftcards.", color = Color(0xFF7A4F00),
+                        fontSize = 18.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                }
+                Spacer(Modifier.height(14.dp))
+                // 2×2 product grid.
+                for (pair in DUMB_PRODUCTS.indices.chunked(2)) {
+                    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        for (i in pair) {
+                            val p = DUMB_PRODUCTS[i]
+                            Column(
+                                modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0xFFF6F6F6))
+                                    .clickable(indication = null, interactionSource = remember(i) { MutableInteractionSource() }) { openProduct = i }
+                                    .padding(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().aspectRatio(1f)
+                                        .clip(RoundedCornerShape(6.dp)).background(Color.White)
+                                ) {
+                                    AsyncImage(
+                                        model = p.image,
+                                        contentDescription = p.title,
+                                        contentScale = ContentScale.Fit,
+                                        modifier = Modifier.fillMaxSize().padding(4.dp)
+                                    )
+                                }
+                                Spacer(Modifier.height(6.dp))
+                                Text(p.title, color = Color(0xFF111111), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                Text("${priceOf(p)} giftcards", color = Color(0xFFB12704), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }
             }
-        }
-    }
-}
-@Composable
-private fun AppCamera(openAd: () -> Unit) {
-    // Plain dark "viewfinder" (no scan animation per spec). After 5s an upgrade
-    // popup appears; tapping the CTA opens the donation/Play-Store landing.
-    var showUpgrade by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { delay(5_000L); showUpgrade = true }
-
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-        Box(
-            modifier = Modifier
-                .size(72.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.18f))
-        )
-        if (showUpgrade) {
-            Box(
-                modifier = Modifier.fillMaxSize().background(Color(0xCC000000)),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
+        } else {
+            val p = DUMB_PRODUCTS[op]
+            Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                Text("←  Back", color = Color(0xFF131921), fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFFF5F5F7))
-                        .padding(horizontal = 24.dp, vertical = 26.dp)
+                        .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { openProduct = null }
+                        .padding(14.dp))
+                Box(
+                    modifier = Modifier.fillMaxWidth().aspectRatio(1.3f).background(Color.White),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text("Want better photos?", color = Color(0xFF101418), fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("Upgrade your phone today!", color = Color(0xFF36404B), fontSize = 14.sp)
-                    Spacer(modifier = Modifier.height(18.dp))
+                    AsyncImage(
+                        model = p.image,
+                        contentDescription = p.title,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize().padding(16.dp)
+                    )
+                }
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(p.title, color = Color(0xFF111111), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        AsyncImage(model = GIFTCARD_ICON, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("${priceOf(p)} giftcards", color = Color(0xFFB12704), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text(p.desc, color = Color(0xFF333333), fontSize = 14.sp)
+                    Spacer(Modifier.height(22.dp))
+                    // The one and only button.
                     Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(Color(0xFF1976D2))
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() }
-                            ) { openAd() }
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp))
+                            .background(Color(0xFFFFD814))
+                            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onPay(p) }
+                            .padding(vertical = 14.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text("Upgrade", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Pay with giftcards", color = Color(0xFF111111), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    }
+                    payMsg?.let {
+                        Spacer(Modifier.height(10.dp))
+                        Text(it, color = Color(0xFFB12704), fontSize = 13.sp)
                     }
                 }
             }
@@ -905,120 +751,123 @@ private fun AppDiscord(onClose: () -> Unit) {
     }
 }
 @Composable
-private fun AppDuolingo(openAd: () -> Unit, onReadyToClose: () -> Unit) {
-    // Icelandic word-ordering exercise that the game rigs against the user: every
-    // CHECK is marked wrong (even the correct order), burning a life. After 3 lives
-    // are gone, an "Upgrade to Duolingo Plus" modal pops up with a CTA that routes
-    // through the donation landing page like all the other ads in building 3.
-    val prompt = "The cat drinks milk."
-    val correct = listOf("Kötturinn", "drekkur", "mjólkina")
-    val distractors = listOf("bíllinn", "borðar", "epli", "vatnið")
-    val pickWords = remember { (correct + distractors).shuffled() }
-
+private fun AppDuolingo(addGiftcards: (Int) -> Unit, onClose: () -> Unit) {
+    // Rigged translation drill. The English sentence is "Get more giftcards." and
+    // the word bank under it is Icelandic. Every CHECK is wrong and burns a heart,
+    // but each attempt pays out giftcards equal to the letters assembled. The 3rd
+    // wrong answer says "Buy premium for infinite lives" and auto-closes the app.
+    val prompt = "Get more giftcards."
+    val bank = remember {
+        listOf("gjafakort", "fleiri", "fá", "ókeypis", "núna", "vinna",
+            "bónus", "verðlaun", "takk", "já", "kaupa", "frítt").shuffled()
+    }
     var placed by remember { mutableStateOf(listOf<String>()) }
     var lives by remember { mutableStateOf(3) }
+    var attempts by remember { mutableStateOf(0) }
+    var lastAward by remember { mutableStateOf(0) }
     var showWrongFlash by remember { mutableStateOf(false) }
-    var showUpgrade by remember { mutableStateOf(false) }
 
-    // Wrong-answer flash auto-clears after a beat; the wrong answer is then wiped
-    // from the placed row so the user can take another doomed swing.
     LaunchedEffect(showWrongFlash) {
         if (showWrongFlash) {
-            delay(1_200L)
-            placed = emptyList()
-            showWrongFlash = false
-            if (lives <= 0) showUpgrade = true
+            // Hang the wrong-answer banner roughly twice as long as before.
+            delay(3_000L)
+            if (lives <= 0) onClose()        // 3rd wrong → auto-close
+            else { placed = emptyList(); showWrongFlash = false }
         }
     }
 
-    // Signal the outer auto-close gate the moment the upgrade modal appears.
-    LaunchedEffect(showUpgrade) {
-        if (showUpgrade) onReadyToClose()
-    }
+    val faceBoxH = 108.dp * 1123f / 794f
+    val ratio = 1123f / 794f
 
     Box(modifier = Modifier.fillMaxSize().background(Color(0xFFFFFCEF)).statusBarsPadding()) {
-        Column(modifier = Modifier.fillMaxSize().padding(start = 16.dp, end = 56.dp, top = 16.dp, bottom = 16.dp)) {
-            // Header row: prompt label on the left, lives (hearts) on the right.
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text("Translate this sentence", color = Color(0xFF3C3C3C), fontSize = 13.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    for (i in 0 until 3) {
-                        Text(
-                            if (i < lives) "♥" else "♡",
-                            color = if (i < lives) Color(0xFFFF4B4B) else Color(0xFFBDBDBD),
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
+
+        // Funky mascot — the city's "full" character with a smiley for a face.
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 2.dp, end = 2.dp)
+                .width(108.dp)
+                .height(faceBoxH)
+        ) {
+            AsyncImage(
+                model = "file:///android_asset/filters/full.svg",
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize()
+            )
+            SmileyFace(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .offset(y = 108.dp * ratio * 0.207f - 19.dp)
+                    .size(38.dp)
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 20.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (i in 0 until 3) {
+                    Text(if (i < lives) "♥" else "♡",
+                        color = if (i < lives) Color(0xFFFF4B4B) else Color(0xFFBDBDBD),
+                        fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 }
             }
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(Modifier.height(18.dp))
+            Text("Translate this sentence", color = Color(0xFF7A7A7A), fontSize = 13.sp)
+            Spacer(Modifier.height(8.dp))
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.White)
-                    .padding(16.dp)
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                    .background(Color.White).padding(18.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Text(prompt, color = Color(0xFF111111), fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                Text(prompt, color = Color(0xFF111111), fontSize = 24.sp,
+                    fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
             }
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(Modifier.height(22.dp))
 
-            // Placed-words row (the answer being built).
+            // Assembled answer (tap a chip to remove it).
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFFFFFFFF))
-                    .padding(10.dp)
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                    .clip(RoundedCornerShape(10.dp)).background(Color.White).padding(10.dp),
+                contentAlignment = Alignment.CenterStart
             ) {
-                Row(modifier = Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     for ((i, w) in placed.withIndex()) {
                         DuoChip(text = w, onClick = {
                             if (!showWrongFlash) placed = placed.toMutableList().also { it.removeAt(i) }
                         })
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(Modifier.width(6.dp))
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(Modifier.height(20.dp))
 
-            // Pick-list (two rows).
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                for (w in pickWords.take(4)) {
-                    if (w in placed) {
-                        Box(modifier = Modifier.weight(1f).height(40.dp))
-                    } else {
-                        Box(modifier = Modifier.weight(1f)) {
-                            DuoChip(text = w, onClick = { if (!showWrongFlash) placed = placed + w })
-                        }
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                for (w in pickWords.drop(4)) {
-                    if (w in placed) {
-                        Box(modifier = Modifier.weight(1f).height(40.dp))
-                    } else {
-                        Box(modifier = Modifier.weight(1f)) {
-                            DuoChip(text = w, onClick = { if (!showWrongFlash) placed = placed + w })
+            // Word bank (3 rows of 4), already-placed words hidden.
+            for (row in bank.chunked(4)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    for (w in row) {
+                        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                            if (w !in placed) {
+                                DuoChip(text = w, onClick = { if (!showWrongFlash) placed = placed + w })
+                            } else {
+                                Spacer(Modifier.height(40.dp))
+                            }
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(Modifier.height(22.dp))
             val checkEnabled = placed.isNotEmpty() && !showWrongFlash && lives > 0
             Box(
                 modifier = Modifier
@@ -1030,18 +879,22 @@ private fun AppDuolingo(openAd: () -> Unit, onReadyToClose: () -> Unit) {
                         indication = null,
                         interactionSource = remember { MutableInteractionSource() }
                     ) {
-                        // Every answer is wrong. Burn a life and flash.
+                        // Every answer is wrong — but pays out by letter count.
+                        val letters = placed.sumOf { w -> w.count { it.isLetter() } }
+                        lastAward = letters
+                        if (letters > 0) addGiftcards(letters)
+                        attempts += 1
                         lives = (lives - 1).coerceAtLeast(0)
                         showWrongFlash = true
                     }
-                    .padding(vertical = 12.dp),
+                    .padding(vertical = 14.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Text("CHECK", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text("CHECK", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
         }
 
-        // Wrong-answer banner across the bottom.
+        // Wrong-answer banner — snide on attempt 2, "Buy premium…" on attempt 3.
         if (showWrongFlash) {
             Column(
                 modifier = Modifier
@@ -1050,59 +903,20 @@ private fun AppDuolingo(openAd: () -> Unit, onReadyToClose: () -> Unit) {
                     .background(Color(0xFFFFD8D8))
                     .padding(16.dp)
             ) {
-                Text("Oops! That's not right.", color = Color(0xFFCC2929), fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(2.dp))
-                Text("Correct answer: Kötturinn drekkur mjólkina", color = Color(0xFFCC2929), fontSize = 12.sp)
-            }
-        }
-
-        // Out-of-lives upsell modal.
-        if (showUpgrade) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0xCC000000))
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() }
-                    ) { /* absorb */ },
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    modifier = Modifier
-                        .padding(28.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(Color.White)
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text("You're out of lives!", color = Color(0xFF111111), fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "Upgrade to Duolingo Plus to get unlimited lives.",
-                        color = Color(0xFF555555),
-                        fontSize = 14.sp,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(18.dp))
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(Color(0xFFFFC800))
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() }
-                            ) { openAd() }
-                            .padding(vertical = 12.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            "Upgrade Now",
-                            color = Color(0xFF111111),
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                Text(
+                    when {
+                        attempts >= 3 -> "Buy premium for infinite lives"
+                        attempts >= 2 -> "I don't actually care what's correct. have you heard about AI?"
+                        else -> "Oops! That's not right."
+                    },
+                    color = Color(0xFFCC2929), fontSize = 15.sp, fontWeight = FontWeight.Bold
+                )
+                if (lastAward > 0) {
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        AsyncImage(model = GIFTCARD_ICON, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("+$lastAward giftcards", color = Color(0xFF1B7A3A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -1125,11 +939,14 @@ private fun DuoChip(text: String, onClick: () -> Unit) {
         Text(text, color = Color(0xFF222222), fontSize = 14.sp, fontWeight = FontWeight.Medium)
     }
 }
+private enum class MailAction { RATE, GIFTCARDS, VIRUS }
+
 private data class MailMsg(
     val sender: String,
     val subject: String,
     val body: String,
     val cta: String?,
+    val action: MailAction = MailAction.RATE,
 )
 
 private val DOOR3_MAILS = listOf(
@@ -1138,18 +955,21 @@ private val DOOR3_MAILS = listOf(
         subject = "eBay: There's still time to share your feedback!",
         body = "Your review matters\n\nYour feedback helps fellow buyers make informed decisions and strengthens the eBay community. Take a moment to share feedback on your recent purchase – it's quick, easy, and makes a big impact.",
         cta = "Rate Now",
+        action = MailAction.GIFTCARDS,
     ),
     MailMsg(
         sender = "Experian",
         subject = "Experian: Update to your credit score.",
         body = "Hello, your Experian credit score has changed!\nKnowing your score can help you see where you stand with your finances.\n\nRemember, checking your score will never harm it.",
         cta = "Check score now",
+        action = MailAction.VIRUS,
     ),
     MailMsg(
-        sender = "Spotify",
-        subject = "Spotify: Rihanna is coming to your town!",
+        sender = "Spilltify",
+        subject = "Spilltify: Rihanna is coming to your town!",
         body = "Rihanna and 5+ other artists you love are heading out on tour! Don't miss their gigs near you.",
         cta = "View events",
+        action = MailAction.GIFTCARDS,
     ),
     MailMsg(
         sender = "Grand Dental Clinic",
@@ -1162,6 +982,7 @@ private val DOOR3_MAILS = listOf(
         subject = "AliExpress: To pair with what you purchased",
         body = "Find items to match your Computer Peripherals",
         cta = "AliExpress",
+        action = MailAction.VIRUS,
     ),
     MailMsg(
         sender = "Google",
@@ -1174,6 +995,7 @@ private val DOOR3_MAILS = listOf(
         subject = "Virgin Atlantic: Up to 36,000 reasons to apply",
         body = "Love travel? Us too! So why not earn points for every trip you book, and even your morning coffee and weekly shop*, to spend on your next adventure.\n\nThere are now only a few days left to take out a Virgin Atlantic Reward+ Credit Card and earn up to 36,000 Virgin Points. Apply before 18th May",
         cta = "Apply",
+        action = MailAction.GIFTCARDS,
     ),
     MailMsg(
         sender = "Wise",
@@ -1196,8 +1018,10 @@ private val DOOR3_MAILS = listOf(
 )
 
 @Composable
-private fun AppMail(openAd: () -> Unit) {
+private fun AppMail(addGiftcards: (Int) -> Unit, triggerVirus: () -> Unit, openAd: () -> Unit) {
     var open by remember { mutableStateOf<Int?>(null) }
+    var claimMsg by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(open) { claimMsg = null }   // clear feedback when navigating
     val o = open
 
     if (o == null) {
@@ -1205,7 +1029,7 @@ private fun AppMail(openAd: () -> Unit) {
             Box(modifier = Modifier.fillMaxWidth().background(Color(0xFFC5221F)).padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
                 Text("Inbox", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(modifier = Modifier.fillMaxSize(), userScrollEnabled = !LocalScrollLag.current) {
                 items(DOOR3_MAILS.size) { idx ->
                     val m = DOOR3_MAILS[idx]
                     Column(
@@ -1270,15 +1094,30 @@ private fun AppMail(openAd: () -> Unit) {
                             .clickable(
                                 indication = null,
                                 interactionSource = remember { MutableInteractionSource() }
-                            ) { openAd() }
+                            ) {
+                                when (m.action) {
+                                    MailAction.RATE -> openAd()
+                                    MailAction.GIFTCARDS -> {
+                                        val a = (5..20).random()
+                                        addGiftcards(a)
+                                        claimMsg = "+$a giftcards added to your account."
+                                    }
+                                    // From email the virus returns the user to the
+                                    // inbox (the Mail app stays open underneath).
+                                    MailAction.VIRUS -> triggerVirus()
+                                }
+                            }
                             .padding(horizontal = 22.dp, vertical = 12.dp)
                     ) {
-                        Text(
-                            label,
-                            color = Color.White,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                        Text(label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    claimMsg?.let { msg ->
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            AsyncImage(model = GIFTCARD_ICON, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(msg, color = Color(0xFF1B7A3A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
@@ -1404,7 +1243,7 @@ private fun AppMessages() {
             Box(modifier = Modifier.fillMaxWidth().background(Color(0xFF1976D2)).padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
                 Text("Messages", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(modifier = Modifier.fillMaxSize(), userScrollEnabled = !LocalScrollLag.current) {
                 items(DOOR3_THREADS.size) { idx ->
                     val t = DOOR3_THREADS[idx]
                     Row(
@@ -1555,57 +1394,103 @@ private fun AppPhone() {
     }
 }
 @Composable
-private fun AppContacts() {
-    // Mix of normal-person contacts and a handful of ad entries with a tiny
-    // "AD" marker — same layout regardless of contact-permission outcome.
-    data class Row(val name: String, val isAd: Boolean)
+private fun AppContacts(addGiftcards: (Int) -> Unit) {
+    // Normal contacts mixed with "AD" entries. Tapping ANY ad contact (including
+    // the giftcard-farm ones) pays out some giftcards and replies with a canned
+    // "we'll be in touch" line.
+    data class CRow(val name: String, val isAd: Boolean)
     val rows = remember {
         val plain = listOf(
             "Mum", "Dad", "Becky - Manager", "Jamie", "Sam", "Emily", "Alex",
             "Chris", "Priya", "Liam", "Ava", "Noah", "Olivia", "Ethan",
             "Sophie", "Marcus", "Hannah", "Tom (Pub Quiz)", "Aunt Karen",
             "Dr. Patel", "Landlord", "Plumber Steve"
-        ).map { Row(it, isAd = false) }
+        ).map { CRow(it, isAd = false) }
         val ads = listOf(
-            "The Insurance Lawyer",
-            "The Teeth Doctor",
-            "The Best Car Recovery",
-            "Cheapest Locksmith In Town",
-            "Cash-For-Phones (24h)"
-        ).map { Row(it, isAd = true) }
-        // Sort plain contacts alphabetically so the list reads like a real
-        // address book; ads are interleaved by shuffling them into the result.
-        val sorted = plain.sortedBy { it.name }
-        val mixed = sorted.toMutableList()
+            "The Insurance Lawyer", "The Teeth Doctor", "The Best Car Recovery",
+            "Cheapest Locksmith In Town", "Cash-For-Phones (24h)",
+            "Free giftcards", "Free giftcards Daily", "Giftcards4U",
+            "Giftcardland", "Giftcardnation", "TheGiftcardDealer"
+        ).map { CRow(it, isAd = true) }
+        val sorted = plain.sortedBy { it.name }.toMutableList()
         for ((i, ad) in ads.withIndex()) {
-            val pos = ((i + 1) * (mixed.size + 1) / (ads.size + 1)).coerceIn(0, mixed.size)
-            mixed.add(pos, ad)
+            val pos = ((i + 1) * (sorted.size + 1) / (ads.size + 1)).coerceIn(0, sorted.size)
+            sorted.add(pos, ad)
         }
-        mixed
+        sorted
     }
-    Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
-        Box(modifier = Modifier.fillMaxWidth().background(Color(0xFF263238)).padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
-            Text("Contacts", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+    val adMessages = remember {
+        listOf(
+            "Thank you for you interest, I will be in touch.",
+            "Your number has been added to the database, thank you!",
+            "We'll contact you shortly!",
+            "We are happy to see you interested, we will contact you soon!"
+        )
+    }
+    var dialog by remember { mutableStateOf<Pair<Int, String>?>(null) }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
+            Box(modifier = Modifier.fillMaxWidth().background(Color(0xFF263238)).padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
+                Text("Contacts", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            }
+            LazyColumn(modifier = Modifier.fillMaxSize(), userScrollEnabled = !LocalScrollLag.current) {
+                items(rows) { r ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(
+                                enabled = r.isAd,
+                                indication = null,
+                                interactionSource = remember(r.name) { MutableInteractionSource() }
+                            ) {
+                                val award = (3..12).random()
+                                addGiftcards(award)
+                                dialog = award to adMessages.random()
+                            }
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(modifier = Modifier.size(36.dp).clip(CircleShape).background(Color(0xFFE0E0E0)))
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(r.name, color = Color(0xFF111111), fontSize = 15.sp, modifier = Modifier.weight(1f))
+                        if (r.isAd) {
+                            Text("AD", color = Color(0xFF888888).copy(alpha = 0.55f),
+                                fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFEAEAEA)))
+                }
+            }
         }
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(rows) { r ->
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+
+        dialog?.let { (award, msg) ->
+            Box(
+                modifier = Modifier.fillMaxSize().background(Color(0xCC000000))
+                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { dialog = null },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    modifier = Modifier.padding(28.dp).clip(RoundedCornerShape(16.dp))
+                        .background(Color.White).padding(22.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Box(modifier = Modifier.size(36.dp).clip(CircleShape).background(Color(0xFFE0E0E0)))
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(r.name, color = Color(0xFF111111), fontSize = 15.sp, modifier = Modifier.weight(1f))
-                    if (r.isAd) {
-                        Text(
-                            "AD",
-                            color = Color(0xFF888888).copy(alpha = 0.55f),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        AsyncImage(model = GIFTCARD_ICON, contentDescription = null, modifier = Modifier.size(22.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("+$award giftcards", color = Color(0xFF1B7A3A), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text(msg, color = Color(0xFF333333), fontSize = 14.sp, textAlign = TextAlign.Center)
+                    Spacer(Modifier.height(16.dp))
+                    Box(
+                        modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0xFF263238))
+                            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { dialog = null }
+                            .padding(horizontal = 24.dp, vertical = 10.dp)
+                    ) {
+                        Text("OK", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
-                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFEAEAEA)))
             }
         }
     }
@@ -1616,7 +1501,7 @@ private fun AppTemu() {
     // global SHORT_APPS timer in TankGame().
     Box(modifier = Modifier.fillMaxSize().background(Color(0xFFFF7A1A)), contentAlignment = Alignment.Center) {
         Text(
-            "PAY FOR SHIPPING ONLY",
+            "PAY FOR SHIPPING ONLY \n JUST PAY\nPAY!",
             color = Color.White,
             fontSize = 34.sp,
             fontWeight = FontWeight.ExtraBold,
@@ -1625,20 +1510,18 @@ private fun AppTemu() {
     }
 }
 @Composable
-private fun AppTetris() {
-    // Minimal-but-functional Tetris on a 6×10 board. Each filled cell is rendered
-    // as a phone-app icon — both for the currently-falling piece and for locked
-    // cells on the board. Standard tetromino shapes (I/O/T/J/L/S/Z) spawn at the
-    // top in random orientation; left/right/rotate/drop controls live below the
-    // playfield. Filled rows clear; piece can't spawn → game over.
+private fun AppTetris(addGiftcards: (Int) -> Unit, giftcards: Int, onClose: () -> Unit) {
+    // Tetris on a 6×10 board where each filled cell is a phone-app icon. Some
+    // cells spawn as the giftcard icon — every piece containing one pays out
+    // giftcards on lock. After ~20s the icons go black-and-white; 30s after that
+    // the board accelerates beyond playability.
     val cols = 6
     val rows = 10
     val iconPool = remember {
-        listOf(
-            "fbook", "gram", "tok", "youtube", "airbnb", "amazon",
-            "discord", "duo", "calc", "camera", "candy", "birds", "TEMU"
-        )
+        listOf("innergram", "tuktak", "dumbazon", "discocord", "halflingo", "mute")
     }
+    // 0 = colour icons · 1 = black-and-white icons · 2 = unplayably fast.
+    var phase by remember { mutableIntStateOf(0) }
     val shapes = remember {
         listOf(
             listOf(0 to 0, 1 to 0, 2 to 0, 3 to 0), // I
@@ -1675,7 +1558,7 @@ private fun AppTetris() {
             return
         }
         pieceCells = cells
-        pieceIcons = cells.map { iconPool.random() }
+        pieceIcons = cells.map { if ((0..99).random() < 18) "giftcard" else iconPool.random() }
     }
 
     fun lockPiece() {
@@ -1685,6 +1568,9 @@ private fun AppTetris() {
             val (c, r) = cell
             if (r in 0 until rows && c in 0 until cols) nb[r][c] = pieceIcons[i]
         }
+        // Giftcard icons in this piece pay out.
+        val gcCells = pieceIcons.count { it == "giftcard" }
+        if (gcCells > 0) addGiftcards(gcCells * 3)
         // Clear full rows: keep the ones with any empty cell; collapse downward.
         val keep = (0 until rows).filter { r -> nb[r].any { it == null } }
         val cleared = rows - keep.size
@@ -1729,7 +1615,15 @@ private fun AppTetris() {
     LaunchedEffect(Unit) {
         spawn()
         while (true) {
-            delay(700L)
+            // "Lag": below phase 2 the gravity randomly freezes (long pause) or
+            // speed-bursts; phase 2 is a flat, unplayable rush.
+            val d = when {
+                phase >= 2 -> 90L
+                (0..99).random() < 9 -> 1700L   // random freeze
+                (0..99).random() < 9 -> 130L    // random speed-up
+                else -> 700L
+            }
+            delay(d)
             if (gameOver) break
             if (pieceCells.isEmpty()) {
                 spawn()
@@ -1738,6 +1632,15 @@ private fun AppTetris() {
                 spawn()
             }
         }
+    }
+    // Escalation: icons desaturate, then the board accelerates beyond control.
+    LaunchedEffect(Unit) {
+        delay(20_000L); phase = 1
+        delay(30_000L); phase = 2
+    }
+    // Auto-close shortly after game over.
+    LaunchedEffect(gameOver) {
+        if (gameOver) { delay(1_500L); onClose() }
     }
 
     Column(
@@ -1749,12 +1652,18 @@ private fun AppTetris() {
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text("TETRIS", color = Color(0xFFFFCC00), fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
-            Text(
-                if (gameOver) "GAME OVER" else "Score $score",
-                color = if (gameOver) Color(0xFFFF6464) else Color(0xFFCCD6E8),
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    if (gameOver) "GAME OVER" else "Score $score",
+                    color = if (gameOver) Color(0xFFFF6464) else Color(0xFFCCD6E8),
+                    fontSize = 13.sp, fontWeight = FontWeight.Bold
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AsyncImage(model = GIFTCARD_ICON, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(3.dp))
+                    Text("$giftcards", color = Color(0xFFFFD45A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+            }
         }
         Spacer(modifier = Modifier.height(12.dp))
         Box(
@@ -1791,8 +1700,12 @@ private fun AppTetris() {
                             val drawIcon = pieceIcon ?: locked
                             Box(modifier = Modifier.weight(1f).fillMaxSize().padding(2.dp)) {
                                 if (drawIcon != null) {
+                                    // Giftcard always stays in colour; everything
+                                    // else desaturates once phase ≥ 1.
+                                    val model = if (drawIcon == "giftcard") GIFTCARD_ICON
+                                    else "file:///android_asset/${if (phase >= 1) ICON_DIR_USED else ICON_DIR_FRESH}/$drawIcon.svg"
                                     AsyncImage(
-                                        model = "file:///android_asset/$ICON_DIR_FRESH/$drawIcon.svg",
+                                        model = model,
                                         contentDescription = null,
                                         modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(3.dp))
                                     )
@@ -1844,27 +1757,114 @@ private fun TetrisCtl(label: String, enabled: Boolean, onClick: () -> Unit) {
     }
 }
 
+// ── Shared Building-3 widgets ────────────────────────────────────────────────
+
 @Composable
-private fun AppNagBox(title: String, openAd: () -> Unit) {
-    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF101418)), contentAlignment = Alignment.Center) {
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(14.dp))
-                .background(Color(0xFFF7EAD0))
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) { openAd() }
-                .padding(horizontal = 26.dp, vertical = 22.dp)
-        ) {
-            Text(title, color = Color(0xFF14202F), fontSize = 16.sp, fontWeight = FontWeight.Bold)
-        }
+private fun GiftcardCounter(count: Int, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0x66000000))
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        AsyncImage(model = GIFTCARD_ICON, contentDescription = "giftcards", modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("$count", color = Color(0xFFFFD45A), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.width(4.dp))
+        Text("giftcards", color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp)
     }
 }
 
 @Composable
-private fun AppStub(label: String) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(label, color = Color(0xFF14202F), fontSize = 18.sp)
+private fun NotifBanner(icon: String, title: String, body: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xF2202833))
+            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() }
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        AsyncImage(model = icon, contentDescription = null, modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)))
+        Spacer(Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text(body, color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+        }
+        Text("›", color = Color.White.copy(alpha = 0.6f), fontSize = 22.sp)
+    }
+}
+
+// A simple drawn smiley used as the "full" mascot's face in Halflingo.
+@Composable
+private fun SmileyFace(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val w = size.width; val h = size.height
+        drawCircle(Color(0xFFFFD23F), radius = w / 2f, center = Offset(w / 2f, h / 2f))
+        val eyeR = w * 0.07f
+        drawCircle(Color(0xFF222222), eyeR, Offset(w * 0.34f, h * 0.40f))
+        drawCircle(Color(0xFF222222), eyeR, Offset(w * 0.66f, h * 0.40f))
+        val pad = w * 0.24f
+        drawArc(
+            color = Color(0xFF222222),
+            startAngle = 20f, sweepAngle = 140f, useCenter = false,
+            topLeft = Offset(pad, h * 0.30f),
+            size = androidx.compose.ui.geometry.Size(w - pad * 2, h * 0.45f),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                width = w * 0.06f, cap = androidx.compose.ui.graphics.StrokeCap.Round
+            )
+        )
+    }
+}
+
+// "Virus" link: 5s of full-screen colour flicker + random-intensity vibration,
+// then onDone() returns the user to whatever was underneath.
+@Composable
+private fun VirusOverlay(onDone: () -> Unit) {
+    val context = LocalContext.current
+    LaunchedEffect(Unit) {
+        val vib: Vibrator? = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+            else @Suppress("DEPRECATION") (context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator)
+        } catch (_: Throwable) { null }
+        val end = System.currentTimeMillis() + 5_000L
+        while (System.currentTimeMillis() < end) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vib?.vibrate(VibrationEffect.createOneShot((40..160).random().toLong(), (40..255).random()))
+                } else {
+                    @Suppress("DEPRECATION") vib?.vibrate((40..160).random().toLong())
+                }
+            } catch (_: Throwable) {}
+            delay((60..150).random().toLong())
+        }
+        try { vib?.cancel() } catch (_: Throwable) {}
+        onDone()
+    }
+    // The screen just goes black — no flicker, no text — while it vibrates.
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black))
+}
+
+// End sequence overlay: 1 = "closed for today", 2/3 = degrimer "cleaning".
+@Composable
+private fun EndSequenceOverlay(phase: Int) {
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+        if (phase == 1) {
+            Text("Sorry, we are closed for today.", color = Color.White, fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.padding(28.dp))
+        } else {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                AsyncImage(model = DEGRIMER_ICON, contentDescription = null, modifier = Modifier.size(96.dp))
+                Spacer(Modifier.height(16.dp))
+                Text("Degrimer", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(6.dp))
+                Text("Cleaning your device…\nfor half your giftcards", color = Color(0xFFB8C2CC),
+                    fontSize = 13.sp, textAlign = TextAlign.Center)
+            }
+        }
     }
 }

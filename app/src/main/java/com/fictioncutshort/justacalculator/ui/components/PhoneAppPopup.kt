@@ -184,7 +184,7 @@ fun GrowingBirdsPopup(onClose: () -> Unit) {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 AsyncImage(
-                    model = "file:///android_asset/phonescreen/phonedetour/birds.svg",
+                    model = "file:///android_asset/phonescreen/phonedetour/aggitatedbirds.svg",
                     contentDescription = null,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.size(48.dp)

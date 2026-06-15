@@ -80,6 +80,9 @@ import com.fictioncutshort.justacalculator.ui.screens.AdCardStack
 import com.fictioncutshort.justacalculator.ui.components.CalculatorButton
 import com.fictioncutshort.justacalculator.ui.components.CameraPreview
 import com.fictioncutshort.justacalculator.ui.components.ConsoleWindow
+import com.fictioncutshort.justacalculator.ui.components.EasterEggConsole
+import com.fictioncutshort.justacalculator.logic.EasterEggTheme
+import com.fictioncutshort.justacalculator.logic.easterEggGrayscale
 import com.fictioncutshort.justacalculator.ui.components.DonationLandingPage
 import com.fictioncutshort.justacalculator.ui.components.FakeWikipediaContent
 import com.fictioncutshort.justacalculator.ui.effects.KeyboardChaos3DView
@@ -132,7 +135,15 @@ class MainActivity : ComponentActivity() {
         android.util.Log.d("JustACalc", "🟢 MainActivity.onCreate AFTER init")
         setContent {
             MaterialTheme {
-                CalculatorScreen()
+                // Easter-egg grayscale (code 1134206) desaturates the whole 2D
+                // UI. The GL Calculator City desaturates itself in-shader.
+                androidx.compose.foundation.layout.Box(
+                    modifier = androidx.compose.ui.Modifier
+                        .fillMaxSize()
+                        .easterEggGrayscale(com.fictioncutshort.justacalculator.logic.EasterEggTheme.grayscale)
+                ) {
+                    CalculatorScreen()
+                }
             }
         }
         android.util.Log.d("JustACalc", "🟢 MainActivity.onCreate END")
@@ -1109,7 +1120,14 @@ fun CalculatorScreen() {
     val dimensions = rememberResponsiveDimensions()
 
 
-    val backgroundColor = if (current.invertedColors) Color.Black else RetroCream
+    // Easter-egg background colour (code 707) overrides the cream when set,
+    // mirroring the city's clear colour. Crisis "inverted colours" still wins.
+    val easterEggBg = EasterEggTheme.backgroundColorOrNull()
+    val backgroundColor = when {
+        current.invertedColors -> Color.Black
+        easterEggBg != null -> easterEggBg
+        else -> RetroCream
+    }
     val textColor = if (current.invertedColors) RetroDisplayGreen else Color(0xFF2D2D2D)
 
     // ============================================================================
@@ -1548,6 +1566,16 @@ fun CalculatorScreen() {
 
 
             },
+            modifier = Modifier.fillMaxSize()
+        )
+    }
+
+    // Easter-egg colour console (codes 58008 / 707). Sits in the middle band
+    // like the story console, leaving the keypad tappable to enter a choice.
+    if (current.showEasterEggConsole) {
+        EasterEggConsole(
+            consoleType = current.easterEggConsoleType,
+            currentInput = current.number1,
             modifier = Modifier.fillMaxSize()
         )
     }

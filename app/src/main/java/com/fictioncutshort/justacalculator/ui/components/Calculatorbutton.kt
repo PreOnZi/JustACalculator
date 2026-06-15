@@ -95,6 +95,12 @@ fun CalculatorButton(
     val isNumberButton = symbol in listOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
     val isOperationButton = symbol in listOf("+", "-", "*", "/", "=", "%", "( )")
 
+    // Easter-egg recolour of the number buttons (code 58008). Only applies to
+    // plain number buttons in their normal state — damaged/RAD/inverted/dark
+    // states below still take precedence.
+    val numberRecolor = com.fictioncutshort.justacalculator.logic.EasterEggTheme.numberPresetOrNull()
+        ?.takeIf { isNumberButton }
+
     // Calculate background color based on state
     val backgroundColor = when {
         showAsRad -> Color(0xFF8B0000)  // Dark red for RAD mode
@@ -110,6 +116,7 @@ fun CalculatorButton(
         invertedColors -> Color.Black
 
         // Normal retro mode
+        numberRecolor != null -> numberRecolor.color  // Easter-egg number colour
         isNumberButton -> Color(0xFFE8E4DA)  // Cream/beige
         symbol == "DEL" -> Color(0xFFD4783C)  // Orange-brown
         symbol == "C" -> Color(0xFFC9463D)  // Red
@@ -131,6 +138,7 @@ fun CalculatorButton(
         invertedColors -> Color.White
 
         // Normal mode
+        numberRecolor != null -> if (numberRecolor.lightText) Color.White else Color(0xFF2D2D2D)
         symbol == "DEL" || symbol == "C" -> Color.White
         isOperationButton -> Color.White
         else -> Color(0xFF2D2D2D)  // Dark text

@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.media.MediaPlayer
 import android.opengl.GLSurfaceView
 import android.os.Build
 import android.os.VibrationEffect
@@ -37,6 +38,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.fictioncutshort.justacalculator.R
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -51,6 +53,10 @@ import kotlin.math.*
 //     Y = move forward / backward (push up = forward / pull down = back)
 //   No player character shown — camera floats freely through the city
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Ambient audio mix levels (0..1) for the looping wind bed and footstep bed.
+private const val WIND_VOL = 0.35f
+private const val STEPS_VOL = 0.6f
 
 // Collision matches the renderer's GROUND footprint (player only navigates at ground level).
 private const val BW_V = 60f    // matches renderer BW_GROUND
@@ -460,6 +466,55 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
     var bridgePieces     by remember { mutableIntStateOf(prefs.getInt("bridge_pieces", if (prefs.getBoolean("td_b1_done", false)) 1 else 0)) }
     var forceAerial      by remember { mutableStateOf(false) }
 
+    // ── Ambient city audio ──────────────────────────────────────────────────
+    // Wind: a looping bed running the whole time the city is on screen
+    // (isLooping restarts the clip with no gap at the seam). Steps: a looped
+    // footstep bed that only plays while the player is actually moving. Wind
+    // ducks to silent while a building overlay (minigame) is open so the room's
+    // own audio isn't muddied.
+    val overlayOpen = showTowerDefense || showMaze || showTankGame || showDoor4 ||
+        showBuilding5Map || showBuilding6Game || showBuilding7Filter ||
+        showBuilding8Casino || showBuilding9Flappy
+    val isWalking = introDone && !overlayOpen && doorOpeningDigit == null &&
+        kotlin.math.abs(joyY) > 0.12f
+
+    val windPlayer = remember { mutableStateOf<MediaPlayer?>(null) }
+    val stepsPlayer = remember { mutableStateOf<MediaPlayer?>(null) }
+    DisposableEffect(Unit) {
+        val wind = MediaPlayer.create(context, R.raw.wind)
+        if (wind != null) {
+            wind.isLooping = true
+            wind.setVolume(WIND_VOL, WIND_VOL)
+            try { wind.start() } catch (_: Throwable) {}
+            windPlayer.value = wind
+        }
+        val steps = MediaPlayer.create(context, R.raw.steps)
+        if (steps != null) {
+            steps.isLooping = true
+            steps.setVolume(STEPS_VOL, STEPS_VOL)
+            stepsPlayer.value = steps
+        }
+        onDispose {
+            windPlayer.value?.let { try { it.release() } catch (_: Throwable) {} }
+            windPlayer.value = null
+            stepsPlayer.value?.let { try { it.release() } catch (_: Throwable) {} }
+            stepsPlayer.value = null
+        }
+    }
+    // Footsteps follow movement.
+    LaunchedEffect(isWalking) {
+        val sp = stepsPlayer.value ?: return@LaunchedEffect
+        try {
+            if (isWalking) { if (!sp.isPlaying) sp.start() } else if (sp.isPlaying) sp.pause()
+        } catch (_: Throwable) {}
+    }
+    // Duck the wind to silent while a minigame overlay is open (keeps it looping
+    // — just inaudible — so resuming has no restart click).
+    LaunchedEffect(overlayOpen) {
+        val v = if (overlayOpen) 0f else WIND_VOL
+        windPlayer.value?.let { try { it.setVolume(v, v) } catch (_: Throwable) {} }
+    }
+
     // Sync green door and bridge pieces on first composition if already completed
     LaunchedEffect(towerDefenseCompleted) {
         if (towerDefenseCompleted) {
@@ -735,7 +790,10 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                 val dx = (sin(cr) * jFwd * spd).toFloat()
                 val dz = (-cos(cr) * jFwd * spd).toFloat()
 
-                val xBoundsMin = if (isLandscape) -CELL_V * 2.5f       else PC1 - BW_V - 10f   // -700 / -490
+                // Portrait west bound extended by one street width (matches the
+                // renderer's WEST_LANE) so the player can step into the lane west
+                // of building 7 to reach its west-facing door (~x -468).
+                val xBoundsMin = if (isLandscape) -CELL_V * 2.5f       else PC1 - BW_V - 150f  // -700 / -600
                 val xBoundsMax = if (isLandscape) LSC4 + CELL_V * 0.45f else PC4 + BW_V + 10f   // 1246 / 490
                 val nx = (pX + dx).coerceIn(xBoundsMin, xBoundsMax)
                 val nz = (pZ + dz).coerceIn(PRA - CELL_V * 0.30f, PRE + CELL_V * 0.25f)         // -644 / 630
@@ -1730,22 +1788,6 @@ private fun RiddleDialog(
 
             MiniKeyboard(allowMinus = riddle.allowMinus, onKey = ::handleKey)
 
-            // Building 7 ("vanity") entry disclosure — deliberately small and
-            // low-contrast, tucked under the keypad. By entering the door the
-            // player consents to being photographed inside and to those images
-            // being reused elsewhere in the app.
-            if (digit == 7) {
-                Text(
-                    "By entering you consent to being photographed inside and to those images being used elsewhere in this app.",
-                    color = Color(0xFF2E2E2E),
-                    fontSize = 7.sp,
-                    lineHeight = 9.sp,
-                    fontFamily = FontFamily.Monospace,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(top = 8.dp, start = 4.dp, end = 4.dp)
-                )
-            }
-
             Spacer(modifier = Modifier.height(12.dp))
 
             // ENTER / submit — orange like a calculator = key
@@ -1759,6 +1801,22 @@ private fun RiddleDialog(
             ) {
                 Text("[ ENTER ]", color = Color.White, fontSize = 15.sp,
                     fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+            }
+
+            // Building 7 ("vanity") entry disclosure — deliberately small and
+            // low-contrast, tucked at the very bottom under the keypad. By
+            // entering the door the player consents to being photographed inside
+            // and to those images being reused elsewhere in the app.
+            if (digit == 7) {
+                Text(
+                    "By entering you consent to being photographed inside and to those images being used elsewhere in this app.",
+                    color = Color(0xFF4D4D4D),
+                    fontSize = 7.sp,
+                    lineHeight = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 10.dp, start = 4.dp, end = 4.dp)
+                )
             }
         }
 

@@ -131,13 +131,13 @@ fun HomeScreenOverlay(
     // that happens; the 4-col grid simply renders a partial 3rd row.
     val gridPages = remember(callCompleted) {
         val page1Base = listOf(
-            HomeIcon("gemini",   "Gemini"),
-            HomeIcon("airbnb",   "Airbnb"),
-            HomeIcon("fbook",    "Facebook"),
+            HomeIcon("germinay",   "Germinay"),
+            HomeIcon("airbbl",   "AirBBL"),
+            HomeIcon("friendsbook",    "Friendsbook"),
             HomeIcon("calc",     "Calculator"),
-            HomeIcon("gpt",      "ChatGPT"),
-            HomeIcon("gram",     "Instagram"),
-            HomeIcon("TEMU",     "Temu"),
+            HomeIcon("chathqu",      "ChatHQU"),
+            HomeIcon("innergram",     "Innergram"),
+            HomeIcon("mute",     "Mute"),
             HomeIcon("camera",   "Camera")
         )
         val page1 = if (callCompleted) {
@@ -148,18 +148,18 @@ fun HomeScreenOverlay(
         listOf(
             page1,
             listOf(
-                HomeIcon("amazon",   "Amazon"),
+                HomeIcon("dumbazon",   "Dumbazon"),
                 HomeIcon("pictures", "Photos"),
-                HomeIcon("youtube",  "YouTube"),
-                HomeIcon("uber",     "Uber"),
-                HomeIcon("discord",  "Discord"),
-                HomeIcon("spotify",  "Spotify"),
-                HomeIcon("tok",      "TikTok"),
-                HomeIcon("birds",    "Angry Birds")
+                HomeIcon("theytube",  "TheyTube"),
+                HomeIcon("hubert",     "Hubert"),
+                HomeIcon("discocord",  "Discocord"),
+                HomeIcon("spilltify",  "Spilltify"),
+                HomeIcon("tuktak",      "TukTak"),
+                HomeIcon("aggitatedbirds",    "Aggitated Birds")
             ),
             listOf(
-                HomeIcon("candy",    "Candy Crush"),
-                HomeIcon("duo",      "Duolingo"),
+                HomeIcon("sweetscrushout",    "Sweets Crush Out"),
+                HomeIcon("halflingo",      "Halflingo"),
                 HomeIcon("tetris",   "Tetris")
             )
         )
@@ -406,9 +406,9 @@ private fun handleIconTap(
     when (name) {
         // Fake calculator notifications (no app launches at all)
         "calc" -> setNotification("Good try. Remember, you're already inside a calculator.")
-        "fbook" -> setNotification("Don't even go there.")
-        "tok" -> setNotification("You're already talking to a calculator — you don't need more brain rot.")
-        "gpt", "gemini" -> setNotification("Hey, I am up here. You're here to talk to me.")
+        "friendsbook" -> setNotification("Don't even go there.")
+        "tuktak" -> setNotification("You're already talking to a calculator — you don't need more brain rot.")
+        "chathqu", "germinay" -> setNotification("Hey, I am up here. You're here to talk to me.")
 
         // Full-screen apps + popups handled by AppHost
         else -> setApp(name)
@@ -431,28 +431,28 @@ private fun AppHost(
 ) {
     when (appName) {
         // ─── Simple text + Close popups ──────────────────────────────────────
-        "airbnb" -> SimplePhoneAppPopup(
-            title = "Airbnb",
+        "airbbl" -> SimplePhoneAppPopup(
+            title = "AirBBL",
             body = "We are busy ruining housing availability in your area. We'll be back shortly.",
             onClose = onClose
         )
-        "discord" -> SimplePhoneAppPopup(
-            title = "Discord",
+        "discocord" -> SimplePhoneAppPopup(
+            title = "Discocord",
             body = "Connect to millions of users worldwide. For the low cost of your privacy.",
             onClose = onClose
         )
-        "duo" -> SimplePhoneAppPopup(
-            title = "Duolingo",
+        "halflingo" -> SimplePhoneAppPopup(
+            title = "Halflingo",
             body = "Can our AI crazy owl bully you into 5 minutes of Icelandic a day?",
             onClose = onClose
         )
-        "candy" -> SimplePhoneAppPopup(
-            title = "Candy Crush",
+        "sweetscrushout" -> SimplePhoneAppPopup(
+            title = "Sweets Crush Out",
             body = "One of the most popular games ever. Ready to get numb?",
             onClose = onClose
         )
-        "gram" -> SimplePhoneAppPopup(
-            title = "Instagram",
+        "innergram" -> SimplePhoneAppPopup(
+            title = "Innergram",
             body = "Your vanity or others'? For sale, for crumbs. That's the Meta promise.",
             onClose = onClose
         )
@@ -461,29 +461,29 @@ private fun AppHost(
             body = "To green bubble or to blue bubble?!",
             onClose = onClose
         )
-        "spotify" -> SimplePhoneAppPopup(
-            title = "Spotify",
+        "spilltify" -> SimplePhoneAppPopup(
+            title = "Spilltify",
             body = "Dominating the music industry, yet on the verge of collapsing. Loving life.",
             onClose = onClose
         )
-        "TEMU" -> SimplePhoneAppPopup(
-            title = "Temu",
+        "mute" -> SimplePhoneAppPopup(
+            title = "Mute",
             body = "We essentially ship you things so you can throw them away. Living like a billionaire. Very much so.",
             onClose = onClose
         )
-        "uber" -> SimplePhoneAppPopup(
-            title = "Uber",
+        "hubert" -> SimplePhoneAppPopup(
+            title = "Hubert",
             body = "Sharing a car with a stranger. Fun!",
             onClose = onClose
         )
-        "youtube" -> SimplePhoneAppPopup(
-            title = "YouTube",
+        "theytube" -> SimplePhoneAppPopup(
+            title = "TheyTube",
             body = "Your favourite makeup artist and a two-hour explanation, why Hitler was a good guy. On one platform!",
             onClose = onClose
         )
 
         // ─── Choice popup (Amazon) ──────────────────────────────────────────
-        "amazon" -> ChoicePhoneAppPopup(
+        "dumbazon" -> ChoicePhoneAppPopup(
             body = "We have it all. But gladly take more. What would you like to give us this time?",
             choices = listOf("Money", "Data", "Both"),
             followUpFor = { pick ->
@@ -496,7 +496,7 @@ private fun AppHost(
         )
 
         // ─── Growing popup (Angry Birds) ────────────────────────────────────
-        "birds" -> GrowingBirdsPopup(onClose = onClose)
+        "aggitatedbirds" -> GrowingBirdsPopup(onClose = onClose)
 
         // ─── Functional mini-apps ───────────────────────────────────────────
         "camera"    -> PhoneCameraApp(onClose = onClose)

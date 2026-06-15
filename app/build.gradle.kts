@@ -82,6 +82,8 @@ dependencies {
     // Coil for image loading (SVGs from assets, used by HomeScreenOverlay)
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.coil-kt:coil-svg:2.7.0")
+    // AndroidSVG — rasterise the Building 7 vector filters straight to bitmaps.
+    implementation("com.caverock:androidsvg-aar:1.4")
 
     // osmdroid — OpenStreetMap tiles for Building 5. No API key, no Play Services.
     implementation("org.osmdroid:osmdroid-android:6.1.18")

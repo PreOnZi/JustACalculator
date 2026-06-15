@@ -243,11 +243,15 @@ fun AdCardStack(
     var swipedCount by remember { mutableIntStateOf(0) }       // 0-5 cards swiped
     var phase by remember { mutableStateOf(if (startAtCity) AdCardPhase.CITY else AdCardPhase.CARDS) }
 
-    // Persist city phase only when transitioning into it, not on initial composition
+    // Persist the city phase whenever it is active — including on the very first
+    // composition. Entry is sticky regardless of HOW the player got here (normal
+    // tunnel flow, the restore-on-launch re-entry, OR the debug "direct jump"),
+    // so once you're in Calculator City, closing/relaunching the app always
+    // drops you back in. onCityEntered() (→ saveInCityPhase) is idempotent.
     var previousPhase by remember { mutableStateOf(phase) }
     LaunchedEffect(phase) {
         android.util.Log.d("JustACalc", "TANK-DEBUG AdCardStack phase=$phase (prev=$previousPhase)")
-        if (phase == AdCardPhase.CITY && previousPhase != AdCardPhase.CITY) {
+        if (phase == AdCardPhase.CITY) {
             onCityEntered()
         }
         previousPhase = phase
@@ -307,8 +311,19 @@ fun AdCardStack(
         val screenWPx  = with(density) { maxWidth.toPx() }
         val screenHPx  = with(density) { maxHeight.toPx() }
 
-        val cardWPx = screenWPx * 0.90f
-        val cardHPx = cardWPx / 0.65f
+        // The card keeps a fixed 0.65 width:height ratio. Fit it inside the
+        // screen by whichever axis is the tighter constraint — width-bound in
+        // portrait, height-bound in landscape — so the card never overflows or
+        // appears oversized/clipped when the screen is wide.
+        val CARD_RATIO   = 0.65f                  // width / height
+        val maxCardHByH  = screenHPx * 0.82f
+        val cardWByWidth = screenWPx * 0.90f
+        val cardHByWidth = cardWByWidth / CARD_RATIO
+        val (cardWPx, cardHPx) = if (cardHByWidth <= maxCardHByH) {
+            cardWByWidth to cardHByWidth
+        } else {
+            (maxCardHByH * CARD_RATIO) to maxCardHByH
+        }
 
         val gapPx     = with(density) { 8.dp.toPx() }
         val sidePadPx = with(density) { 16.dp.toPx() }
@@ -1039,30 +1054,48 @@ private fun PexesoGame(
             )
 
             // 4u00d75 grid
-            val cols = 4
-            val rows = 5
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                (0 until rows).forEach { row ->
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        (0 until cols).forEach { col ->
-                            val idx = row * cols + col
-                            if (idx < cards.size) {
-                                val card = cards[idx]
-                                val isFaceUp = flipped.contains(idx) || matched.contains(idx)
-                                val isMatched = matched.contains(idx)
-                                PexesoCardCell(
-                                    card = card,
-                                    isFaceUp = isFaceUp,
-                                    isMatched = isMatched,
-                                    isEnlarged = enlargedIdx == idx,
-                                    onClick = { onCardFlip(idx) },
-                                    modifier = Modifier.weight(1f)
-                                )
-                            } else {
-                                Spacer(modifier = Modifier.weight(1f))
+            // Card grid — sized to fit the available area so it never
+            // overflows. Portrait: 4×5 (tall). Landscape: 5×4 (wide) to suit
+            // the screen shape.
+            val gap = 8.dp
+            Box(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                BoxWithConstraints {
+                    val isLandscape = maxWidth > maxHeight
+                    val cols = if (isLandscape) 5 else 4
+                    val rows = if (isLandscape) 4 else 5
+
+                    // Cells keep a 0.7 width:height ratio. Find the largest cell
+                    // that fits both the width and the height of the area, then
+                    // size the grid to that — centered.
+                    val cellByWidth  = (maxWidth  - gap * (cols - 1)) / cols
+                    val cellByHeight = ((maxHeight - gap * (rows - 1)) / rows) * 0.7f
+                    val cellW = minOf(cellByWidth, cellByHeight)
+                    val cellH = cellW / 0.7f
+
+                    Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+                        (0 until rows).forEach { row ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+                                (0 until cols).forEach { col ->
+                                    val idx = row * cols + col
+                                    if (idx < cards.size) {
+                                        val card = cards[idx]
+                                        val isFaceUp = flipped.contains(idx) || matched.contains(idx)
+                                        val isMatched = matched.contains(idx)
+                                        PexesoCardCell(
+                                            card = card,
+                                            isFaceUp = isFaceUp,
+                                            isMatched = isMatched,
+                                            isEnlarged = enlargedIdx == idx,
+                                            onClick = { onCardFlip(idx) },
+                                            modifier = Modifier.size(cellW, cellH)
+                                        )
+                                    } else {
+                                        Spacer(modifier = Modifier.size(cellW, cellH))
+                                    }
+                                }
                             }
                         }
                     }
@@ -1158,69 +1191,132 @@ private fun PairReunionOverlay(
             .graphicsLayer { alpha = bgAlpha }
             .background(Color.Black)
     ) {
-        val scrollState = androidx.compose.foundation.rememberScrollState()
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(scrollState)
-                .padding(horizontal = 16.dp, vertical = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = "ALL MATCHED",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Black,
-                fontFamily = FontFamily.Monospace,
-                color = Color.White,
-                letterSpacing = 4.sp,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val isLandscape = maxWidth > maxHeight
 
-            pairs.forEachIndexed { pairIdx, pair ->
-                val slideIn by animateFloatAsState(
-                    targetValue = if (revealed) 0f else 1f,
-                    animationSpec = tween(
-                        durationMillis = 400,
-                        delayMillis = pairIdx * 60,
-                        easing = FastOutSlowInEasing
-                    ),
-                    label = "slide$pairIdx"
-                )
+            if (isLandscape) {
+                // Landscape: 5 pairs × 2 rows, sized to fit without scrolling.
+                val gap     = 8.dp
+                val pairGap = 16.dp
+                val pad     = 16.dp
+                val pairsPerRow = 5
+                val pairRows    = 2
+                val cardsAcross = pairsPerRow * 2
+                val availW = maxWidth  - pad * 2
+                val availH = maxHeight - pad * 2 - 56.dp   // leave room for the title
+                val hGaps  = gap * pairsPerRow + pairGap * (pairsPerRow - 1)
+                val cellByWidth  = (availW - hGaps) / cardsAcross
+                val cellByHeight = ((availH - gap * (pairRows - 1)) / pairRows) * 0.7f
+                val cellW = minOf(cellByWidth, cellByHeight)
+                val cellH = cellW / 0.7f
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .graphicsLayer { translationX = slideIn * 300f },
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(pad),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    pair.forEach { card ->
-                        Box(
+                    Text(
+                        text = "ALL MATCHED",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace,
+                        color = Color.White,
+                        letterSpacing = 4.sp,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+                        (0 until pairRows).forEach { r ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(pairGap)) {
+                                (0 until pairsPerRow).forEach { c ->
+                                    val pairIdx = r * pairsPerRow + c
+                                    val pair = pairs[pairIdx]
+                                    val slideIn by animateFloatAsState(
+                                        targetValue = if (revealed) 0f else 1f,
+                                        animationSpec = tween(400, pairIdx * 60, FastOutSlowInEasing),
+                                        label = "slideL$pairIdx"
+                                    )
+                                    Row(
+                                        modifier = Modifier.graphicsLayer { translationX = slideIn * 300f },
+                                        horizontalArrangement = Arrangement.spacedBy(gap)
+                                    ) {
+                                        pair.forEach { card ->
+                                            ReunionCard(card, Modifier.size(cellW, cellH))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Portrait: one pair per row, scrollable.
+                val scrollState = androidx.compose.foundation.rememberScrollState()
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scrollState)
+                        .padding(horizontal = 16.dp, vertical = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "ALL MATCHED",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace,
+                        color = Color.White,
+                        letterSpacing = 4.sp,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+
+                    pairs.forEachIndexed { pairIdx, pair ->
+                        val slideIn by animateFloatAsState(
+                            targetValue = if (revealed) 0f else 1f,
+                            animationSpec = tween(
+                                durationMillis = 400,
+                                delayMillis = pairIdx * 60,
+                                easing = FastOutSlowInEasing
+                            ),
+                            label = "slide$pairIdx"
+                        )
+
+                        Row(
                             modifier = Modifier
-                                .weight(1f)
-                                .aspectRatio(0.7f)
-                                .background(card.color),
-                            contentAlignment = Alignment.Center
+                                .fillMaxWidth()
+                                .graphicsLayer { translationX = slideIn * 300f },
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            if (card.imageRes != null) {
-                                androidx.compose.foundation.Image(
-                                    painter = painterResource(id = card.imageRes),
-                                    contentDescription = null,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            } else {
-                                Text(
-                                    text = card.symbol,
-                                    fontSize = 22.sp,
-                                    color = Color.White,
-                                    textAlign = TextAlign.Center
-                                )
+                            pair.forEach { card ->
+                                ReunionCard(card, Modifier.weight(1f).aspectRatio(0.7f))
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ReunionCard(card: PexesoCard, modifier: Modifier) {
+    Box(
+        modifier = modifier.background(card.color),
+        contentAlignment = Alignment.Center
+    ) {
+        if (card.imageRes != null) {
+            androidx.compose.foundation.Image(
+                painter = painterResource(id = card.imageRes),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Text(
+                text = card.symbol,
+                fontSize = 22.sp,
+                color = Color.White,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
