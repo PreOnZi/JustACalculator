@@ -1513,7 +1513,7 @@ private fun AppTemu() {
 private fun AppTetris(addGiftcards: (Int) -> Unit, giftcards: Int, onClose: () -> Unit) {
     // Tetris on a 6×10 board where each filled cell is a phone-app icon. Some
     // cells spawn as the giftcard icon — every piece containing one pays out
-    // giftcards on lock. After ~20s the icons go black-and-white; 30s after that
+    // giftcards on lock. After ~20s the icons go black-and-white; 30sfter that
     // the board accelerates beyond playability.
     val cols = 6
     val rows = 10

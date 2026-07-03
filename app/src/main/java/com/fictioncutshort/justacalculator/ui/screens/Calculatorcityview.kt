@@ -55,7 +55,9 @@ import kotlin.math.*
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Ambient audio mix levels (0..1) for the looping wind bed and footstep bed.
-private const val WIND_VOL = 0.35f
+// Two wind loops play offset by half the clip at this (lower) volume each, so
+// their fade-tails overlap and the bed never drops to silence at the loop seam.
+private const val WIND_VOL = 0.26f
 private const val STEPS_VOL = 0.6f
 
 // Collision matches the renderer's GROUND footprint (player only navigates at ground level).
@@ -408,6 +410,8 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
     // Lava respawn state
     var inLava     by remember { mutableStateOf(false) }
     var flashAlpha by remember { mutableStateOf(0f) }
+    // Monster catch cinematic: 0 none · 1 black+buzz · 2 face close-up · 3 black drop.
+    var catchPhase by remember { mutableIntStateOf(0) }
 
     var lavaShift  by remember { mutableStateOf(0f) }
     var aerialBlend by remember { mutableStateOf(if (introAlreadyDone) 0f else 1f) }
@@ -479,7 +483,10 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
         kotlin.math.abs(joyY) > 0.12f
 
     val windPlayer = remember { mutableStateOf<MediaPlayer?>(null) }
+    val wind2Player = remember { mutableStateOf<MediaPlayer?>(null) }
     val stepsPlayer = remember { mutableStateOf<MediaPlayer?>(null) }
+    // The monster's beep — looped; its volume is driven by distance in the loop.
+    val beepPlayer = remember { mutableStateOf<MediaPlayer?>(null) }
     DisposableEffect(Unit) {
         val wind = MediaPlayer.create(context, R.raw.wind)
         if (wind != null) {
@@ -488,17 +495,40 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
             try { wind.start() } catch (_: Throwable) {}
             windPlayer.value = wind
         }
+        // Second wind loop, seeked to the half-way point so its fade-tail lands
+        // when the first loop is mid-clip — the bed never goes fully silent.
+        val wind2 = MediaPlayer.create(context, R.raw.wind)
+        if (wind2 != null) {
+            wind2.isLooping = true
+            wind2.setVolume(WIND_VOL, WIND_VOL)
+            try {
+                wind2.seekTo((wind2.duration / 2).coerceAtLeast(0))
+                wind2.start()
+            } catch (_: Throwable) {}
+            wind2Player.value = wind2
+        }
         val steps = MediaPlayer.create(context, R.raw.steps)
         if (steps != null) {
             steps.isLooping = true
             steps.setVolume(STEPS_VOL, STEPS_VOL)
             stepsPlayer.value = steps
         }
+        val beep = MediaPlayer.create(context, R.raw.beep)
+        if (beep != null) {
+            beep.isLooping = true
+            beep.setVolume(0f, 0f)
+            try { beep.start() } catch (_: Throwable) {}
+            beepPlayer.value = beep
+        }
         onDispose {
             windPlayer.value?.let { try { it.release() } catch (_: Throwable) {} }
             windPlayer.value = null
+            wind2Player.value?.let { try { it.release() } catch (_: Throwable) {} }
+            wind2Player.value = null
             stepsPlayer.value?.let { try { it.release() } catch (_: Throwable) {} }
             stepsPlayer.value = null
+            beepPlayer.value?.let { try { it.release() } catch (_: Throwable) {} }
+            beepPlayer.value = null
         }
     }
     // Footsteps follow movement.
@@ -513,6 +543,7 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
     LaunchedEffect(overlayOpen) {
         val v = if (overlayOpen) 0f else WIND_VOL
         windPlayer.value?.let { try { it.setVolume(v, v) } catch (_: Throwable) {} }
+        wind2Player.value?.let { try { it.setVolume(v, v) } catch (_: Throwable) {} }
     }
 
     // Sync green door and bridge pieces on first composition if already completed
@@ -625,12 +656,24 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
         }
     }
 
-    // Atmospheric darkening — city gets gloomier with each completed building.
-    // Linear ramp from 0 → 1.0 across the 9 possible bridge pieces; pushed to
-    // the renderer whenever bridgePieces changes (initial composition + each
-    // building's onComplete handler).
-    LaunchedEffect(bridgePieces) {
-        renderer.darknessLevel = (bridgePieces / 9f).coerceIn(0f, 1f)
+    // Atmospheric darkening. Before Building 3 it tracks bridge pieces. Once
+    // Building 3 is cleared the city descends into permanent FULL NIGHT — the
+    // first time it eases down gradually (the post-landing dusk); on later visits
+    // it's already night (persisted via "b3_night_active").
+    LaunchedEffect(bridgePieces, tankGameCompleted) {
+        if (tankGameCompleted) {
+            if (prefs.getBoolean("b3_night_active", false)) {
+                renderer.darknessLevel = 1f
+            } else {
+                while (renderer.darknessLevel < 1f) {
+                    renderer.darknessLevel = (renderer.darknessLevel + 0.004f).coerceAtMost(1f)
+                    delay(33)
+                }
+                prefs.edit().putBoolean("b3_night_active", true).apply()
+            }
+        } else {
+            renderer.darknessLevel = (bridgePieces / 9f).coerceIn(0f, 1f)
+        }
     }
 
     // Hold aerial view for 5 s after a building is completed
@@ -755,6 +798,49 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
 
     // ── Main game loop ────────────────────────────────────────────────────────
     LaunchedEffect(Unit) {
+        // Night-mode monster roaming state (persists across loop iterations).
+        var mX = 0f; var mZ = 0f; var mAngle = 0f
+        var mWpX = 0f; var mWpZ = 0f
+        var mSpawned = false
+        var hideUntil = 0L
+        // ── Monster state machine ─────────────────────────────────────────────
+        // The monster wanders harmlessly (ROAM) and can be outrun. It only turns
+        // lethal only once the player looks it straight in the face, at which point
+        // it spins up briefly and commits to one of two attacks.
+        val MS_ROAM = 0; val MS_AGGRO = 1
+        val MS_DART = 2; val MS_GIANT = 3; val MS_LOCK = 4
+        var mState = MS_ROAM
+        var beepSpeed = 1f               // beep playback rate; ramps to ~4× while seen
+        var mAttack = 0                  // 1 dart, 2 giant
+        var mScale = 13f                 // current body scale (grows for the giant)
+        var mYBob = 0f                   // legacy vertical offset (kept at 0)
+        var mTilt = 0f                   // giant body-slam topple angle (deg)
+        var mTiltX = 0f; var mTiltZ = 1f // direction the slam falls toward
+        var mDirX = 0f; var mDirZ = 1f   // unit heading the face currently points
+        var stateUntil = 0L              // generic phase timer
+        var freezeMs = 0L                // continuous time the player has held a lamp circle
+        var dartStartDist = 0f           // dart-attack distance at the start (for zig-zag count)
+        var slamT = 0f                   // giant-attack body-slam phase
+        var zoomT = 0f                   // dart finale: 0→1 camera zoom-onto-face progress
+        var monsterLock = false          // freezes player control during the dart finale
+        // Yaw so the model's single-faced front leads the travel vector. The
+        // offset is auto-measured from the mesh (renderer.monsterFaceYawOffsetDeg).
+        fun faceDir(vx: Float, vz: Float): Float =
+            Math.toDegrees(atan2(vx.toDouble(), vz.toDouble())).toFloat() +
+                renderer.monsterFaceYawOffsetDeg
+        fun frand(a: Float, b: Float): Float = a + (Math.random() * (b - a)).toFloat()
+        fun buzz(ms: Long) {
+            try {
+                @Suppress("DEPRECATION")
+                val vib: Vibrator =
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                        (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+                    else context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                    vib.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+                else @Suppress("DEPRECATION") vib.vibrate(ms)
+            } catch (_: Throwable) {}
+        }
         while (true) {
             delay(16)
             lavaShift = (lavaShift + 0.003f) % 1f
@@ -779,13 +865,15 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     continue
                 }
 
-                // Yaw from joystick X; no pitch control (camera stays level)
+                // Yaw from joystick X; no pitch control (camera stays level). The
+                // monster's dart finale locks out all control while it closes in.
                 val doorSeqActive = doorOpeningDigit != null
-                if (!doorSeqActive) camYaw += joyX * 3.0f
+                val controlsLocked = doorSeqActive || monsterLock
+                if (!controlsLocked) camYaw += joyX * 3.0f
                 val cr = Math.toRadians(camYaw.toDouble())
 
                 // Forward/backward from joystick Y (push up = forward)
-                val jFwd = if (doorSeqActive) 0f else -joyY
+                val jFwd = if (controlsLocked) 0f else -joyY
                 val spd = 2.2f
                 val dx = (sin(cr) * jFwd * spd).toFloat()
                 val dz = (-cos(cr) * jFwd * spd).toFloat()
@@ -824,7 +912,7 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     if (isLandscape && tx < L_WALL_E && !(tz > L_GAP_N && tz < L_GAP_S)) return true
                     return false
                 }
-                if (!doorSeqActive) {
+                if (!controlsLocked) {
                     if (!blocked(nx, nz)) { pX = nx; pZ = nz }
                     else {
                         if (!blocked(nx, pZ)) pX = nx
@@ -871,8 +959,316 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     inLava = false
                 }
 
+                // ── Night-mode monster ────────────────────────────────────────
+                run {
+                    val nowMs = System.currentTimeMillis()
+                    val overlayBusy = showTowerDefense || showMaze || showTankGame || showDoor4 ||
+                        showBuilding5Map || showBuilding6Game || showBuilding7Filter ||
+                        showBuilding8Casino || showBuilding9Flappy
+                    val monsterAllowed = tankGameCompleted && !overlayBusy && !doorSeqActive &&
+                        doorPromptDigit == null && riddleDigit == null && orderBlockedDigit == null &&
+                        nowMs >= hideUntil
+                    if (!monsterAllowed) {
+                        // Cancel any aggro/attack in progress and go dormant.
+                        renderer.monsterActive = false
+                        renderer.monsterClones = emptyList()
+                        renderer.monsterScale = 13f; renderer.monsterYBob = 0f
+                        renderer.monsterTilt = 0f; mTilt = 0f
+                        mState = MS_ROAM; mScale = 13f; mYBob = 0f; freezeMs = 0L; monsterLock = false
+                        beepPlayer.value?.let { try { it.setVolume(0f, 0f) } catch (_: Throwable) {} }
+                    } else {
+                        val zMin = PRA - CELL_V * 0.30f
+                        val zMax = PRE + CELL_V * 0.25f
+                        fun dist(ax: Float, az: Float, bx: Float, bz: Float) =
+                            sqrt((ax - bx) * (ax - bx) + (az - bz) * (az - bz))
+                        // Step the monster toward (tgx,tgz) at speed, sliding on walls.
+                        fun step(tgx: Float, tgz: Float, spd: Float) {
+                            val ddx = tgx - mX; val ddz = tgz - mZ
+                            val l = sqrt(ddx * ddx + ddz * ddz)
+                            if (l < 0.001f) return
+                            val nmx = mX + ddx / l * spd; val nmz = mZ + ddz / l * spd
+                            when {
+                                !blocked(nmx, nmz) -> { mX = nmx; mZ = nmz }
+                                !blocked(nmx, mZ)  -> mX = nmx
+                                !blocked(mX, nmz)  -> mZ = nmz
+                            }
+                            mAngle = faceDir(ddx, ddz)
+                        }
+                        // Line of sight, blocked only by buildings/debris/the wall
+                        // (small props don't count as cover).
+                        fun losBlocked(ax: Float, az: Float, bx: Float, bz: Float): Boolean {
+                            val bfp = if (isLandscape) BLDG_FP_L else BLDG_FP
+                            val dfp = if (isLandscape) DEBRIS_FP_L else DEBRIS_FP
+                            var i = 1
+                            while (i < 26) {
+                                val t = i / 26f
+                                val x = ax + (bx - ax) * t; val z = az + (bz - az) * t
+                                for (fp in bfp) if (x > fp[0]-BW_V-14f && x < fp[0]+BW_V+14f &&
+                                    z > fp[1]-BD_V-14f && z < fp[1]+BD_V+14f) return true
+                                for (d in dfp) if (x > d[0]-d[2] && x < d[0]+d[2] &&
+                                    z > d[1]-d[3] && z < d[1]+d[3]) return true
+                                if (isLandscape && x < L_WALL_E && !(z > L_GAP_N && z < L_GAP_S)) return true
+                                i++
+                            }
+                            return false
+                        }
+                        // Player standing inside a lamp's light circle (a temporary
+                        // safe-haven that pauses the monster).
+                        fun inLampCircle(): Boolean {
+                            val lfp = if (isLandscape) LAMP_FP_L else LAMP_FP
+                            for (lp in lfp) {
+                                val dx = pX - lp[0]; val dz = pZ - lp[1]
+                                if (dx*dx + dz*dz < 80f*80f) return true
+                            }
+                            return false
+                        }
+                        // Player's current view forward (unit) and helpers — the
+                        // monster can only land a kill from where the player can see
+                        // it, so attacks press in from the front.
+                        val crView = Math.toRadians(camYaw.toDouble())
+                        val fwdVX = sin(crView).toFloat(); val fwdVZ = -cos(crView).toFloat()
+                        fun frontX(d: Float) = (pX + fwdVX * d).coerceIn(xBoundsMin, xBoundsMax)
+                        fun frontZ(d: Float) = (pZ + fwdVZ * d).coerceIn(zMin, zMax)
+                        fun inView(x: Float, z: Float): Boolean {
+                            val dx = x - pX; val dz = z - pZ
+                            val l = sqrt(dx*dx + dz*dz)
+                            if (l < 1f) return true
+                            return (dx*fwdVX + dz*fwdVZ) / l > 0.25f
+                        }
+
+                        // Spawn far from the player the first time it deploys.
+                        if (!mSpawned) {
+                            var tries = 0
+                            do {
+                                mX = frand(xBoundsMin, xBoundsMax); mZ = frand(zMin, zMax); tries++
+                            } while ((blocked(mX, mZ) || dist(mX, mZ, pX, pZ) < 280f) && tries < 80)
+                            mWpX = mX; mWpZ = mZ; mSpawned = true
+                            mState = MS_ROAM; mScale = 13f; mYBob = 0f
+                        }
+
+                        // While in a lamp circle during a hunt, the monster freezes;
+                        // hold there too long and it detonates, levelling the city.
+                        var frozen = false
+                        var explodeNow = false
+                        if (mState != MS_ROAM && inLampCircle()) {
+                            frozen = true
+                            freezeMs += 16
+                            if (freezeMs > 6500L) explodeNow = true
+                            stateUntil += 16   // pause the phase timer while frozen
+                        } else {
+                            freezeMs = 0L
+                        }
+
+                        var killNow = false
+
+                        if (!frozen && !explodeNow) { mTilt = 0f; when (mState) {
+                            MS_ROAM -> {
+                                // Harmless wander, but moving one cardinal axis at a
+                                // time so it tracks the streets parallel to the walls
+                                // (never diagonally through the grid). Always moving.
+                                if (dist(mX, mZ, mWpX, mWpZ) < 30f) {
+                                    var t2 = 0
+                                    do { mWpX = frand(xBoundsMin, xBoundsMax); mWpZ = frand(zMin, zMax); t2++ }
+                                    while (blocked(mWpX, mWpZ) && t2 < 40)
+                                }
+                                val dX = mWpX - mX; val dZ = mWpZ - mZ
+                                val spd = 1.7f
+                                // Cardinal candidates, best-aligned with the waypoint
+                                // first (then the sides, then reverse), so it follows
+                                // the streets yet can never get boxed in / freeze.
+                                val cand = if (abs(dX) >= abs(dZ))
+                                    listOf(
+                                        floatArrayOf(if (dX >= 0) spd else -spd, 0f),
+                                        floatArrayOf(0f, if (dZ >= 0) spd else -spd),
+                                        floatArrayOf(0f, if (dZ >= 0) -spd else spd),
+                                        floatArrayOf(if (dX >= 0) -spd else spd, 0f))
+                                else
+                                    listOf(
+                                        floatArrayOf(0f, if (dZ >= 0) spd else -spd),
+                                        floatArrayOf(if (dX >= 0) spd else -spd, 0f),
+                                        floatArrayOf(if (dX >= 0) -spd else spd, 0f),
+                                        floatArrayOf(0f, if (dZ >= 0) -spd else spd))
+                                var mvx = 0f; var mvz = 0f
+                                for (c in cand) if (!blocked(mX + c[0], mZ + c[1])) {
+                                    mX += c[0]; mZ += c[1]; mvx = c[0]; mvz = c[1]; break
+                                }
+                                if (mvx == 0f && mvz == 0f) {
+                                    // Fully boxed in (rare) — pick a fresh waypoint.
+                                    var t2 = 0
+                                    do { mWpX = frand(xBoundsMin, xBoundsMax); mWpZ = frand(zMin, zMax); t2++ }
+                                    while (blocked(mWpX, mWpZ) && t2 < 40)
+                                } else {
+                                    mDirX = if (mvx > 0f) 1f else if (mvx < 0f) -1f else 0f
+                                    mDirZ = if (mvz > 0f) 1f else if (mvz < 0f) -1f else 0f
+                                    mAngle = faceDir(mvx, mvz)
+                                }
+                                // Aggro only on DIRECT sight of the face: the player
+                                // must be looking at it AND its face must be turned
+                                // toward the player. A side/rear glimpse does nothing.
+                                val toMx = mX - pX; val toMz = mZ - pZ
+                                val dM = sqrt(toMx*toMx + toMz*toMz)
+                                if (dM in 60f..520f && !losBlocked(pX, pZ, mX, mZ)) {
+                                    val seeMonster = (toMx*fwdVX + toMz*fwdVZ) / dM > 0.62f
+                                    val toPx = -toMx / dM; val toPz = -toMz / dM
+                                    val faceTowardPlayer = (mDirX*toPx + mDirZ*toPz) > 0.45f
+                                    if (seeMonster && faceTowardPlayer) {
+                                        mState = MS_AGGRO
+                                        mAttack = (1..2).random()
+                                        stateUntil = nowMs + 600L   // a brief, visible pause
+                                    }
+                                }
+                            }
+                            MS_AGGRO -> {
+                                // Brief, clearly visible spin-up, then commit.
+                                mAngle = (mAngle + 40f) % 360f
+                                if (nowMs >= stateUntil) {
+                                    if (mAttack == 1) {
+                                        mState = MS_DART
+                                        dartStartDist = dist(mX, mZ, pX, pZ).coerceAtLeast(120f)
+                                        stateUntil = nowMs + 2400L
+                                    } else { mState = MS_GIANT; slamT = 0f }
+                                }
+                            }
+                            MS_DART -> {
+                                // Attack 1: rushes the player very fast, ALWAYS facing
+                                // them (its face shows, never the flat profile), with
+                                // just ~3 quick zig-zags on the way in. The instant it's
+                                // on the player it locks and the camera zooms (MS_LOCK).
+                                val toX = pX - mX; val toZ = pZ - mZ
+                                val d = sqrt(toX*toX + toZ*toZ).coerceAtLeast(0.001f)
+                                val ux = toX/d; val uz = toZ/d
+                                val perpX = -uz; val perpZ = ux
+                                // Zig-zag is tied to closing progress (0→1), so it's a
+                                // fixed ~3 swings regardless of how far it started.
+                                val progress = ((dartStartDist - d) /
+                                    (dartStartDist - 85f).coerceAtLeast(1f)).coerceIn(0f, 1f)
+                                val weave = sin((progress * 3f * Math.PI).toFloat())
+                                val amp = 120f * (1f - progress * 0.7f)
+                                val tgx = pX + perpX * weave * amp
+                                val tgz = pZ + perpZ * weave * amp
+                                step(tgx, tgz, 12.5f)
+                                mAngle = faceDir(toX, toZ)   // keep the face on the player
+                                // Lock the moment it's right on top of the player (or as
+                                // a fallback once the strafe time is up) — from here.
+                                if (d < 85f || nowMs >= stateUntil) {
+                                    mState = MS_LOCK
+                                    monsterLock = true
+                                    zoomT = 0f
+                                    mAngle = faceDir(pX - mX, pZ - mZ)
+                                }
+                            }
+                            MS_LOCK -> {
+                                // Controls are frozen. The monster holds where it darted
+                                // to, faces the camera, and the view zooms hard onto its
+                                // face until it fills the screen — then death.
+                                mScale = 13f
+                                mAngle = faceDir(pX - mX, pZ - mZ)
+                                zoomT = (zoomT + 0.013f).coerceAtMost(1f)
+                                if (zoomT >= 1f) killNow = true
+                            }
+                            MS_GIANT -> {
+                                // Attack 2: swells huge, works around to the player's
+                                // front, and topples its body to smash with its face.
+                                mScale = (mScale + 0.30f).coerceAtMost(52f)
+                                val fdx = pX - mX; val fdz = pZ - mZ
+                                val d = sqrt(fdx*fdx + fdz*fdz).coerceAtLeast(0.001f)
+                                step(frontX(45f), frontZ(45f), 2.0f)
+                                mAngle = faceDir(fdx, fdz)   // face the player for the slam
+                                // Slam cycle: rear up, then crash flat toward the player.
+                                slamT += 0.07f
+                                val tilt = (sin(slamT.toDouble()).toFloat()).coerceAtLeast(0f) * 88f
+                                mTilt = tilt; mTiltX = fdx / d; mTiltZ = fdz / d
+                                if (tilt > 62f && d < 70f + mScale * 1.1f) killNow = true
+                            }
+                        } }
+
+                        // Push transform to the renderer.
+                        renderer.monsterX = mX; renderer.monsterZ = mZ; renderer.monsterAngle = mAngle
+                        renderer.monsterScale = mScale; renderer.monsterYBob = mYBob
+                        renderer.monsterTilt = mTilt; renderer.monsterTiltX = mTiltX; renderer.monsterTiltZ = mTiltZ
+                        renderer.monsterActive = true
+                        renderer.monsterClones = emptyList()
+
+                        // Beep volume — swells quadratically as it nears. And once
+                        // eye-contact triggers the kill sequence (mState left MS_ROAM) the
+                        // beeping FREQUENCY ramps up GRADUALLY (faster + higher-pitched),
+                        // climbing toward ~4× the normal rate by the time it commits.
+                        val dRef = dist(mX, mZ, pX, pZ)
+                        val near = (1f - dRef / 600f).coerceIn(0f, 1f)
+                        val vol = 0.5f * near * near
+                        val beepTarget = if (mState != MS_ROAM) 4.0f else 1.0f
+                        beepSpeed = if (beepSpeed < beepTarget)
+                            (beepSpeed + 0.03f).coerceAtMost(beepTarget)   // ramp up gradually
+                        else
+                            (beepSpeed - 0.12f).coerceAtLeast(beepTarget)  // settle back faster
+                        beepPlayer.value?.let { bp ->
+                            try {
+                                bp.setVolume(vol, vol)
+                                if (kotlin.math.abs(bp.playbackParams.speed - beepSpeed) > 0.04f) {
+                                    bp.playbackParams = bp.playbackParams.setSpeed(beepSpeed)
+                                }
+                            } catch (_: Throwable) {}
+                        }
+
+                        // ── City-levelling detonation (held a lamp circle too long) ──
+                        if (explodeNow) {
+                            beepPlayer.value?.let { try { it.setVolume(0f, 0f) } catch (_: Throwable) {} }
+                            buzz(900L)
+                            whiteFlash = 0.7f; delay(60)
+                            whiteFlash = 0.3f; delay(60)
+                            whiteFlash = 0.95f; delay(90)
+                            whiteFlash = 0f
+                            flashAlpha = 1f; delay(140)
+                            flashAlpha = 0f
+                            catchPhase = 3; delay(420)
+                            // restart like a normal kill
+                            var t3 = 0; var rx = pX; var rz = pZ
+                            do { rx = frand(xBoundsMin, xBoundsMax); rz = frand(zMin, zMax); t3++ }
+                            while (blocked(rx, rz) && t3 < 80)
+                            pX = rx; pZ = rz; camYaw = frand(0f, 360f)
+                            renderer.useLookAt = false
+                            renderer.camX = pX; renderer.camY = eyeY; renderer.camZ = pZ
+                            renderer.camYaw = camYaw; renderer.camPitch = 0f; renderer.fov = 82f
+                            renderer.monsterActive = false; renderer.monsterClones = emptyList()
+                            renderer.monsterScale = 13f; renderer.monsterYBob = 0f
+                            renderer.monsterTilt = 0f; mTilt = 0f
+                            mState = MS_ROAM; mScale = 13f; mYBob = 0f; freezeMs = 0L
+                            monsterLock = false
+                            mSpawned = false
+                            hideUntil = System.currentTimeMillis() + 15_000L
+                            catchPhase = 0
+                        }
+
+                        // ── Caught — the face is already huge in view (it reached the
+                        // camera). Hold the moment, then reset. No dip to black.
+                        if (killNow) {
+                            beepPlayer.value?.let { try { it.setVolume(0f, 0f) } catch (_: Throwable) {} }
+                            buzz(700L)
+                            delay(750)
+                            renderer.monsterActive = false
+                            var t3 = 0; var rx = pX; var rz = pZ
+                            do { rx = frand(xBoundsMin, xBoundsMax); rz = frand(zMin, zMax); t3++ }
+                            while (blocked(rx, rz) && t3 < 80)
+                            pX = rx; pZ = rz; camYaw = frand(0f, 360f)
+                            renderer.useLookAt = false
+                            renderer.camX = pX; renderer.camY = eyeY; renderer.camZ = pZ
+                            renderer.camYaw = camYaw; renderer.camPitch = 0f; renderer.fov = 82f
+                            renderer.monsterActive = false; renderer.monsterClones = emptyList()
+                            renderer.monsterScale = 13f; renderer.monsterYBob = 0f
+                            renderer.monsterTilt = 0f; mTilt = 0f
+                            mState = MS_ROAM; mScale = 13f; mYBob = 0f; freezeMs = 0L
+                            monsterLock = false
+                            mSpawned = false                 // re-place elsewhere after the hide
+                            hideUntil = System.currentTimeMillis() + 15_000L
+                            catchPhase = 0
+                        }
+                    }
+                }
+
                 // ── Door proximity detection ──────────────────────────────────
-                if (doorPromptDigit == null && riddleDigit == null && orderBlockedDigit == null && doorOpeningDigit == null) {
+                // Doors go inert while the monster is hunting — no hiding indoors.
+                if (mState == MS_ROAM &&
+                    doorPromptDigit == null && riddleDigit == null && orderBlockedDigit == null && doorOpeningDigit == null) {
                     val infos = if (isLandscape) DOOR_INFOS_L else DOOR_INFOS
                     // Only prompt when the player has actually stopped in front of a door,
                     // not while walking through the proximity zone.
@@ -952,22 +1348,38 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                 val landY = CAM_EYE_H.toFloat()                                // eye height — matches new intro landing
                 val landZ = if (isLandscape) (pStartZ + 180f) else PORTRAIT_LAND_Z
 
-                renderer.camX = lerp(landX, pX, fp)
-                renderer.camY = lerp(landY, eyeY, fp)
-                renderer.camZ = lerp(landZ, pZ, fp)
-
-                renderer.aerialMode = aerialBlend > 0.01f
-
-                if (renderer.aerialMode) {
-                    // Keep aerial camera looking ahead during blend
-                    renderer.introLookZ = pZ - 200f
-                    renderer.useLookAt  = false
+                if (mState == MS_LOCK) {
+                    // Dart finale: shove the camera right up onto the monster's face.
+                    val faceY = renderer.monsterFaceY
+                    val toX = mX - pX; val toZ = mZ - pZ
+                    val dl = sqrt(toX*toX + toZ*toZ).coerceAtLeast(0.001f)
+                    val ux = toX/dl; val uz = toZ/dl
+                    val e = zoomT*zoomT*(3f - 2f*zoomT)        // smoothstep
+                    renderer.aerialMode = false
+                    renderer.useLookAt  = true
+                    renderer.camX = lerp(pX, mX - ux*55f, e)
+                    renderer.camY = lerp(eyeY, faceY, e)
+                    renderer.camZ = lerp(pZ, mZ - uz*55f, e)
+                    renderer.lookAtX = mX; renderer.lookAtY = faceY; renderer.lookAtZ = mZ
+                    renderer.fov = lerp(82f, 42f, e)
                 } else {
-                    // Pure first-person
-                    renderer.useLookAt = true
-                    renderer.lookAtX   = pX + sin(cr).toFloat()
-                    renderer.lookAtY   = eyeY
-                    renderer.lookAtZ   = pZ - cos(cr).toFloat()
+                    renderer.camX = lerp(landX, pX, fp)
+                    renderer.camY = lerp(landY, eyeY, fp)
+                    renderer.camZ = lerp(landZ, pZ, fp)
+
+                    renderer.aerialMode = aerialBlend > 0.01f
+
+                    if (renderer.aerialMode) {
+                        // Keep aerial camera looking ahead during blend
+                        renderer.introLookZ = pZ - 200f
+                        renderer.useLookAt  = false
+                    } else {
+                        // Pure first-person
+                        renderer.useLookAt = true
+                        renderer.lookAtX   = pX + sin(cr).toFloat()
+                        renderer.lookAtY   = eyeY
+                        renderer.lookAtZ   = pZ - cos(cr).toFloat()
+                    }
                 }
 
                 renderer.playerX    = pX; renderer.playerZ = pZ
@@ -1130,6 +1542,11 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     .fillMaxSize()
                     .background(Color(0xFFFF2200).copy(alpha = flashAlpha))
             )
+        }
+
+        // Monster catch — black during phases 1 & 3; phase 2 reveals the close-up.
+        if (catchPhase == 1 || catchPhase == 3) {
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black))
         }
 
         // Street-widening cut flash (white)

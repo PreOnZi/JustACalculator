@@ -88,6 +88,9 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     // because they yaw to track the player. Each entry: [px, py, pz, outX, outZ]
     // where (outX, outZ) is the diagonal outward direction from the building corner.
     private val cameraMounts = mutableListOf<FloatArray>()
+    // Per-frame world-space verts of the camera red lights (Material.002/.003),
+    // captured in drawCamerasModel and re-drawn additively in PASS 2.
+    private var cameraLightArrs: List<FloatArray> = emptyList()
 
     // Blender-authored meshes loaded from app/src/main/assets/models/. Each list
     // entry is one material group; the loader splits the OBJ on `usemtl` so each
@@ -106,6 +109,36 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     // aerialMode == false) — never from the intro/fly-over aerial pose.
     private var stickmanGroups:  List<ObjGroup> = emptyList()
     private var stickman2Groups: List<ObjGroup> = emptyList()
+    // Night-mode monster (deployed after Building 3). Position/spin driven each
+    // frame from CalculatorCityView; drawn dynamically like the cameras.
+    private var monsterGroups:   List<ObjGroup> = emptyList()
+    // Per-frame world-space verts (+colour) of the monster's bright face groups,
+    // captured in drawMonster and re-drawn additively in PASS 2 to illuminate them.
+    private var monsterFaceArrs: List<Pair<FloatArray, FloatArray>> = emptyList()
+    @Volatile var monsterActive = false
+    @Volatile var monsterX = 0f
+    @Volatile var monsterZ = 0f
+    @Volatile var monsterAngle = 0f                 // degrees, yaw around +Y (faces travel dir)
+    @Volatile var monsterScale = 13f                // model is ±4 tall → ~104 units at 13
+    @Volatile var monsterYBob   = 0f                // extra world-Y (legacy; unused by slam)
+    // Body-slam tilt: the monster pivots over its feet by monsterTilt degrees,
+    // toppling toward the horizontal direction (monsterTiltX, monsterTiltZ).
+    @Volatile var monsterTilt   = 0f
+    @Volatile var monsterTiltX  = 0f
+    @Volatile var monsterTiltZ  = 1f
+    // Extra monster instances for the "clone swarm" attack. Each entry is a
+    // world transform [x, z, angleDeg, scale]; drawn alongside the main monster.
+    @Volatile var monsterClones: List<FloatArray> = emptyList()
+    // Model-space Y of the bright face centroid (auto-measured); feet sit at -4.
+    @Volatile var monsterFaceModelY = 0f
+    // World-space Y of the monster's face, for the catch zoom. Feet are at y=0,
+    // so a model-space height h maps to world (h + 4)*scale.
+    val monsterFaceY: Float get() = (monsterFaceModelY + 4f) * monsterScale
+    // Add this to a desired travel heading (atan2(vx,vz) in degrees) to get the
+    // yaw that points the model's actual face along that heading. Auto-measured
+    // from the mesh (centroid of the bright face materials) so it's correct for
+    // whatever orientation the model was authored in.
+    @Volatile var monsterFaceYawOffsetDeg = 0f
     // Per-interactive-building (digits 1..9) "completed" flag — drives the
     // window colour to BLACK once the user has cleared that building. Read
     // every frame in the render loop so no scene rebuild is needed when it
@@ -280,6 +313,10 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         try { mainBuildingGroups = ObjLoader.load(a, "models/mainbuilding.obj", "models/mainbuilding.mtl") } catch (_: Throwable) {}
         try { stickmanGroups  = ObjLoader.load(a, "models/stickman.obj",  "models/stickman.mtl") } catch (_: Throwable) {}
         try { stickman2Groups = ObjLoader.load(a, "models/stickman2.obj", "models/stickman2.mtl") } catch (_: Throwable) {}
+        try {
+            monsterGroups   = ObjLoader.load(a, "models/monster.obj",   "models/monster.mtl")
+            computeMonsterFaceHeading()
+        } catch (_: Throwable) {}
         for (i in 0 until 10) {
             try { debrisGroups[i] = ObjLoader.load(a, "models/debris/debris${i+1}.obj", "models/debris/debris${i+1}.mtl") } catch (_: Throwable) {}
         }
@@ -411,6 +448,10 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         drawCameras()
         drawDoors()
 
+        // Monster drawn BEFORE the night overlay so the darkness covers it too —
+        // it reads as a dark shape in the gloom rather than a self-lit cut-out.
+        drawMonster()
+
         // Dark-blue atmospheric overlay — gets stronger as the player completes
         // buildings. Drawn last with the depth test off so it tints everything.
         if (darknessLevel > 0.001f) {
@@ -421,8 +462,8 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             GLES20.glDisable(GLES20.GL_DEPTH_TEST)
             GLES20.glEnable(GLES20.GL_BLEND)
             GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
-            val a = (darknessLevel * 0.55f).coerceIn(0f, 1f)
-            GLES20.glUniform4f(uCol, 0.02f, 0.06f, 0.18f, a)
+            val a = (darknessLevel * 0.88f).coerceIn(0f, 1f)
+            GLES20.glUniform4f(uCol, 0.010f, 0.016f, 0.045f, a)
             val quad = floatArrayOf(-1f,-1f,0f,  1f,-1f,0f,  1f,1f,0f,  -1f,1f,0f).toFB()
             quad.position(0)
             GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, quad)
@@ -432,27 +473,51 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         }
 
-        // ── PASS 2 — glow meshes (windows, lamp caps, halos) drawn ADDITIVELY
-        // on top of the blue darkness overlay, so warm lights cut through it.
+        // CRITICAL: the overlay above swapped uMVP to identity for its fullscreen
+        // quad. Restore the real scene matrix — the monster and the PASS-2 glow
+        // (lamp bulbs, halos, lit windows) are world-space, so without this they
+        // were being drawn off-screen (= invisible lamps + invisible monster).
+        GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
+
+        // ── PASS 2 — light sources drawn ADDITIVELY on top of the darkness so
+        // they cut through it. Windows + camera lights were ALSO drawn in pass 1
+        // (so they already wrote depth) — use GL_LEQUAL so the re-draw at equal
+        // depth isn't rejected, otherwise their glow never appears.
         if (!aerialMode && dkLvl > 0.01f) {
             GLES20.glUniform1f(uAerial, 1f)  // disable AO so lights stay full-bright
             GLES20.glEnable(GLES20.GL_BLEND)
             GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE)
             GLES20.glDepthMask(false)
+            GLES20.glDepthFunc(GLES20.GL_LEQUAL)
             for (m in meshes) {
-                if (!m.glow) continue
                 if (m.aerialSkip && (cellStage < 3 || aerialMode)) continue
-                val a = m.a * dkLvl
+                // Lit (un-completed) windows also glow here so they punch through
+                // the night as genuine light sources, not just dim tinted panes.
+                val litWindow = m.windowDigit in 1..9 &&
+                    !((m.windowDigit - 1) in buildingCompleted.indices && buildingCompleted[m.windowDigit - 1])
+                if (!m.glow && !litWindow) continue
+                val r: Float; val g: Float; val b: Float; val a: Float
+                if (litWindow) {
+                    r = 1.0f; g = 0.82f; b = 0.30f       // warm window light
+                    a = 0.85f * dkLvl
+                } else {
+                    r = m.r; g = m.g; b = m.b; a = m.a * dkLvl
+                }
                 if (a < 0.01f) continue
-                GLES20.glUniform4f(uCol, m.r, m.g, m.b, a)
+                GLES20.glUniform4f(uCol, r, g, b, a)
                 GLES20.glUniform1f(uFog, 0f)
                 m.buf.position(0)
                 GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, m.buf)
                 GLES20.glEnableVertexAttribArray(aPos)
                 GLES20.glDrawArrays(m.mode, 0, m.cnt)
             }
+            // Camera red lights — additive, same warm "defy the dark" pass.
+            drawCameraLights(dkLvl)
+            // Illuminate the monster's red/white faces.
+            drawMonsterFaces(dkLvl)
             GLES20.glDisable(GLES20.GL_BLEND)
             GLES20.glDepthMask(true)
+            GLES20.glDepthFunc(GLES20.GL_LESS)
         }
     }
 
@@ -1703,9 +1768,13 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         for (g in lampOnGroups) {
             if (g.materialName == "Material.002") {
                 addInstancedGroup(g, px, baseY, pz, s, yaw = yawRad,
-                    aerialSkip = true, glow = true, alpha = 0.9f)
+                    aerialSkip = true, glow = true, alpha = 1f,
+                    glowColor = floatArrayOf(1.0f, 0.86f, 0.42f))
             }
         }
+        // Warm pool of light on the street under each building-corner lamp.
+        addHaloRing(px, pz, 1f,  30f, 1.00f, 0.78f, 0.34f, 0.75f)
+        addHaloRing(px, pz, 30f, 64f, 1.00f, 0.78f, 0.34f, 0.42f)
     }
 
     // Place the Blender-authored lamp at each position. The "off" model is
@@ -1729,15 +1798,18 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             }
             for (g in lampOnGroups) {
                 // Only the bright bulb material glows. Pole/body of lampon is identical
-                // to lampoff so we skip it to avoid double-drawing.
+                // to lampoff so we skip it to avoid double-drawing. Forced to a warm
+                // bright colour + full alpha so the bulb clearly reads as "on".
                 if (g.materialName == "Material.002") {
                     addInstancedGroup(g, px, yOff, pz, s, yaw = yaw,
-                        aerialSkip = true, glow = true, alpha = 0.9f)
+                        aerialSkip = true, glow = true, alpha = 1f,
+                        glowColor = floatArrayOf(1.0f, 0.86f, 0.42f))
                 }
             }
-            // Warm ground halo — still procedural, fades in with darkness via glow flag.
-            addHaloRing(px, pz, 1f,  28f, 1.00f, 0.74f, 0.28f, 0.45f)
-            addHaloRing(px, pz, 28f, 58f, 1.00f, 0.74f, 0.28f, 0.20f)
+            // Warm ground halo — fades in with darkness via glow flag. Boosted so
+            // each lamp throws a visible pool of light onto the street at night.
+            addHaloRing(px, pz, 1f,  30f, 1.00f, 0.78f, 0.34f, 0.75f)
+            addHaloRing(px, pz, 30f, 64f, 1.00f, 0.78f, 0.34f, 0.42f)
         }
     }
 
@@ -1747,7 +1819,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         g: ObjGroup, tx: Float, ty: Float, tz: Float, s: Float,
         yaw: Float = 0f,
         aerialSkip: Boolean = false, glow: Boolean = false, alpha: Float = 1f,
-        noAO: Boolean = false
+        noAO: Boolean = false, glowColor: FloatArray? = null
     ) {
         val src = g.verts
         val out = FloatArray(src.size)
@@ -1762,8 +1834,11 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             out[i + 2] = -xs * sy + zs * cy + tz
             i += 3
         }
+        val cr = glowColor?.getOrNull(0) ?: g.r
+        val cg = glowColor?.getOrNull(1) ?: g.g
+        val cb = glowColor?.getOrNull(2) ?: g.b
         meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3,
-            g.r, g.g, g.b, a = alpha, fog = if (aerialSkip) 0f else 0.05f,
+            cr, cg, cb, a = alpha, fog = if (aerialSkip) 0f else 0.05f,
             aerialSkip = aerialSkip, glow = glow, noAO = noAO))
     }
 
@@ -1985,6 +2060,129 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     private val CAMERA_MODEL_YAW_OFFSET_DEG = 0f
     private val PLAYER_LOOK_Y = 40f  // matches the player orb center (drawOrb uses 32+8)
 
+    // The night-mode monster. Drawn in world space each frame (it roams + spins),
+    // exactly like the cameras: scale → yaw about +Y → translate, then upload.
+    // Measure which way the model's face points in the horizontal plane: the
+    // direction from the body centroid to the bright face-material centroid.
+    // We then store the yaw offset that makes the model render +Z aligned with
+    // a travel heading equal that face direction (so it always travels face-first).
+    private fun computeMonsterFaceHeading() {
+        var bodyX = 0f; var bodyZ = 0f; var bodyN = 0
+        var faceX = 0f; var faceY = 0f; var faceZ = 0f; var faceN = 0
+        for (g in monsterGroups) {
+            val isFace = maxOf(g.r, g.g, g.b) > 0.25f
+            var i = 0
+            while (i < g.verts.size) {
+                val x = g.verts[i]; val y = g.verts[i + 1]; val z = g.verts[i + 2]
+                bodyX += x; bodyZ += z; bodyN++
+                if (isFace) { faceX += x; faceY += y; faceZ += z; faceN++ }
+                i += 3
+            }
+        }
+        if (faceN == 0 || bodyN == 0) { monsterFaceYawOffsetDeg = 0f; monsterFaceModelY = 0f; return }
+        monsterFaceModelY = faceY / faceN
+        val dx = faceX / faceN - bodyX / bodyN
+        val dz = faceZ / faceN - bodyZ / bodyN
+        if (dx * dx + dz * dz < 1e-6f) { monsterFaceYawOffsetDeg = 0f; return }
+        // Model heading of the face, then the yaw offset that cancels it.
+        val faceHeading = Math.toDegrees(atan2(dx.toDouble(), dz.toDouble())).toFloat()
+        monsterFaceYawOffsetDeg = -faceHeading
+    }
+
+    private fun drawMonster() {
+        // Nothing to draw — make sure stale face-glow verts from a previous frame
+        // don't linger in PASS 2 (otherwise a vanished monster leaves its face behind).
+        if (aerialMode || monsterGroups.isEmpty() || (!monsterActive && monsterClones.isEmpty())) {
+            if (monsterFaceArrs.isNotEmpty()) monsterFaceArrs = emptyList()
+            return
+        }
+        GLES20.glUniform1f(uFog, 0f)
+        GLES20.glUniform1f(uAerial, 1f)   // self-lit so it reads in the night dark
+        val faces = mutableListOf<Pair<FloatArray, FloatArray>>()
+        if (monsterActive) drawMonsterInstance(monsterX, monsterZ, monsterAngle, monsterScale,
+            monsterTilt, monsterTiltX, monsterTiltZ, faces)
+        for (c in monsterClones) drawMonsterInstance(c[0], c[1], c[2], c[3], 0f, 0f, 1f, faces)
+        monsterFaceArrs = faces
+    }
+
+    // Draws one monster body (main or clone) at a world transform, appending its
+    // bright face materials to [faces] for the additive PASS-2 illumination.
+    // A non-zero tilt topples the body over its feet toward (tdx, tdz).
+    private fun drawMonsterInstance(
+        ox: Float, oz: Float, angleDeg: Float, s: Float,
+        tilt: Float, tdx: Float, tdz: Float,
+        faces: MutableList<Pair<FloatArray, FloatArray>>
+    ) {
+        val yaw = Math.toRadians(angleDeg.toDouble()).toFloat()
+        val cy = cos(yaw); val sy = sin(yaw)
+        val oy = 4f * s
+        // Tilt is a rotation about the horizontal axis k = (tdz, 0, -tdx) through
+        // the feet (model y = -4·s), so the body falls toward (tdx, tdz) face-first.
+        val hasTilt = tilt > 0.01f
+        val tr = Math.toRadians(tilt.toDouble()).toFloat()
+        val ct = cos(tr); val st = sin(tr)
+        val kx = tdz; val kz = -tdx
+        val fy = -4f * s
+        for (g in monsterGroups) {
+            val src = g.verts
+            if (src.isEmpty()) continue
+            val arr = FloatArray(src.size)
+            var i = 0
+            while (i < src.size) {
+                val xs = src[i] * s; val ys = src[i + 1] * s; val zs = src[i + 2] * s
+                // Yaw about +Y (offset from the model centre).
+                var rx =  xs * cy + zs * sy
+                var ry =  ys
+                var rz = -xs * sy + zs * cy
+                if (hasTilt) {
+                    // Rodrigues rotation about unit axis k through the feet.
+                    val vx = rx; val vy = ry - fy; val vz = rz
+                    val dotKV = kx * vx + kz * vz
+                    val crx = -kz * vy
+                    val cry =  kz * vx - kx * vz
+                    val crz =  kx * vy
+                    rx = vx * ct + crx * st + kx * dotKV * (1f - ct)
+                    ry = (vy * ct + cry * st) + fy
+                    rz = vz * ct + crz * st + kz * dotKV * (1f - ct)
+                }
+                arr[i]     = rx + ox
+                arr[i + 1] = ry + oy
+                arr[i + 2] = rz + oz
+                i += 3
+            }
+            val fb = arr.toFB()
+            // Body is authored pure black — lift it just enough that it reads as
+            // a dark shape. It's drawn before the overlay, so the night dims it
+            // down to a shadow rather than a bright cut-out.
+            GLES20.glUniform4f(uCol, g.r.coerceAtLeast(0.40f), g.g.coerceAtLeast(0.40f), g.b.coerceAtLeast(0.40f), 1f)
+            fb.position(0)
+            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
+            GLES20.glEnableVertexAttribArray(aPos)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, src.size / 3)
+            // The bright face materials (red / white) are captured so PASS 2 can
+            // re-draw them additively — illuminating the faces through the night
+            // while the dark body stays dimmed.
+            if (maxOf(g.r, g.g, g.b) > 0.25f) faces.add(arr to floatArrayOf(g.r, g.g, g.b))
+        }
+    }
+
+    // Additive pass that illuminates the monster's red/white faces through the
+    // night overlay (drawn in PASS 2, after the MVP is restored).
+    private fun drawMonsterFaces(dkLvl: Float) {
+        if (aerialMode || monsterFaceArrs.isEmpty()) return
+        GLES20.glUniform1f(uFog, 0f)
+        val k = (0.6f * dkLvl).coerceIn(0f, 1f)
+        for ((arr, col) in monsterFaceArrs) {
+            if (arr.isEmpty()) continue
+            val fb = arr.toFB()
+            GLES20.glUniform4f(uCol, col[0], col[1], col[2], k)
+            fb.position(0)
+            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
+            GLES20.glEnableVertexAttribArray(aPos)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, arr.size / 3)
+        }
+    }
+
     private fun drawCameras() {
         if (aerialMode || cameraMounts.isEmpty()) return
         if (cameraOnGroups.isNotEmpty()) {
@@ -2058,6 +2256,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         GLES20.glUniform1f(uFog, 0f)
         GLES20.glUniform1f(uAerial, 1f)  // self-lit / metallic — skip the ground AO darkening
         val dk = darknessLevel.coerceIn(0f, 1f)
+        val lights = mutableListOf<FloatArray>()
         for (gi in cameraOnGroups.indices) {
             val arr = perGroup[gi].toFloatArray()
             if (arr.isEmpty()) continue
@@ -2072,6 +2271,28 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 b  = g.b + (night[2] - g.b) * dk
             } else { r = g.r; gC = g.g; b = g.b }
             GLES20.glUniform4f(uCol, r, gC, b, 1f)
+            fb.position(0)
+            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
+            GLES20.glEnableVertexAttribArray(aPos)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, arr.size / 3)
+            // Only the small recording light (Material.002, red at night) gets the
+            // additive "defy the dark" pop. The larger lens (Material.003) stays
+            // dimmed by the overlay, per design.
+            if (g.materialName == "Material.002") {
+                lights.add(arr)
+            }
+        }
+        cameraLightArrs = lights
+    }
+
+    // Additive bright-red camera lights, drawn in PASS 2 after the MVP is restored.
+    private fun drawCameraLights(dkLvl: Float) {
+        if (aerialMode || cameraLightArrs.isEmpty()) return
+        GLES20.glUniform1f(uFog, 0f)
+        GLES20.glUniform4f(uCol, 1.0f, 0.06f, 0.07f, (0.95f * dkLvl).coerceIn(0f, 1f))
+        for (arr in cameraLightArrs) {
+            if (arr.isEmpty()) continue
+            val fb = arr.toFB()
             fb.position(0)
             GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
             GLES20.glEnableVertexAttribArray(aPos)
