@@ -13,6 +13,7 @@ import android.os.VibratorManager
 import android.view.MotionEvent
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,6 +40,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.fictioncutshort.justacalculator.R
+import com.fictioncutshort.justacalculator.logic.Currency
+import com.fictioncutshort.justacalculator.logic.CurrencyStore
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -150,6 +153,19 @@ private val SIDEWALK_Z_HALF = BD_V * (5.74f / 3.063f)   // ≈ 93.7
 // Tuned to roughly the visual thickness of the sidewalk after the renderer's
 // MAIN_BUILDING_HEIGHT_SCALE × buildingHeightScale=2 scaling.
 private const val SIDEWALK_BUMP    = 20f
+// How high the eye climbs over the arched bridge (peak, above the flat approach).
+private const val BRIDGE_PEAK_RISE = 45f
+// Half-width of the walkable bridge deck (the rails act as walls here).
+private const val BRIDGE_DECK_HALF = 16f
+// Depth of the lava strip (world units), from its south front edge northward.
+private const val LAVA_DEPTH = 360f
+// North (far) edge of the lava strip, and the centre of the bridge deck over it.
+private val LAVA_NORTH_Z  = LAVA_FRONT_Z - LAVA_DEPTH
+private val BRIDGE_MID_Z  = LAVA_FRONT_Z - LAVA_DEPTH * 0.5f
+// Once the player has crossed, the city is behind them for good: deaths respawn
+// here, on the far bank, instead of back at the city start.
+private const val NORTH_RESPAWN_X = 0f
+private val NORTH_RESPAWN_Z = LAVA_NORTH_Z - 70f
 
 // Portrait collision data — 3×5 digit/function/damaged grid + 1×5 operator column.
 private val BLDG_FP: List<FloatArray> = run {
@@ -231,11 +247,97 @@ private val STICKMAN_FP_L: List<FloatArray> = listOf(
 // DOOR INTERACTION — entry order, riddle data, proximity
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Required entry order — building 6 is visited twice
-private val ENTRY_ORDER = listOf(5, 3, 7, 1, 9, 6, 8, 2, 6)
+// Required entry order. A building's door stays shut — no prompt, no riddle —
+// until every building before it in this chain has been COMPLETED (not merely
+// entered).
+private val ENTRY_ORDER = listOf(1, 7, 4, 3, 6, 2, 5, 8, 9)
 
-// Sentinel for the RAD / "mute" button door
+// Completion is recorded under one key per building, written by each building's
+// onComplete. The older per-building flags were inconsistent (td_b1_done,
+// building_done_7, and Building 2 had none at all), and "building_done_N" is set
+// merely by WALKING IN, so it can't be used to gate the order.
+private fun isBuildingComplete(prefs: android.content.SharedPreferences, d: Int): Boolean =
+    prefs.getBoolean("completed_$d", false)
+
+// The first building in the chain ahead of `digit` that hasn't been finished, or
+// null when `digit` is allowed to be entered.
+private fun missingPrereq(prefs: android.content.SharedPreferences, digit: Int): Int? {
+    val idx = ENTRY_ORDER.indexOf(digit)
+    if (idx <= 0) return null                       // not gated, or the first building
+    for (i in 0 until idx) {
+        val need = ENTRY_ORDER[i]
+        if (!isBuildingComplete(prefs, need)) return need
+    }
+    return null
+}
+
+// Seeds "completed_N" from the legacy flags so a save in progress isn't reset.
+// Runs once; after this, only onComplete writes these.
+private fun migrateCompletionFlags(prefs: android.content.SharedPreferences) {
+    if (prefs.getBoolean("completion_migrated", false)) return
+    val legacy = mapOf(
+        1 to "td_b1_done", 2 to "building_done_2", 3 to "td_b3_done",
+        4 to "td_b4_done", 5 to "td_b5_done",     6 to "td_b6_done",
+        7 to "building_done_7", 8 to "building_done_8", 9 to "building_done_9",
+    )
+    val e = prefs.edit()
+    for ((d, key) in legacy) if (prefs.getBoolean(key, false)) e.putBoolean("completed_$d", true)
+    e.putBoolean("completion_migrated", true).apply()
+}
+
+// The crossing is one-way: once the player steps off the north end of the bridge,
+// the city is sealed behind them, the monster plants itself mid-deck facing back
+// (the way home is shut), and deaths respawn on the far bank rather than the start.
+private const val ONE_WAY_BRIDGE = true
+
+// How long the player stands inside the mute button before the city starts to
+// come apart. The voiceover runs underneath from the moment they're inside.
+private const val COLLAPSE_STARTS_AT_MS = 30_000L
+// Used only until res/raw/ending_vo exists — then the real recording's length
+// drives the sequence and this is ignored.
+private const val ENDING_VO_PLACEHOLDER_MS = 75_000L
+
+private fun buzzEnding(context: android.content.Context, ms: Long) {
+    try {
+        @Suppress("DEPRECATION")
+        val vib: Vibrator =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+            else context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            vib.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+        else @Suppress("DEPRECATION") vib.vibrate(ms)
+    } catch (_: Throwable) {}
+}
+
+// Sentinel for the RAD / "mute" button door — Building 10.
 private const val RAD_DIGIT = -1
+// Building 10's body. The city's mute button is blown up to RAD_SCALE (matching
+// Cityglrenderer.RAD_SCALE) so its interior is walkable at human scale — at 1×
+// the props inside the model barely reach the player's knee. Everything below is
+// derived from the renderer's r0 = 88 × RAD_SCALE (door half-width = r0 × 0.30).
+private const val RAD_SCALE      = 3f
+private const val RAD_R0         = 88f * RAD_SCALE     // model's outer radius, 264
+// The drum is a zero-thickness tube sitting exactly on r0, so the solid band is
+// a thin skin around it — thin enough that the props hugging the wall inside
+// stay reachable, thick enough that a 2.2/frame step can't tunnel through.
+private const val RAD_R          = RAD_R0 + 6f
+private const val RAD_WALL_INNER = RAD_R0 - 14f
+// The doorway is the opening the model already carries in its wall: it runs
+// 90°..101° around the drum (0° = +X, 90° = +Z / south), so it sits just west of
+// due-south. The centre matches Cityglrenderer's RAD_DOOR_DEG; the passable window
+// is kept a shade NARROWER than the hole (±5° vs ±5.75°) so the player can never
+// squeeze through where the wall actually is.
+private const val RAD_DOOR_DEG      = 95.5f
+private const val RAD_DOOR_HALF_DEG = 5f
+
+// The spot the player stands on to be prompted for their rating: straight out
+// from Building 10's doorway, on the line that runs through it to the centre.
+private fun radDoorApproach(bx: Float, bz: Float): Pair<Float, Float> {
+    val a = Math.toRadians(RAD_DOOR_DEG.toDouble())
+    return Pair(bx + (cos(a) * (RAD_R0 + 22f)).toFloat(),
+                bz + (sin(a) * (RAD_R0 + 22f)).toFloat())
+}
 
 private data class DoorInfo(val digit: Int, val cx: Float, val cz: Float, val face: Int)
 
@@ -330,7 +432,13 @@ private val DOOR_HINTS: Map<Int, Hints> = mapOf(
 )
 
 @Composable
-fun CalculatorCityView(modifier: Modifier = Modifier) {
+fun CalculatorCityView(
+    modifier: Modifier = Modifier,
+    // Lets the in-city debug menu leave the city and jump into a phase-1 chapter.
+    // Null (the default) hides that section — e.g. if the city is ever hosted
+    // somewhere without the calculator behind it.
+    onJumpToPhase1: ((com.fictioncutshort.justacalculator.data.Chapter) -> Unit)? = null,
+) {
 
     val context  = LocalContext.current
     val renderer = remember { CityGLRenderer(context.assets) }
@@ -392,6 +500,20 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
     // Single joystick input
     var joyX by remember { mutableStateOf(0f) }
     var joyY by remember { mutableStateOf(0f) }
+
+    // ── The ending ────────────────────────────────────────────────────────────
+    // Standing inside the mute button for long enough ends the story. A voiceover
+    // plays; thirty seconds in, the city starts coming apart around the player;
+    // when the voiceover finishes, everything goes black and the last conversation
+    // happens back on the calculator itself.
+    var endBlack by remember { mutableStateOf(0f) }
+    var endStarted by remember { mutableStateOf(false) }
+
+    // Debug menu, reached by tapping the joystick 5× and entering the passcode.
+    var joyTapCount  by remember { mutableIntStateOf(0) }
+    var joyLastTapMs by remember { mutableLongStateOf(0L) }
+    var showDebugGate by remember { mutableStateOf(false) }
+    var showDebugMenu by remember { mutableStateOf(false) }
 
     // First-person eye height — bumped up when the player crosses onto a
     // sidewalk, smoothly ramped back down once they step onto the road.
@@ -457,17 +579,42 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
     // ── Building 1 minigame + bridge ──────────────────────────────────────────
     val prefs = cityPrefs   // alias — same SharedPreferences instance
     var towerDefenseCompleted by remember { mutableStateOf(prefs.getBoolean("td_b1_done", false)) }
-    var showTowerDefense by remember { mutableStateOf(false) }
-    var showMaze         by remember { mutableStateOf(false) }
-    var showTankGame     by rememberSaveable { mutableStateOf(false) }
-    var showDoor4        by rememberSaveable { mutableStateOf(false) }
-    var showBuilding5Map by rememberSaveable { mutableStateOf(false) }
-    var showBuilding6Game by rememberSaveable { mutableStateOf(false) }
-    var showBuilding7Filter by rememberSaveable { mutableStateOf(false) }
-    var showBuilding8Casino by rememberSaveable { mutableStateOf(false) }
-    var showBuilding9Flappy by rememberSaveable { mutableStateOf(false) }
+    // Being inside a building is a PLACE. If the app was killed while one was
+    // open, the city reopens it here rather than dropping the player back on the
+    // street — so these are seeded from the saved active building, at first
+    // composition, before anything can race in and clear it.
+    val resumeBuilding = remember {
+        com.fictioncutshort.justacalculator.logic.BuildingProgress.activeBuilding(context)
+    }
+    var showTowerDefense by remember { mutableStateOf(resumeBuilding == 1) }
+    var showMaze         by remember { mutableStateOf(resumeBuilding == 2) }
+    var showTankGame     by rememberSaveable { mutableStateOf(resumeBuilding == 3) }
+    var showDoor4        by rememberSaveable { mutableStateOf(resumeBuilding == 4) }
+    var showBuilding5Map by rememberSaveable { mutableStateOf(resumeBuilding == 5) }
+    var showBuilding6Game by rememberSaveable { mutableStateOf(resumeBuilding == 6) }
+    var showBuilding7Filter by rememberSaveable { mutableStateOf(resumeBuilding == 7) }
+    var showBuilding8Casino by rememberSaveable { mutableStateOf(resumeBuilding == 8) }
+    var showBuilding9Flappy by rememberSaveable { mutableStateOf(resumeBuilding == 9) }
+    // Coins lottery — seeded here in the city ~10s after Building 5 is finished.
+    var showCityLottery by rememberSaveable { mutableStateOf(false) }
+    // Bumped whenever a building overlay closes, so the currency HUD re-reads
+    // the persisted balances a building may have just deposited.
+    var currencyRefresh by remember { mutableIntStateOf(0) }
     var tankGameCompleted by remember { mutableStateOf(prefs.getBoolean("td_b3_done", false)) }
     var bridgePieces     by remember { mutableIntStateOf(prefs.getInt("bridge_pieces", if (prefs.getBoolean("td_b1_done", false)) 1 else 0)) }
+    // Crossing the finished bridge is one-way — once the player reaches the far
+    // bank the city is closed off behind them and the monster blocks the deck.
+    // With ONE_WAY_BRIDGE off, an already-locked save is released too, so a player
+    // who has crossed isn't left stranded on the far bank.
+    var crossedBridge    by remember {
+        mutableStateOf(ONE_WAY_BRIDGE && prefs.getBoolean("bridge_crossed", false))
+    }
+    LaunchedEffect(Unit) {
+        if (!ONE_WAY_BRIDGE) prefs.edit().putBoolean("bridge_crossed", false).apply()
+    }
+    // Building 10 — once the rating slider unlocks it, its door stays up and the
+    // interior (where the mute buttons are) stays walkable.
+    var radDoorOpen      by remember { mutableStateOf(prefs.getBoolean("b10_door_open", false)) }
     var forceAerial      by remember { mutableStateOf(false) }
 
     // ── Ambient city audio ──────────────────────────────────────────────────
@@ -478,9 +625,31 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
     // own audio isn't muddied.
     val overlayOpen = showTowerDefense || showMaze || showTankGame || showDoor4 ||
         showBuilding5Map || showBuilding6Game || showBuilding7Filter ||
-        showBuilding8Casino || showBuilding9Flappy
+        showBuilding8Casino || showBuilding9Flappy || showCityLottery ||
+        showDebugGate || showDebugMenu
     val isWalking = introDone && !overlayOpen && doorOpeningDigit == null &&
         kotlin.math.abs(joyY) > 0.12f
+
+    // After Building 5 is finished, the "today's draw" lottery popup appears once,
+    // after roughly 10s of actual walking. Choosing Play / Lucky Dip quietly
+    // stakes ALL the player's coins (settled later as a total loss in Building 8).
+    val b5Done = remember { prefs.getBoolean("td_b5_done", false) }
+    LaunchedEffect(b5Done) {
+        if (!b5Done || com.fictioncutshort.justacalculator.logic.CurrencyStore.lotteryShown(context)) return@LaunchedEffect
+        var walked = 0f
+        while (walked < 9f && !com.fictioncutshort.justacalculator.logic.CurrencyStore.lotteryShown(context)) {
+            kotlinx.coroutines.delay(200)
+            // Read live state each tick (isWalking/overlayOpen are per-recomposition vals).
+            val anyOverlay = doorOpeningDigit != null || showBuilding5Map || showBuilding6Game ||
+                showBuilding7Filter || showBuilding8Casino || showBuilding9Flappy || showTankGame ||
+                showDoor4 || showTowerDefense || showMaze || showCityLottery ||
+                doorPromptDigit != null || riddleDigit != null
+            if (anyOverlay) continue
+            // Mostly credited by walking, but also a slow idle drip so it always fires.
+            walked += if (kotlin.math.abs(joyY) > 0.12f) 0.2f else 0.04f
+        }
+        if (!com.fictioncutshort.justacalculator.logic.CurrencyStore.lotteryShown(context)) showCityLottery = true
+    }
 
     val windPlayer = remember { mutableStateOf<MediaPlayer?>(null) }
     val wind2Player = remember { mutableStateOf<MediaPlayer?>(null) }
@@ -571,6 +740,116 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
         for (d in 1..9) {
             renderer.buildingCompleted[d - 1] = prefs.getBoolean("building_done_$d", false)
         }
+        // Seed the completion flags the entry order reads from (once per save).
+        migrateCompletionFlags(prefs)
+        // Building 8's door gets an RGB frame once Building 5 is finished.
+        renderer.b5EntranceGlow = prefs.getBoolean("td_b5_done", false)
+        // Building 10's doorway stays open once unlocked.
+        renderer.radDoorOpen = radDoorOpen
+    }
+
+    // ── The city comes down ───────────────────────────────────────────────────
+    // Fires once the player is properly INSIDE the mute button. A voiceover plays
+    // over the whole thing (its length is whatever the audio is - the sequence
+    // waits for it, so the recording can be swapped without touching this code).
+    // Thirty seconds in, the city begins to fall apart around them; when the
+    // voiceover ends, the screen goes black and the ending takes over.
+    //
+    // endStarted must NOT be a key here. It is set below, from inside this very
+    // coroutine — and a key changing is what tells Compose to cancel the effect and
+    // start it again. The restarted copy then hits the guard on the next line and
+    // returns, so the voiceover, the wait and the whole collapse were being killed
+    // the instant the player stepped inside. Reading it in the body is enough: it
+    // still stops a second run when radDoorOpen recomposes.
+    LaunchedEffect(radDoorOpen) {
+        if (endStarted || !radDoorOpen) return@LaunchedEffect
+
+        fun insideTheButton(): Boolean {
+            val dx = pX - 0f
+            val dz = pZ - (-CELL_V * 5.75f)
+            return sqrt(dx * dx + dz * dz) < RAD_WALL_INNER
+        }
+
+        // The player has to be IN there — and STAY in there. Walking through the
+        // door and straight back out used to be enough to arm the whole sequence,
+        // and the city would then start coming down thirty seconds later wherever
+        // they happened to be by then (halfway back across the bridge, say). So the
+        // quiet stretch is now a vigil: step outside during it and the voiceover
+        // stops, and nothing happens until they come back and stand there properly.
+        var ending: String
+        var vo: MediaPlayer?
+        var voMs: Long
+        while (true) {
+            while (!insideTheButton()) delay(200)
+
+            // The ending is decided HERE and frozen, so every screen after this agrees.
+            ending = com.fictioncutshort.justacalculator.logic.EndingStore.choose(context)
+
+            // The voiceover. Absent for now - when the recording exists, drop it in as
+            // res/raw/ending_vo and this picks it up and paces the whole sequence off
+            // its real length instead of the placeholder.
+            val voId = context.resources.getIdentifier("ending_vo", "raw", context.packageName)
+            vo = if (voId != 0) MediaPlayer.create(context, voId) else null
+            voMs = vo?.duration?.toLong() ?: ENDING_VO_PLACEHOLDER_MS
+            try { vo?.start() } catch (_: Throwable) {}
+
+            // Thirty seconds of just standing there, listening.
+            val quiet = COLLAPSE_STARTS_AT_MS.coerceAtMost(voMs)
+            var waited = 0L
+            var walkedOut = false
+            while (waited < quiet) {
+                delay(100)
+                waited += 100
+                if (!insideTheButton()) { walkedOut = true; break }
+            }
+            if (!walkedOut) break               // they stayed. The city comes down.
+
+            try { vo?.stop(); vo?.release() } catch (_: Throwable) {}
+            vo = null
+        }
+        // Past this point the collapse is committed, and they are standing in it.
+        endStarted = true
+
+        // Then the world starts going. The collapse runs for whatever is left of
+        // the voiceover, so the two always finish together.
+        val fallMs = (voMs - COLLAPSE_STARTS_AT_MS.coerceAtMost(voMs)).coerceAtLeast(6000L)
+        val t0 = System.currentTimeMillis()
+        var lastBoom = 0L
+        while (true) {
+            val e = System.currentTimeMillis() - t0
+            val p = (e.toFloat() / fallMs).coerceIn(0f, 1f)
+            renderer.collapse = p
+
+            // The phone shakes with the ground.
+            buzzEnding(context, (18L + (p * 55f).toLong()))
+
+            // Explosions: white flashes, more often as it goes.
+            val gap = (900L - (p * 700f).toLong()).coerceAtLeast(120L)
+            if (e - lastBoom > gap) {
+                lastBoom = e
+                whiteFlash = 0.30f + p * 0.55f
+                delay(45)
+                whiteFlash = 0f
+            }
+
+            // The last stretch fades to black under the noise.
+            endBlack = ((p - 0.72f) / 0.28f).coerceIn(0f, 1f)
+
+            if (p >= 1f) break
+            delay(30)
+        }
+        endBlack = 1f
+        renderer.collapse = 1f
+        try { vo?.stop(); vo?.release() } catch (_: Throwable) {}
+
+        // Out of the city. The rest happens on the calculator.
+        delay(700)
+        com.fictioncutshort.justacalculator.logic.EndingStore.line = 0
+        com.fictioncutshort.justacalculator.logic.EndingStore.phase =
+            if (com.fictioncutshort.justacalculator.logic.EndingStore.asksForName(ending))
+                com.fictioncutshort.justacalculator.logic.EndingStore.Phase.NAME
+            else
+                com.fictioncutshort.justacalculator.logic.EndingStore.Phase.DIALOGUE
     }
 
     // ── Door-open + walk-through sequence ─────────────────────────────────────
@@ -581,6 +860,43 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
     // entry-progress is bumped and the player is teleported back).
     LaunchedEffect(doorOpeningDigit) {
         val d = doorOpeningDigit ?: return@LaunchedEffect
+        if (d == RAD_DIGIT) {
+            // Building 10 — the mute button. The rating slider is its lock: answer it
+            // and the black panel filling the doorway is gone, then the player walks
+            // in among the buttons. There's no overlay; the interior is part of the
+            // city itself, and the door never comes back.
+            radDoorOpen = true
+            renderer.radDoorOpen = true
+            prefs.edit().putBoolean("b10_door_open", true).apply()
+            delay(350)
+            // Auto-walk in along the line that runs from the doorway to the drum's
+            // centre — that's the only line that clears both jambs. Stops short of
+            // any furniture standing just inside rather than walking into it.
+            val rbx = if (isLandscape) -CELL_V * 1.25f else 0f
+            val rbz = if (isLandscape) -CELL_V * 0.5f  else -CELL_V * 5.75f
+            val (apX, apZ) = radDoorApproach(rbx, rbz)
+            val inX = (rbx - apX); val inZ = (rbz - apZ)
+            val inL = sqrt(inX * inX + inZ * inZ).coerceAtLeast(0.001f)
+            val dirX = inX / inL; val dirZ = inZ / inL
+            val targetYaw = Math.toDegrees(atan2(dirX.toDouble(), -dirZ.toDouble())).toFloat()
+            fun propAt(x: Float, z: Float) = renderer.radPropFootprints.any {
+                x > it[0] - it[2] - 14f && x < it[0] + it[2] + 14f &&
+                z > it[1] - it[3] - 14f && z < it[1] + it[3] + 14f
+            }
+            var guard = 0
+            while (guard++ < 400) {
+                val nX = pX + dirX * 3.2f; val nZ = pZ + dirZ * 3.2f
+                // Stop once well inside the drum, or if furniture is in the way.
+                val dCentre = sqrt((nX - rbx) * (nX - rbx) + (nZ - rbz) * (nZ - rbz))
+                if (dCentre < RAD_R0 * 0.55f || propAt(nX, nZ)) break
+                delay(16)
+                pX = nX; pZ = nZ
+                val deltaYaw = ((targetYaw - camYaw + 540f) % 360f) - 180f
+                camYaw += deltaYaw * 0.10f
+            }
+            doorOpeningDigit = null
+            return@LaunchedEffect
+        }
         if (d !in 1..9) { doorOpeningDigit = null; return@LaunchedEffect }
         val idx = d - 1
         val door = (if (isLandscape) DOOR_INFOS_L else DOOR_INFOS).firstOrNull { it.digit == d }
@@ -622,6 +938,10 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
         renderer.buildingCompleted[idx] = true
         prefs.edit().putBoolean("building_done_$d", true).apply()
 
+        // The player is now INSIDE. If the app dies here, the city reopens this
+        // building on the next launch rather than dropping them back on the street.
+        com.fictioncutshort.justacalculator.logic.BuildingProgress.setActive(context, d)
+
         // Launch the minigame, or just advance progress for non-minigame buildings.
         when (d) {
             1 -> showTowerDefense = true
@@ -653,6 +973,11 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
         val anyOpen = showTowerDefense || showMaze || showTankGame || showDoor4 || showBuilding5Map || showBuilding6Game || showBuilding7Filter || showBuilding8Casino || showBuilding9Flappy
         if (!anyOpen) {
             for (i in renderer.doorOpenFraction.indices) renderer.doorOpenFraction[i] = 0f
+            // No longer standing inside anything — a relaunch should put the player
+            // back on the street, not into a building they already walked out of.
+            com.fictioncutshort.justacalculator.logic.BuildingProgress.clearActive(context)
+            // A building may have just deposited currency — refresh the HUD.
+            currencyRefresh++
         }
     }
 
@@ -805,12 +1130,11 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
         var hideUntil = 0L
         // ── Monster state machine ─────────────────────────────────────────────
         // The monster wanders harmlessly (ROAM) and can be outrun. It only turns
-        // lethal only once the player looks it straight in the face, at which point
-        // it spins up briefly and commits to one of two attacks.
-        val MS_ROAM = 0; val MS_AGGRO = 1
+        // lethal once the player looks it straight in the face — and then it
+        // commits to one of two attacks immediately, with no wind-up.
+        val MS_ROAM = 0
         val MS_DART = 2; val MS_GIANT = 3; val MS_LOCK = 4
         var mState = MS_ROAM
-        var beepSpeed = 1f               // beep playback rate; ramps to ~4× while seen
         var mAttack = 0                  // 1 dart, 2 giant
         var mScale = 13f                 // current body scale (grows for the giant)
         var mYBob = 0f                   // legacy vertical offset (kept at 0)
@@ -841,10 +1165,26 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                 else @Suppress("DEPRECATION") vib.vibrate(ms)
             } catch (_: Throwable) {}
         }
+        var bridgeDarkOverride = false
         while (true) {
             delay(16)
             lavaShift = (lavaShift + 0.003f) % 1f
             renderer.lavaShift = lavaShift
+
+            // Crossing the finished bridge transitions from night → daylight
+            // (0 at the lava's south edge, 1 at the far north side).
+            val crossDay = if (!isLandscape && bridgePieces >= 9 && pZ < LAVA_FRONT_Z) {
+                val lavaN = LAVA_FRONT_Z - 360f
+                ((LAVA_FRONT_Z - pZ) / (LAVA_FRONT_Z - lavaN)).coerceIn(0f, 1f)
+            } else 0f
+            if (crossDay > 0.001f) {
+                val baseNight = if (tankGameCompleted) 1f else (bridgePieces / 9f).coerceIn(0f, 1f)
+                renderer.darknessLevel = baseNight * (1f - crossDay)
+                bridgeDarkOverride = true
+            } else if (bridgeDarkOverride) {
+                renderer.darknessLevel = if (tankGameCompleted) 1f else (bridgePieces / 9f).coerceIn(0f, 1f)
+                bridgeDarkOverride = false
+            }
             renderer.radAngle  = (renderer.radAngle + 3f) % 360f   // 3°/frame → 2s/revolution
 
             if (introDone) {
@@ -884,7 +1224,19 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                 val xBoundsMin = if (isLandscape) -CELL_V * 2.5f       else PC1 - BW_V - 150f  // -700 / -600
                 val xBoundsMax = if (isLandscape) LSC4 + CELL_V * 0.45f else PC4 + BW_V + 10f   // 1246 / 490
                 val nx = (pX + dx).coerceIn(xBoundsMin, xBoundsMax)
-                val nz = (pZ + dz).coerceIn(PRA - CELL_V * 0.30f, PRE + CELL_V * 0.25f)         // -644 / 630
+                // North bound normally stops at the lava; once the bridge is complete
+                // (portrait) it extends north across the lava to the mute button.
+                // North bound has to clear the whole of Building 10 (centre
+                // -CELL_V*5.75, outer radius RAD_R) so the player can walk right
+                // to the back wall inside it.
+                val zBoundsMin = if (!isLandscape && bridgePieces >= 9) -CELL_V * 5.75f - RAD_R - 20f
+                                 else PRA - CELL_V * 0.30f
+                // South bound: normally the city's south edge — but once the bridge
+                // has been crossed it clamps to the lava's far bank, so there's no
+                // walking back over the deck into the city.
+                val zBoundsMax = if (crossedBridge) LAVA_NORTH_Z - 12f
+                                 else PRE + CELL_V * 0.25f
+                val nz = (pZ + dz).coerceIn(zBoundsMin, zBoundsMax)                              // -644 / 630
 
                 // Collision — slightly wider margin for first-person
                 fun blocked(tx: Float, tz: Float): Boolean {
@@ -910,21 +1262,79 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     }
                     // Landscape: wall at X=95..115 blocks except at gap Z=265..335
                     if (isLandscape && tx < L_WALL_E && !(tz > L_GAP_N && tz < L_GAP_S)) return true
+                    // Building 10 (the mute button) — a sealed body until its door
+                    // opens. After that the shell is still solid, but the south
+                    // doorway is a gap and the interior is free to walk around in.
+                    val rbxC = if (isLandscape) -CELL_V * 1.25f else 0f
+                    val rbzC = if (isLandscape) -CELL_V * 0.5f  else -CELL_V * 5.75f
+                    val rdx = tx - rbxC; val rdz = tz - rbzC
+                    val rd2 = rdx * rdx + rdz * rdz
+                    if (radDoorOpen) {
+                        val degs = Math.toDegrees(atan2(rdz.toDouble(), rdx.toDouble())).toFloat()
+                        val off = abs(((degs - RAD_DOOR_DEG + 540f) % 360f) - 180f)
+                        val throughDoorway = off < RAD_DOOR_HALF_DEG
+                        if (rd2 < RAD_R * RAD_R && rd2 > RAD_WALL_INNER * RAD_WALL_INNER &&
+                            !throughDoorway) return true
+                        // Furniture inside Building 10 — the shelves, desks, sofa.
+                        // Skipped while the player is already standing in a footprint,
+                        // so a bad spawn can always be walked out of rather than
+                        // sealing them in on every axis.
+                        if (rd2 < RAD_WALL_INNER * RAD_WALL_INNER) {
+                            val fps = renderer.radPropFootprints
+                            val standingInProp = fps.any {
+                                pX > it[0] - it[2] - 10f && pX < it[0] + it[2] + 10f &&
+                                pZ > it[1] - it[3] - 10f && pZ < it[1] + it[3] + 10f
+                            }
+                            if (!standingInProp) for (fp in fps) {
+                                if (tx > fp[0] - fp[2] - 10f && tx < fp[0] + fp[2] + 10f &&
+                                    tz > fp[1] - fp[3] - 10f && tz < fp[1] + fp[3] + 10f) return true
+                            }
+                        }
+                    } else if (rd2 < RAD_R * RAD_R) return true
                     return false
                 }
                 if (!controlsLocked) {
                     if (!blocked(nx, nz)) { pX = nx; pZ = nz }
                     else {
-                        if (!blocked(nx, pZ)) pX = nx
-                        if (!blocked(pX, nz)) pZ = nz
+                        // Diagonal blocked → slide along a wall. Resolve the axis
+                        // the player is pushing hardest along FIRST so a mostly
+                        // north/south approach slides past a building corner
+                        // instead of being shoved sideways. The old fixed X-first
+                        // order made corners "catch" unless you happened to
+                        // re-approach at just the right angle.
+                        if (abs(dx) >= abs(dz)) {
+                            if (!blocked(nx, pZ)) pX = nx
+                            if (!blocked(pX, nz)) pZ = nz
+                        } else {
+                            if (!blocked(pX, nz)) pZ = nz
+                            if (!blocked(nx, pZ)) pX = nx
+                        }
                     }
                 }
 
+                // Bridge rails: while over the lava on the FINISHED bridge, keep the
+                // player between the rails so they can't fall off (or touch lava).
+                val overLava = !isLandscape && bridgePieces >= 9 &&
+                    pZ < LAVA_FRONT_Z && pZ > LAVA_NORTH_Z
+                if (overLava) pX = pX.coerceIn(-BRIDGE_DECK_HALF, BRIDGE_DECK_HALF)
+
+                // Stepping off the north end of the deck latches the crossing —
+                // from here the city is shut behind the player, permanently.
+                if (ONE_WAY_BRIDGE &&
+                    !isLandscape && bridgePieces >= 9 && !crossedBridge && pZ < LAVA_NORTH_Z - 4f) {
+                    crossedBridge = true
+                    prefs.edit().putBoolean("bridge_crossed", true).apply()
+                }
+
                 // ── Lava boundary — vibrate + flash + teleport ────────────────
-                val inLavaNow = if (isLandscape)
+                // Only the actual lava STRIP burns (not the green terrain north of
+                // it, where the mute button sits); the finished bridge is safe.
+                val onBridge = bridgePieces >= 9 &&
+                    (if (isLandscape) true else kotlin.math.abs(pX) <= BRIDGE_DECK_HALF + 2f)
+                val inLavaNow = !onBridge && (if (isLandscape)
                     pX < LAVA_WEST_X_L && pZ > LAVA_NORTH_Z_L && pZ < LAVA_SOUTH_Z_L
                 else
-                    pZ < LAVA_FRONT_Z
+                    pZ < LAVA_FRONT_Z && pZ > LAVA_FRONT_Z - LAVA_DEPTH)
 
                 if (inLavaNow && !inLava) {
                     inLava = true
@@ -952,10 +1362,16 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     flashAlpha = 0.3f; delay(70)
                     flashAlpha = 1f;  delay(90)
                     flashAlpha = 0f
-                    // Teleport to start
-                    pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
-                    pZ = if (isLandscape) PLAYER_START_Z_L else PLAYER_START_Z
-                    camYaw = 0f
+                    // Respawn — at the city start, or on the far bank if the
+                    // player has already crossed.
+                    if (crossedBridge) {
+                        // Facing north — away from the lava, toward the mute button.
+                        pX = NORTH_RESPAWN_X; pZ = NORTH_RESPAWN_Z; camYaw = 0f
+                    } else {
+                        pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
+                        pZ = if (isLandscape) PLAYER_START_Z_L else PLAYER_START_Z
+                        camYaw = 0f
+                    }
                     inLava = false
                 }
 
@@ -964,7 +1380,26 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     val nowMs = System.currentTimeMillis()
                     val overlayBusy = showTowerDefense || showMaze || showTankGame || showDoor4 ||
                         showBuilding5Map || showBuilding6Game || showBuilding7Filter ||
-                        showBuilding8Casino || showBuilding9Flappy
+                        showBuilding8Casino || showBuilding9Flappy || showCityLottery ||
+                        showDebugGate || showDebugMenu
+                    // Bridge sentinel: after the crossing the monster stops hunting and
+                    // plants itself mid-deck, facing the far bank — the way back is shut.
+                    if (crossedBridge) {
+                        mState = MS_ROAM; mScale = 13f; mYBob = 0f; mTilt = 0f
+                        freezeMs = 0L; monsterLock = false
+                        mX = 0f; mZ = BRIDGE_MID_Z
+                        mAngle = faceDir(0f, -1f)   // face north, toward the player
+                        renderer.monsterX = mX; renderer.monsterZ = mZ; renderer.monsterAngle = mAngle
+                        renderer.monsterScale = mScale; renderer.monsterYBob = 0f
+                        renderer.monsterTilt = 0f
+                        renderer.monsterActive = !overlayBusy
+                        renderer.monsterClones = emptyList()
+                        val dS = sqrt((pX - mX) * (pX - mX) + (pZ - mZ) * (pZ - mZ))
+                        val nearS = (1f - dS / 600f).coerceIn(0f, 1f)
+                        val volS = if (overlayBusy) 0f else 0.5f * nearS * nearS
+                        beepPlayer.value?.let { try { it.setVolume(volS, volS) } catch (_: Throwable) {} }
+                        return@run
+                    }
                     val monsterAllowed = tankGameCompleted && !overlayBusy && !doorSeqActive &&
                         doorPromptDigit == null && riddleDigit == null && orderBlockedDigit == null &&
                         nowMs >= hideUntil
@@ -1105,6 +1540,7 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                                 // Aggro only on DIRECT sight of the face: the player
                                 // must be looking at it AND its face must be turned
                                 // toward the player. A side/rear glimpse does nothing.
+                                // The attack begins on the same frame — no wind-up.
                                 val toMx = mX - pX; val toMz = mZ - pZ
                                 val dM = sqrt(toMx*toMx + toMz*toMz)
                                 if (dM in 60f..520f && !losBlocked(pX, pZ, mX, mZ)) {
@@ -1112,21 +1548,13 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                                     val toPx = -toMx / dM; val toPz = -toMz / dM
                                     val faceTowardPlayer = (mDirX*toPx + mDirZ*toPz) > 0.45f
                                     if (seeMonster && faceTowardPlayer) {
-                                        mState = MS_AGGRO
                                         mAttack = (1..2).random()
-                                        stateUntil = nowMs + 600L   // a brief, visible pause
+                                        if (mAttack == 1) {
+                                            mState = MS_DART
+                                            dartStartDist = dM.coerceAtLeast(120f)
+                                            stateUntil = nowMs + 1100L
+                                        } else { mState = MS_GIANT; slamT = 0f }
                                     }
-                                }
-                            }
-                            MS_AGGRO -> {
-                                // Brief, clearly visible spin-up, then commit.
-                                mAngle = (mAngle + 40f) % 360f
-                                if (nowMs >= stateUntil) {
-                                    if (mAttack == 1) {
-                                        mState = MS_DART
-                                        dartStartDist = dist(mX, mZ, pX, pZ).coerceAtLeast(120f)
-                                        stateUntil = nowMs + 2400L
-                                    } else { mState = MS_GIANT; slamT = 0f }
                                 }
                             }
                             MS_DART -> {
@@ -1146,7 +1574,7 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                                 val amp = 120f * (1f - progress * 0.7f)
                                 val tgx = pX + perpX * weave * amp
                                 val tgz = pZ + perpZ * weave * amp
-                                step(tgx, tgz, 12.5f)
+                                step(tgx, tgz, 21f)
                                 mAngle = faceDir(toX, toZ)   // keep the face on the player
                                 // Lock the moment it's right on top of the player (or as
                                 // a fallback once the strafe time is up) — from here.
@@ -1163,19 +1591,19 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                                 // face until it fills the screen — then death.
                                 mScale = 13f
                                 mAngle = faceDir(pX - mX, pZ - mZ)
-                                zoomT = (zoomT + 0.013f).coerceAtMost(1f)
+                                zoomT = (zoomT + 0.030f).coerceAtMost(1f)
                                 if (zoomT >= 1f) killNow = true
                             }
                             MS_GIANT -> {
                                 // Attack 2: swells huge, works around to the player's
                                 // front, and topples its body to smash with its face.
-                                mScale = (mScale + 0.30f).coerceAtMost(52f)
+                                mScale = (mScale + 0.85f).coerceAtMost(52f)
                                 val fdx = pX - mX; val fdz = pZ - mZ
                                 val d = sqrt(fdx*fdx + fdz*fdz).coerceAtLeast(0.001f)
-                                step(frontX(45f), frontZ(45f), 2.0f)
+                                step(frontX(45f), frontZ(45f), 5.5f)
                                 mAngle = faceDir(fdx, fdz)   // face the player for the slam
                                 // Slam cycle: rear up, then crash flat toward the player.
-                                slamT += 0.07f
+                                slamT += 0.17f
                                 val tilt = (sin(slamT.toDouble()).toFloat()).coerceAtLeast(0f) * 88f
                                 mTilt = tilt; mTiltX = fdx / d; mTiltZ = fdz / d
                                 if (tilt > 62f && d < 70f + mScale * 1.1f) killNow = true
@@ -1189,25 +1617,13 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                         renderer.monsterActive = true
                         renderer.monsterClones = emptyList()
 
-                        // Beep volume — swells quadratically as it nears. And once
-                        // eye-contact triggers the kill sequence (mState left MS_ROAM) the
-                        // beeping FREQUENCY ramps up GRADUALLY (faster + higher-pitched),
-                        // climbing toward ~4× the normal rate by the time it commits.
+                        // Beep volume — swells quadratically as it nears. The rate stays
+                        // constant; the attack itself is the tell, not a rising pitch.
                         val dRef = dist(mX, mZ, pX, pZ)
                         val near = (1f - dRef / 600f).coerceIn(0f, 1f)
                         val vol = 0.5f * near * near
-                        val beepTarget = if (mState != MS_ROAM) 4.0f else 1.0f
-                        beepSpeed = if (beepSpeed < beepTarget)
-                            (beepSpeed + 0.03f).coerceAtMost(beepTarget)   // ramp up gradually
-                        else
-                            (beepSpeed - 0.12f).coerceAtLeast(beepTarget)  // settle back faster
                         beepPlayer.value?.let { bp ->
-                            try {
-                                bp.setVolume(vol, vol)
-                                if (kotlin.math.abs(bp.playbackParams.speed - beepSpeed) > 0.04f) {
-                                    bp.playbackParams = bp.playbackParams.setSpeed(beepSpeed)
-                                }
-                            } catch (_: Throwable) {}
+                            try { bp.setVolume(vol, vol) } catch (_: Throwable) {}
                         }
 
                         // ── City-levelling detonation (held a lamp circle too long) ──
@@ -1282,25 +1698,28 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                         if (stopped && dsq < 45f * 45f && doorCooldownDigit != door.digit) {
                             val b1Done = door.digit == 1 && prefs.getBoolean("td_b1_done", false)
                             if (!b1Done) {
-                                // TODO: re-enable order enforcement after testing
-                                // if (door.digit in 1..9 && door.digit > entryProgress + 1) {
-                                //     orderBlockedDigit = door.digit
-                                // } else {
-                                doorPromptDigit = door.digit
-                                // }
+                                // Out of order: the door stays shut. The player is told
+                                // which building is owed, and never sees the riddle.
+                                val need = missingPrereq(prefs, door.digit)
+                                if (need != null) orderBlockedDigit = door.digit
+                                else doorPromptDigit = door.digit
                             }
                             break
                         }
                     }
 
                     // RAD button (portrait: inside lava zone; landscape: behind wall through gap)
-                    // Must match the renderer's addRadButton positions.
+                    // Must match the renderer's addRadButton positions. The prompt sits
+                    // just outside Building 10's doorway, which is offset west of due
+                    // south (see RAD_DOOR_DEG).
                     val rbx = if (isLandscape) -CELL_V * 1.25f else 0f             // -350 / 0
                     val rbz = if (isLandscape) -CELL_V * 0.5f  else -CELL_V * 5.75f // -140 / -1610
-                    val radDoorZ = rbz + 88f + 18f   // south face of cylinder + approach margin
-                    val rdSq = (pX - rbx) * (pX - rbx) + (pZ - radDoorZ) * (pZ - radDoorZ)
+                    val (radDoorX, radDoorZ) = radDoorApproach(rbx, rbz)
+                    val rdSq = (pX - radDoorX) * (pX - radDoorX) + (pZ - radDoorZ) * (pZ - radDoorZ)
                     if (doorCooldownDigit == RAD_DIGIT && rdSq > 70f * 70f) doorCooldownDigit = null
-                    if (stopped && rdSq < 45f * 45f && doorCooldownDigit != RAD_DIGIT) doorPromptDigit = RAD_DIGIT
+                    // Once Building 10 is unlocked the player just walks in — no re-prompt.
+                    if (!radDoorOpen && stopped && rdSq < 45f * 45f && doorCooldownDigit != RAD_DIGIT)
+                        doorPromptDigit = RAD_DIGIT
                 }
 
                 // ── Camera: blend from landing pose → player first-person ────
@@ -1329,7 +1748,19 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     }
                     hit
                 }
-                val eyeTarget = if (onSidewalk) CAM_EYE_H + SIDEWALK_BUMP else CAM_EYE_H.toFloat()
+                // Bridge arch: the eye rises up the ramp, stays level across the
+                // middle, and comes back down — following the bridge over the lava.
+                val bridgeRise = if (!isLandscape && bridgePieces >= 9 && pZ < LAVA_FRONT_Z) {
+                    val lavaN = LAVA_FRONT_Z - 360f
+                    val t = ((LAVA_FRONT_Z - pZ) / (LAVA_FRONT_Z - lavaN)).coerceIn(0f, 1f)  // 0 south → 1 north
+                    val prof = when {
+                        t < 0.18f -> t / 0.18f
+                        t > 0.82f -> (1f - t) / 0.18f
+                        else -> 1f
+                    }
+                    BRIDGE_PEAK_RISE * prof
+                } else 0f
+                val eyeTarget = (if (onSidewalk) CAM_EYE_H + SIDEWALK_BUMP else CAM_EYE_H) + bridgeRise
                 eyeY += (eyeTarget - eyeY) * 0.20f
 
                 // Landing position (end of intro, start of the 0.5 s settle).
@@ -1531,7 +1962,57 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                 else Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 36.dp),
-                onJoy    = { x, y -> joyX = x; joyY = y }
+                onJoy    = { x, y -> joyX = x; joyY = y },
+                onTap    = {
+                    // Five quick taps on the stick opens the (passcode-gated) debug
+                    // menu. The run resets if the taps stop coming, so ordinary
+                    // fidgeting can't accumulate into it.
+                    val now = System.currentTimeMillis()
+                    joyTapCount = if (now - joyLastTapMs < 900L) joyTapCount + 1 else 1
+                    joyLastTapMs = now
+                    if (joyTapCount >= 5) {
+                        joyTapCount = 0
+                        joyX = 0f; joyY = 0f
+                        showDebugGate = true
+                    }
+                }
+            )
+        }
+
+        // ── Sound credits ────────────────────────────────────────────────────
+        // Over the opening fly-in, and only there: it is the one time the city is on
+        // screen with nothing to do and nothing else to read. It fades out with the
+        // last of the intro, as the player takes the controls.
+        if (!introDone) {
+            val creditsFade = (1f - ((intro.value - 0.80f) / 0.20f)).coerceIn(0f, 1f)
+            if (creditsFade > 0.01f) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 34.dp, start = 24.dp, end = 24.dp)
+                        .background(
+                            Color.Black.copy(alpha = 0.32f * creditsFade),
+                            RoundedCornerShape(8.dp)
+                        )
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = "Sounds: u_edtmwfwu7c, Jurij & freesound_community from Pixabay",
+                        color = Color.White.copy(alpha = 0.82f * creditsFade),
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+        }
+
+        // Currency HUD — non-zero balances, top-left. Hidden during buildings,
+        // the aerial cut and door sequences (same gate as the joystick).
+        if (introDone && !overlayOpen && !forceAerial && doorOpeningDigit == null) {
+            CityCurrencyHud(
+                refreshKey = currencyRefresh,
+                modifier = Modifier.align(Alignment.TopStart),
             )
         }
 
@@ -1558,11 +2039,12 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
             )
         }
 
-        // ── "Complete buildings 1-N first" message ────────────────────────────
+        // ── "Complete building N first" message ───────────────────────────────
         if (!showTowerDefense && !forceAerial) {
             orderBlockedDigit?.let { digit ->
                 OrderBlockedDialog(
                     digit = digit,
+                    required = missingPrereq(prefs, digit) ?: digit,
                     onDismiss = {
                         doorCooldownDigit = digit
                         orderBlockedDigit = null
@@ -1597,7 +2079,7 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                         digit         = digit,
                         input         = riddleInput,
                         onInputChange = { riddleInput = it },
-                        onSubmit      = {
+                        onSubmit      = { rating ->
                             riddleDigit = null
                             riddleInput = ""
                             if (digit in 1..9) {
@@ -1607,8 +2089,18 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                                 // launches the matching minigame (or just bumps
                                 // entryProgress for non-minigame buildings).
                                 doorOpeningDigit = digit
+                            } else if (digit == RAD_DIGIT) {
+                                // Building 10 — the rating unlocks the mute button's
+                                // door; the effect below opens it and walks the
+                                // player inside. The score itself is kept: the game
+                                // asked how the city treated them, and takes the
+                                // answer at face value when choosing the ending.
+                                if (rating >= 0) {
+                                    com.fictioncutshort.justacalculator.logic.ComplicityStore
+                                        .recordRating(context, rating)
+                                }
+                                doorOpeningDigit = RAD_DIGIT
                             }
-                            // RAD_DIGIT: existing direct behaviour (none here).
                         },
                         onDismiss     = {
                             riddleDigit = null
@@ -1617,6 +2109,7 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     )
                 }
             }
+
         }
 
         // ── Building 1 tower-defense minigame ─────────────────────────────────
@@ -1631,6 +2124,8 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
                     towerDefenseCompleted = true
                     prefs.edit().putBoolean("td_b1_done", true).apply()
+                    prefs.edit().putBoolean("completed_1", true).apply()
+                    com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 1)
                     renderer.b1DoorGreen = true
                     renderer.needsRebuild = true
                     doorCooldownDigit = 1  // suppress immediate re-trigger on return
@@ -1653,6 +2148,8 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     bridgePieces = (bridgePieces + 1).coerceAtMost(9)
                     renderer.bridgePieces = bridgePieces
                     prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
+                    prefs.edit().putBoolean("completed_2", true).apply()
+                    com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 2)
                     renderer.b2DoorGreen = true
                     renderer.needsRebuild = true
                     doorCooldownDigit = 2
@@ -1675,6 +2172,8 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     showTankGame = false
                     tankGameCompleted = true
                     prefs.edit().putBoolean("td_b3_done", true).apply()
+                    prefs.edit().putBoolean("completed_3", true).apply()
+                    com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 3)
                     entryProgress++
                     prefs.edit().putInt("entry_progress", entryProgress).apply()
                     bridgePieces = (bridgePieces + 1).coerceAtMost(9)
@@ -1701,6 +2200,8 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     renderer.bridgePieces = bridgePieces
                     prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
                     prefs.edit().putBoolean("td_b4_done", true).apply()
+                    prefs.edit().putBoolean("completed_4", true).apply()
+                    com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 4)
                     renderer.needsRebuild = true
                     doorCooldownDigit = 4
                     pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
@@ -1711,7 +2212,7 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
             )
         }
 
-        // ── Door 5 real-world walk via map ────────────────────────────────────
+        // ── Door 5 — real-world walk; sound-scan runs at each arrived spot ────
         if (showBuilding5Map) {
             Building5Map(
                 onComplete = {
@@ -1722,6 +2223,9 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     renderer.bridgePieces = bridgePieces
                     prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
                     prefs.edit().putBoolean("td_b5_done", true).apply()
+                    prefs.edit().putBoolean("completed_5", true).apply()
+                    com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 5)
+                    renderer.b5EntranceGlow = true   // light up Building 8's entrance
                     renderer.needsRebuild = true
                     doorCooldownDigit = 5
                     pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
@@ -1747,6 +2251,8 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     renderer.bridgePieces = bridgePieces
                     prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
                     prefs.edit().putBoolean("td_b6_done", true).apply()
+                    prefs.edit().putBoolean("completed_6", true).apply()
+                    com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 6)
                     renderer.needsRebuild = true
                     doorCooldownDigit = 6
                     pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
@@ -1769,6 +2275,8 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     entryProgress++
                     prefs.edit().putInt("entry_progress", entryProgress).apply()
                     prefs.edit().putBoolean("building_done_7", true).apply()
+                    prefs.edit().putBoolean("completed_7", true).apply()
+                    com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 7)
                     renderer.needsRebuild = true
                     doorCooldownDigit = 7
                     pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
@@ -1786,15 +2294,75 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     entryProgress++
                     prefs.edit().putInt("entry_progress", entryProgress).apply()
                     prefs.edit().putBoolean("building_done_8", true).apply()
+                    prefs.edit().putBoolean("completed_8", true).apply()
+                    com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 8)
+                    // Completing Building 8 lays another bridge piece (aerial reveal).
+                    bridgePieces = (bridgePieces + 1).coerceAtMost(9)
+                    renderer.bridgePieces = bridgePieces
+                    prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
                     renderer.needsRebuild = true
                     doorCooldownDigit = 8
                     pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
                     pZ = if (isLandscape) PLAYER_START_Z_L else PLAYER_START_Z
                     camYaw = 0f
+                    forceAerial = true
                 },
                 onExit = {
                     showBuilding8Casino = false
                     doorCooldownDigit = 8
+                }
+            )
+        }
+
+        // ── Coins lottery seed popup (after Building 5) ───────────────────────
+        if (showCityLottery) {
+            CityLotteryPopup(onDismiss = { showCityLottery = false; currencyRefresh++ })
+        }
+
+        // ── The end of the city ───────────────────────────────────────────────
+        // Black-out over the collapse, then the story leaves the city entirely.
+        if (endBlack > 0f) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = endBlack.coerceIn(0f, 1f)))
+            )
+        }
+
+        // ── Debug menu (joystick ×5, then the passcode) ───────────────────────
+        if (showDebugGate) {
+            DebugPasswordGate(
+                onUnlock = { showDebugGate = false; showDebugMenu = true },
+                onCancel = { showDebugGate = false }
+            )
+        }
+        if (showDebugMenu) {
+            CityDebugMenu(
+                prefs = prefs,
+                // The city holds most of its state in `remember`ed variables, so a
+                // write to prefs alone would not show until a restart. Pull the
+                // whole lot back in, and tell the renderer to rebuild.
+                onApply = {
+                    towerDefenseCompleted = prefs.getBoolean("td_b1_done", false)
+                    tankGameCompleted     = prefs.getBoolean("td_b3_done", false)
+                    bridgePieces          = prefs.getInt("bridge_pieces", 0)
+                    crossedBridge         = ONE_WAY_BRIDGE && prefs.getBoolean("bridge_crossed", false)
+                    radDoorOpen           = prefs.getBoolean("b10_door_open", false)
+                    entryProgress         = prefs.getInt("entry_progress", 0)
+                    for (d in 1..9) {
+                        renderer.buildingCompleted[d - 1] = prefs.getBoolean("building_done_$d", false)
+                    }
+                    renderer.bridgePieces   = bridgePieces
+                    renderer.radDoorOpen    = radDoorOpen
+                    renderer.b1DoorGreen    = prefs.getBoolean("td_b1_done", false)
+                    renderer.b3DoorGreen    = prefs.getBoolean("td_b3_done", false)
+                    renderer.b5EntranceGlow = prefs.getBoolean("td_b5_done", false)
+                    renderer.needsRebuild   = true
+                    currencyRefresh++
+                },
+                onClose = { showDebugMenu = false },
+                onJumpToPhase1 = onJumpToPhase1?.let { jump ->
+                    { chapter -> showDebugMenu = false; jump(chapter) }
                 }
             )
         }
@@ -1807,6 +2375,8 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
                     entryProgress++
                     prefs.edit().putInt("entry_progress", entryProgress).apply()
                     prefs.edit().putBoolean("building_done_9", true).apply()
+                    prefs.edit().putBoolean("completed_9", true).apply()
+                    com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 9)
                     renderer.needsRebuild = true
                     doorCooldownDigit = 9
                     pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
@@ -1823,25 +2393,94 @@ fun CalculatorCityView(modifier: Modifier = Modifier) {
 }
 
 
+// ── Currency HUD (top-left counters) ─────────────────────────────────────────
+// Shows only the currencies whose balance is > 0, so a currency stays hidden
+// until its building has been visited. Icons are still renders of the 3D
+// currency models (see CurrencyIcon.kt). [refreshKey] re-reads balances after a
+// building deposits.
+
+@Composable
+private fun CityCurrencyHud(refreshKey: Int, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val balances = remember(refreshKey) { CurrencyStore.nonZero(context) }
+    if (balances.isEmpty()) return
+
+    Row(
+        modifier = modifier
+            .statusBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for ((currency, amount) in balances) {
+            val icon = rememberCurrencyIcon(currency)
+            Row(
+                modifier = Modifier
+                    .background(Color(0x88000000), RoundedCornerShape(14.dp))
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (icon != null) {
+                    Image(
+                        bitmap = icon,
+                        contentDescription = currency.name,
+                        modifier = Modifier.size(26.dp),
+                    )
+                }
+                Text(
+                    "$amount",
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+    }
+}
+
 // ── Joystick (camera look + movement) ────────────────────────────────────────
 
 @Composable
-fun CityJoystick(modifier: Modifier = Modifier, joyDp: Dp = 114.dp, onJoy: (x: Float, y: Float) -> Unit) {
+fun CityJoystick(
+    modifier: Modifier = Modifier,
+    joyDp: Dp = 114.dp,
+    onJoy: (x: Float, y: Float) -> Unit,
+    onTap: () -> Unit = {},
+) {
     var sx by remember { mutableStateOf(0f) }
     var sy by remember { mutableStateOf(0f) }
     Box(modifier = modifier.size(joyDp)) {
         AndroidView(
             factory = { ctx ->
                 object : android.view.View(ctx) {
+                    // A "tap" is a press that neither lasted nor travelled: that
+                    // keeps the debug shortcut from firing during normal steering,
+                    // where the stick is held and dragged.
+                    var downMs = 0L
+                    var downX = 0f
+                    var downY = 0f
+
                     override fun onTouchEvent(e: MotionEvent): Boolean {
                         val cx = width / 2f; val cy = height / 2f
                         when (e.action) {
-                            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+                            MotionEvent.ACTION_DOWN -> {
+                                downMs = System.currentTimeMillis()
+                                downX = e.x; downY = e.y
+                                sx = ((e.x - cx) / cx).coerceIn(-1f, 1f)
+                                sy = ((e.y - cy) / cy).coerceIn(-1f, 1f)
+                                onJoy(sx, sy)
+                            }
+                            MotionEvent.ACTION_MOVE -> {
                                 sx = ((e.x - cx) / cx).coerceIn(-1f, 1f)
                                 sy = ((e.y - cy) / cy).coerceIn(-1f, 1f)
                                 onJoy(sx, sy)
                             }
                             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                val held = System.currentTimeMillis() - downMs
+                                val moved = kotlin.math.hypot(e.x - downX, e.y - downY)
+                                if (e.action == MotionEvent.ACTION_UP &&
+                                    held < 260L && moved < 24f) onTap()
                                 sx = 0f; sy = 0f; onJoy(0f, 0f)
                             }
                         }
@@ -1904,9 +2543,8 @@ private fun DoorPromptDialog(digit: Int, onYes: () -> Unit, onNo: () -> Unit) {
 }
 
 @Composable
-private fun OrderBlockedDialog(digit: Int, onDismiss: () -> Unit) {
-    val prevCount = digit - 1
-    val prereq = if (prevCount == 1) "building 1" else "buildings 1–$prevCount"
+private fun OrderBlockedDialog(digit: Int, required: Int, onDismiss: () -> Unit) {
+    val prereq = "building $required"
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -1970,13 +2608,26 @@ private fun RiddleDialog(
     digit: Int,
     input: String,
     onInputChange: (String) -> Unit,
-    onSubmit: () -> Unit,
+    // For the mute button (RAD_DIGIT) this carries the 0..10 rating the player
+    // gave the city; every other riddle passes -1. The rating is the last of the
+    // two phase-2 choices that decide the ending (see ComplicityStore).
+    onSubmit: (rating: Int) -> Unit,
     onDismiss: () -> Unit
 ) {
     var wrongFlash by remember { mutableStateOf(false) }
     val ywdState   = remember { mutableStateListOf("", "", "", "", "", "", "") }
     var ywdActive  by remember { mutableIntStateOf(0) }
+    var ywdTick    by remember { mutableIntStateOf(0) }
+    // Time-based auto-advance: a short pause after the last digit jumps to the
+    // next field, so a single-digit entry moves on without waiting for a second.
+    LaunchedEffect(ywdTick) {
+        if (ywdTick == 0) return@LaunchedEffect
+        kotlinx.coroutines.delay(600)
+        if (ywdActive < 6 && ywdState[ywdActive].isNotEmpty()) ywdActive += 1
+    }
     var showHint   by remember { mutableStateOf(false) }
+    // Mute-button rating slider (0..10).
+    var sliderVal  by remember { mutableStateOf(5f) }
     // Currency-picker state (only meaningful when riddle.prefixOptions is non-empty)
     var selectedPrefix by remember(digit) { mutableStateOf(riddle.prefix) }
     var pickerOpen     by remember { mutableStateOf(false) }
@@ -1994,9 +2645,15 @@ private fun RiddleDialog(
         when (riddle.type) {
             AnswerType.YWDHMS -> {
                 if (key == "DEL") {
+                    // Deleting on an empty field steps back to the previous one.
+                    if (ywdState[ywdActive].isEmpty() && ywdActive > 0) ywdActive -= 1
                     ywdState[ywdActive] = ywdState[ywdActive].dropLast(1)
                 } else {
-                    if (ywdState[ywdActive].length < 5) ywdState[ywdActive] += key
+                    if (ywdState[ywdActive].length < 2) ywdState[ywdActive] += key
+                    // A full two-digit field jumps immediately; otherwise a short
+                    // pause after the last keypress advances (see the effect below).
+                    if (ywdState[ywdActive].length >= 2 && ywdActive < 6) ywdActive += 1
+                    else ywdTick += 1
                 }
             }
             AnswerType.TIME_24H -> {
@@ -2017,22 +2674,24 @@ private fun RiddleDialog(
     fun handleSubmit() {
         when (riddle.type) {
             AnswerType.EXACT -> {
-                if (input == riddle.answer) onSubmit()
+                if (input == riddle.answer) onSubmit(-1)
                 else wrongFlash = true
             }
             AnswerType.RANGE -> {
                 val v = input.toIntOrNull()
                 val lo = riddle.rangeMin ?: Int.MIN_VALUE
                 val hi = riddle.rangeMax ?: Int.MAX_VALUE
-                if (v != null && v in lo..hi) onSubmit()
+                if (v != null && v in lo..hi) onSubmit(-1)
                 else wrongFlash = true
             }
             AnswerType.TIME_24H -> {
-                if (input.filter { it.isDigit() }.length >= 4) onSubmit()
+                if (input.filter { it.isDigit() }.length >= 4) onSubmit(-1)
                 else wrongFlash = true
             }
+            // OPEN covers the mute button's slider, which is always accepted -
+            // the point is what they answered, not whether it was 'right'.
             AnswerType.OPEN,
-            AnswerType.YWDHMS -> onSubmit()
+            AnswerType.YWDHMS -> onSubmit(Math.round(sliderVal))
         }
     }
 
@@ -2088,7 +2747,22 @@ private fun RiddleDialog(
                 modifier = Modifier.padding(bottom = 16.dp)
             )
 
-            // Input area
+            // Input area — the mute button uses a 0..10 slider, not the keypad.
+            if (digit == RAD_DIGIT) {
+                Text("${Math.round(sliderVal)}  /  10", color = Color(0xFF33FF66), fontSize = 34.sp,
+                    fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                Spacer(Modifier.height(6.dp))
+                androidx.compose.material3.Slider(
+                    value = sliderVal, onValueChange = { sliderVal = it },
+                    valueRange = 0f..10f, steps = 9,
+                    colors = androidx.compose.material3.SliderDefaults.colors(
+                        thumbColor = Color(0xFF33FF66),
+                        activeTrackColor = Color(0xFF33AA55),
+                        inactiveTrackColor = Color(0xFF224422),
+                    ),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp)
+                )
+            } else {
             when (riddle.type) {
                 AnswerType.YWDHMS -> {
                     val unitLabels = listOf("Y", "M", "W", "D", "H", "m", "S")
@@ -2204,6 +2878,7 @@ private fun RiddleDialog(
             Spacer(modifier = Modifier.height(14.dp))
 
             MiniKeyboard(allowMinus = riddle.allowMinus, onKey = ::handleKey)
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 

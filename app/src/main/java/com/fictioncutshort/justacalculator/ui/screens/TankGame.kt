@@ -8,6 +8,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -58,7 +59,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
+import com.fictioncutshort.justacalculator.R
 import com.fictioncutshort.justacalculator.ui.components.DonationLandingPage
 import kotlinx.coroutines.delay
 
@@ -66,9 +69,9 @@ import kotlinx.coroutines.delay
 private const val ICON_DIR_FRESH = "phonescreen/phonedetour"
 private const val ICON_DIR_USED  = "phonescreen/tankgame"
 
-// The giftcard + degrimer icons always render from the colour ("fresh") set —
-// they have no black-and-white variant and must look the same everywhere.
-private const val GIFTCARD_ICON = "file:///android_asset/$ICON_DIR_FRESH/giftcard.svg"
+// The degrimer icon always renders from the colour ("fresh") set — it has no
+// black-and-white variant and must look the same everywhere. (The giftcard now
+// uses the 3D currency model via GiftcardIcon, see CurrencyIcon.kt.)
 private const val DEGRIMER_ICON = "file:///android_asset/$ICON_DIR_FRESH/degrimer.svg"
 
 // SharedPreferences (shared with the city) — giftcards persist across entries.
@@ -129,8 +132,14 @@ fun TankGame(onComplete: () -> Unit) {
     fun addGiftcards(n: Int) = setGiftcards(giftcards + n)
 
     var activeApp by remember { mutableStateOf<String?>(null) }
-    var visited by remember { mutableStateOf(setOf<String>()) }
+    // Which apps the player has already been through. Giftcards already persist
+    // (KEY_GIFTCARDS); this is the other half of the run - without it, a relaunch
+    // asks them to open every app again, including the scams they already saw
+    // through. Saved on every change rather than at the end, because the end of
+    // this building is exactly what a player might not reach in one sitting.
+    var visited by remember { mutableStateOf(com.fictioncutshort.justacalculator.logic.BuildingProgress.getSet(context, 3, "visited")) }
     var donationOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(visited) { com.fictioncutshort.justacalculator.logic.BuildingProgress.putSet(context, 3, "visited", visited) }
     // Apps no longer auto-close. Each one stays open until the user dismisses it
     // with its own close (×) button, which marks it visited (see onClose below).
 
@@ -138,10 +147,15 @@ fun TankGame(onComplete: () -> Unit) {
 
     // ── Notifications (non-dismissable; cleared only by being actioned) ──────
     var tetrisNotif by remember { mutableStateOf(false) }
-    var tetrisNotifDone by remember { mutableStateOf(false) }
+    var tetrisNotifDone by remember { mutableStateOf(com.fictioncutshort.justacalculator.logic.BuildingProgress.getBool(context, 3, "tetris_done")) }
     var amaxNotif by remember { mutableStateOf(false) }
-    var amaxDone by remember { mutableStateOf(false) }
-    var sawMessages by remember { mutableStateOf(false) }
+    var amaxDone by remember { mutableStateOf(com.fictioncutshort.justacalculator.logic.BuildingProgress.getBool(context, 3, "amax_done")) }
+    var sawMessages by remember { mutableStateOf(com.fictioncutshort.justacalculator.logic.BuildingProgress.getBool(context, 3, "saw_msgs")) }
+    // The scam beats fire once. Re-running them on every relaunch would turn a
+    // one-time trap into a nag.
+    LaunchedEffect(tetrisNotifDone) { com.fictioncutshort.justacalculator.logic.BuildingProgress.putBool(context, 3, "tetris_done", tetrisNotifDone) }
+    LaunchedEffect(amaxDone) { com.fictioncutshort.justacalculator.logic.BuildingProgress.putBool(context, 3, "amax_done", amaxDone) }
+    LaunchedEffect(sawMessages) { com.fictioncutshort.justacalculator.logic.BuildingProgress.putBool(context, 3, "saw_msgs", sawMessages) }
     // Tetris "play for free" pitch ~15s after the phone opens.
     LaunchedEffect(Unit) { delay(15_000L); if (!tetrisNotifDone) tetrisNotif = true }
     // Amax scam text right after the user closes the Messages app.
@@ -429,41 +443,44 @@ private fun AppShell(
 
 // ── Per-app stubs — content built out incrementally below ────────────────────
 
-// The made-up users shared across Innergram and TukTak.
-private val SOCIAL_NAMES = listOf("BestUser", "Innergram_Official", "MarytheInfluencer", "SexyMan")
+// ── Innergram feed ────────────────────────────────────────────────────────────
+// `image` is a drawable res Int, or a java.io.File for a Building-7 selfie, or
+// null for a blank placeholder. AsyncImage accepts any of these.
+private data class InstaPostData(val name: String, val image: Any?, val caption: String)
 
 @Composable
 private fun AppSocialInstagram() {
     val context = LocalContext.current
-    // 2 of the player's Building-7 selfies (newest first), shown as real posts.
-    val myPics = remember { loadVanityCapturePaths(context, 2) }
-    val placeholders = remember { (0 until 10).toList() }
+    // Innergram_official reuses one of the player's Building-7 selfies.
+    val vanityPic = remember { loadVanityCapturePaths(context, 1).firstOrNull()?.let { java.io.File(it) } }
+    val posts = remember(vanityPic) {
+        listOf(
+            InstaPostData("MarytheInfluencer", R.drawable.social02,
+                "I have always struggled with my hair. Too thin, too short. but Gracy changed all that. Find out more in the comments!"),
+            InstaPostData("SexyMan", R.drawable.social01,
+                "Whatever the haters tell you, double it and pay it forward. You can afford it, thank to me! Link in bio."),
+            InstaPostData("Innergram_official", vanityPic,
+                "New features and connections await in the Innergram 5.8 update. Let's get social!"),
+            InstaPostData("MarytheInfluencer", R.drawable.social03,
+                "Just ya girl taking a shower and thanking God for laFal, who have been saving my hair for literal years!"),
+        )
+    }
 
     Column(modifier = Modifier.fillMaxSize().background(Color.White).statusBarsPadding()) {
         Box(modifier = Modifier.fillMaxWidth().padding(start = 14.dp, top = 14.dp, end = 56.dp, bottom = 14.dp)) {
             Text("Innergram", color = Color.Black, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
         }
         LazyColumn(modifier = Modifier.fillMaxSize(), userScrollEnabled = !LocalScrollLag.current) {
-            items(myPics.size) { idx ->
-                InstaPost(
-                    name = SOCIAL_NAMES[idx % SOCIAL_NAMES.size],
-                    imageFile = java.io.File(myPics[idx]),
-                    caption = "feeling cute today"
-                )
-            }
-            items(placeholders.size) { idx ->
-                InstaPost(
-                    name = SOCIAL_NAMES[(idx + myPics.size) % SOCIAL_NAMES.size],
-                    imageFile = null,
-                    caption = "caption placeholder"
-                )
+            items(posts.size) { idx ->
+                val p = posts[idx]
+                InstaPost(name = p.name, image = p.image, caption = p.caption)
             }
         }
     }
 }
 
 @Composable
-private fun InstaPost(name: String, imageFile: java.io.File?, caption: String) {
+private fun InstaPost(name: String, image: Any?, caption: String) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -474,9 +491,9 @@ private fun InstaPost(name: String, imageFile: java.io.File?, caption: String) {
             Text(name, color = Color.Black, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
         Box(modifier = Modifier.fillMaxWidth().aspectRatio(1f).background(Color(0xFFE3E0DA))) {
-            if (imageFile != null) {
+            if (image != null) {
                 AsyncImage(
-                    model = imageFile,
+                    model = image,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
@@ -496,34 +513,50 @@ private fun InstaPost(name: String, imageFile: java.io.File?, caption: String) {
         Spacer(modifier = Modifier.height(12.dp))
     }
 }
+
+// ── TukTak feed ───────────────────────────────────────────────────────────────
+// Exactly one of imageRes / videoRes is set. The video autoplays looping WITH
+// sound (the obnoxious social-feed effect).
+private data class TukPostData(val name: String, val imageRes: Int?, val videoRes: Int?, val caption: String)
+
 @Composable
 private fun AppSocialTikTok() {
-    // Vertical full-bleed cards, one per post, scrollable.
-    val posts = remember { (0 until 12).map { i -> i % 4 } }
+    val posts = remember {
+        listOf(
+            TukPostData("MarytheInfluencer", R.drawable.social04, null,
+                "Feeling sparkly with my Mucy earrings, Guli necklace and the most gorgeous Fuki shoulder chains! See my link below."),
+            TukPostData("SexyMan", null, R.raw.socialvid01, "LINK"),
+        )
+    }
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(Color.Black),
         userScrollEnabled = !LocalScrollLag.current
     ) {
         items(posts.size) { idx ->
-            val n = posts[idx]
-            val bg = listOf(
-                Color(0xFF1B1A38), Color(0xFF3A1B30),
-                Color(0xFF1B2E2A), Color(0xFF2A2A1B)
-            )[n]
+            val p = posts[idx]
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(540.dp)
-                    .background(bg)
+                    .background(Color.Black)
             ) {
+                when {
+                    p.videoRes != null -> TukTakVideo(p.videoRes, Modifier.fillMaxSize())
+                    p.imageRes != null -> AsyncImage(
+                        model = p.imageRes,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(16.dp)
                 ) {
-                    Text("@${SOCIAL_NAMES[n % SOCIAL_NAMES.size]}", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Text("@${p.name}", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text("caption placeholder #${n + 1}", color = Color.White, fontSize = 13.sp)
+                    Text(p.caption, color = Color.White, fontSize = 13.sp)
                 }
                 Column(
                     modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
@@ -537,6 +570,25 @@ private fun AppSocialTikTok() {
             }
         }
     }
+}
+
+// Looping, audible full-bleed video card for TukTak.
+@Composable
+private fun TukTakVideo(res: Int, modifier: Modifier = Modifier) {
+    AndroidView(
+        modifier = modifier,
+        factory = { ctx ->
+            android.widget.VideoView(ctx).apply {
+                setVideoURI(Uri.parse("android.resource://${ctx.packageName}/$res"))
+                setOnPreparedListener { mp ->
+                    mp.isLooping = true
+                    mp.setVolume(1f, 1f)
+                    start()
+                }
+            }
+        },
+        onRelease = { it.stopPlayback() }
+    )
 }
 // Dumbazon product. `margin` is how many giftcards the price always sits ABOVE
 // the player's balance — different per phone, so each stays just out of reach.
@@ -576,7 +628,7 @@ private fun AppAmazon(giftcards: Int, allVisited: Boolean, onCloseForToday: () -
         ) {
             Text("dumbazon", color = Color(0xFFFF9900), fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                AsyncImage(model = GIFTCARD_ICON, contentDescription = null, modifier = Modifier.size(18.dp))
+                GiftcardIcon(Modifier.size(18.dp))
                 Spacer(Modifier.width(4.dp))
                 Text("$giftcards", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
@@ -648,7 +700,7 @@ private fun AppAmazon(giftcards: Int, allVisited: Boolean, onCloseForToday: () -
                     Text(p.title, color = Color(0xFF111111), fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(6.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        AsyncImage(model = GIFTCARD_ICON, contentDescription = null, modifier = Modifier.size(20.dp))
+                        GiftcardIcon(Modifier.size(20.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("${priceOf(p)} giftcards", color = Color(0xFFB12704), fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     }
@@ -914,7 +966,7 @@ private fun AppDuolingo(addGiftcards: (Int) -> Unit, onClose: () -> Unit) {
                 if (lastAward > 0) {
                     Spacer(Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        AsyncImage(model = GIFTCARD_ICON, contentDescription = null, modifier = Modifier.size(16.dp))
+                        GiftcardIcon(Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("+$lastAward giftcards", color = Color(0xFF1B7A3A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
@@ -1114,7 +1166,7 @@ private fun AppMail(addGiftcards: (Int) -> Unit, triggerVirus: () -> Unit, openA
                     claimMsg?.let { msg ->
                         Spacer(modifier = Modifier.height(10.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            AsyncImage(model = GIFTCARD_ICON, contentDescription = null, modifier = Modifier.size(16.dp))
+                            GiftcardIcon(Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
                             Text(msg, color = Color(0xFF1B7A3A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                         }
@@ -1476,7 +1528,7 @@ private fun AppContacts(addGiftcards: (Int) -> Unit) {
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        AsyncImage(model = GIFTCARD_ICON, contentDescription = null, modifier = Modifier.size(22.dp))
+                        GiftcardIcon(Modifier.size(22.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("+$award giftcards", color = Color(0xFF1B7A3A), fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     }
@@ -1659,7 +1711,7 @@ private fun AppTetris(addGiftcards: (Int) -> Unit, giftcards: Int, onClose: () -
                     fontSize = 13.sp, fontWeight = FontWeight.Bold
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    AsyncImage(model = GIFTCARD_ICON, contentDescription = null, modifier = Modifier.size(16.dp))
+                    GiftcardIcon(Modifier.size(16.dp))
                     Spacer(Modifier.width(3.dp))
                     Text("$giftcards", color = Color(0xFFFFD45A), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
@@ -1699,13 +1751,13 @@ private fun AppTetris(addGiftcards: (Int) -> Unit, giftcards: Int, onClose: () -
                             val pieceIcon = if (activeIdx >= 0) pieceIcons.getOrNull(activeIdx) else null
                             val drawIcon = pieceIcon ?: locked
                             Box(modifier = Modifier.weight(1f).fillMaxSize().padding(2.dp)) {
-                                if (drawIcon != null) {
-                                    // Giftcard always stays in colour; everything
-                                    // else desaturates once phase ≥ 1.
-                                    val model = if (drawIcon == "giftcard") GIFTCARD_ICON
-                                    else "file:///android_asset/${if (phase >= 1) ICON_DIR_USED else ICON_DIR_FRESH}/$drawIcon.svg"
+                                if (drawIcon == "giftcard") {
+                                    // Giftcard uses the 3D currency model.
+                                    GiftcardIcon(Modifier.fillMaxSize().clip(RoundedCornerShape(3.dp)))
+                                } else if (drawIcon != null) {
+                                    // Everything else desaturates once phase ≥ 1.
                                     AsyncImage(
-                                        model = model,
+                                        model = "file:///android_asset/${if (phase >= 1) ICON_DIR_USED else ICON_DIR_FRESH}/$drawIcon.svg",
                                         contentDescription = null,
                                         modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(3.dp))
                                     )
@@ -1759,6 +1811,15 @@ private fun TetrisCtl(label: String, enabled: Boolean, onClick: () -> Unit) {
 
 // ── Shared Building-3 widgets ────────────────────────────────────────────────
 
+// Giftcard icon rendered from the 3D currency model (replaces the old
+// giftcard.svg), matching the coin/key/etc. currency icons in the city HUD.
+@Composable
+private fun GiftcardIcon(modifier: Modifier = Modifier) {
+    val icon = rememberCurrencyIcon(com.fictioncutshort.justacalculator.logic.Currency.GIFTCARDS)
+    if (icon != null) Image(bitmap = icon, contentDescription = "giftcards", modifier = modifier)
+    else Spacer(modifier)
+}
+
 @Composable
 private fun GiftcardCounter(count: Int, modifier: Modifier = Modifier) {
     Row(
@@ -1768,7 +1829,7 @@ private fun GiftcardCounter(count: Int, modifier: Modifier = Modifier) {
             .padding(horizontal = 12.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        AsyncImage(model = GIFTCARD_ICON, contentDescription = "giftcards", modifier = Modifier.size(22.dp))
+        GiftcardIcon(Modifier.size(22.dp))
         Spacer(Modifier.width(6.dp))
         Text("$count", color = Color(0xFFFFD45A), fontSize = 16.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.width(4.dp))

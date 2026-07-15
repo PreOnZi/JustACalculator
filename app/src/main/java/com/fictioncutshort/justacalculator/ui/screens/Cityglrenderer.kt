@@ -28,7 +28,42 @@ import kotlin.math.*
 //   Sun:   vertical disc to NE in sky, only visible during gameplay
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Point lights the shader can carry at once. The city has ~30 (street lamps,
+// building-corner lamps, and the lit windows of every unexplored building), so
+// the nearest MAX_LIGHTS to the camera are uploaded each frame. Keep this
+// comfortably above the number that can plausibly reach one spot, or lamps pop in
+// and out of the set as the player walks and the light seems to follow them.
+private const val MAX_LIGHTS = 12
+
 class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.Renderer {
+
+    // ── The key light ─────────────────────────────────────────────────────────
+    // Exactly one directional light at any moment, fixed in WORLD space so it
+    // never moves with the player: the sun by day, the moon by night, crossfaded
+    // by darknessLevel. Each is drawn in the sky along its own bearing, so the
+    // light always agrees with the body you can see.
+    private val SUN = norm(0.42f, 0.68f, -0.60f)     // high, north-east
+    private val MOON = norm(-0.50f, 0.62f, 0.60f)    // opposite quarter: south-west
+    private val SUN_COL  = floatArrayOf(1.00f, 0.96f, 0.88f)
+    private val MOON_COL = floatArrayOf(0.46f, 0.55f, 0.78f)
+    // The city's cream is already 0.96 albedo, so key + ambient must stay at or
+    // under 1.0 or every sunlit face clips to flat white.
+    private val SUN_STRENGTH  = 0.62f
+    private val MOON_STRENGTH = 0.30f
+
+    // Sky bodies are re-centred on the camera every frame, so they behave like
+    // bodies at infinity: never closer, always the same bearing, with the city
+    // passing in front of them as the player walks.
+    private val SKY_DIST = 2200f
+
+    // How far a lamp / lit window throws light.
+    private val LAMP_LIGHT_RADIUS   = 190f
+    private val WINDOW_LIGHT_RADIUS = 230f
+
+    private fun norm(x: Float, y: Float, z: Float): FloatArray {
+        val l = sqrt(x*x + y*y + z*z)
+        return floatArrayOf(x/l, y/l, z/l)
+    }
 
     // Camera — written from Compose thread, read on GL thread
     @Volatile var camX = 0f;      @Volatile var camY = 1300f
@@ -57,6 +92,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     @Volatile var b1DoorGreen = false   // true after Building 1 TD is completed
     @Volatile var b2DoorGreen = false   // true after Building 2 maze is completed
     @Volatile var b3DoorGreen = false   // true after Building 3 tank game is completed
+    @Volatile var b5EntranceGlow = false // true after Building 5 — RGB-lit Building 8 door
     // 0..3: each step spreads the grid one third of the way from CELL=200
     // (compact calculator-keypad layout, intro aerial framing) to CELL=260
     // (full city). Buildings, doors, and roof labels always render the same
@@ -70,6 +106,25 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
 
     private var prog=0; private var aPos=0; private var uMVP=0
     private var uCol=0; private var uFog=0; private var uAerial=0; private var uGray=0
+    private var uShift=0; private var uTip=0; private var uPivot=0
+    private var aUV=0; private var uTexSampler=0; private var uTexOn=0
+    // Model textures, keyed by the file name the MTL's map_Kd names. Uploaded once,
+    // on the GL thread, when the models load.
+    private val modelTextures = HashMap<String, Int>()
+    private var uLit=0; private var uDark=0; private var uKeyDir=0; private var uKeyCol=0
+    private var uCamPos=0; private var uLightPos=0; private var uLightRad=0
+    // False if GL_OES_standard_derivatives is unavailable — we then run the old
+    // flat shader and skip all lighting work.
+    private var lightingOn = true
+
+    // Every warm light source in the city, collected while the scene is built:
+    // street lamps, the per-building corner lamps, and one light for each
+    // building's windows. Entries are [x, y, z, radius, digit], where digit is
+    // 1..9 for a building's windows (that light goes out once the building has
+    // been explored) and -1 for a lamp, which always burns.
+    private val lampLights = mutableListOf<FloatArray>()
+    private val lightPosBuf = FloatArray(MAX_LIGHTS * 3)
+    private val lightRadBuf = FloatArray(MAX_LIGHTS)
 
     private data class Mesh(
         val buf: FloatBuffer, val mode: Int, val cnt: Int,
@@ -80,9 +135,54 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         val glow: Boolean = false,         // additive blend, fades in with darknessLevel
         val softShadow: Boolean = false,   // alpha blend, dark ground shadow under buildings
         val noAO: Boolean = false,         // force uAerial=1 for self-lit / metallic fixtures
-        val windowDigit: Int = -1          // 1..9 → main-building window panel, colour driven per-frame
+        val windowDigit: Int = -1,         // 1..9 → main-building window panel, colour driven per-frame
+        val radShell: Boolean = false,     // Building 10's outer wall/lid — see-through from inside
+        val radDoor: Boolean = false,      // Building 10's black door panel — dropped once opened
+        val sky: Boolean = false,          // sun/sky body — re-centred on the camera, never shaded
+        val skyNight: Boolean = false,     // sky body belonging to the night (the moon)
+        val crack: Boolean = false,        // a tear in the sky — only during the collapse
+        val tex: Int = 0,                  // GL texture — 0 for the flat-coloured majority
+        val uv: FloatBuffer? = null        // its UVs, in step with buf
     )
     private val meshes = mutableListOf<Mesh>()
+
+    // Building 10 (the mute button) in world space — its centre and outer radius.
+    // Set by addRadButton; used each frame to tell whether the camera is inside it
+    // (in which case its shell is drawn transparent, so the city still reads).
+    private var radBx = 0f
+    private var radBz = 0f
+    private var radOuterR = 0f
+    private var radDoorTopY = 0f
+    // ── The city coming down ─────────────────────────────────────────────────
+    // 0 = intact, 1 = gone. Driven by CalculatorCityView once the player has been
+    // inside the mute button long enough. Each building is given its own moment to
+    // go, so the skyline collapses raggedly rather than sinking as one slab.
+    @Volatile var collapse = 0f
+    // [firstMeshIdx, lastMeshIdx, cx, cz, startAt, seed] per collapsible building.
+    private val collapseGroups = mutableListOf<FloatArray>()
+    private var collapseMark = 0
+
+    // World-space AABBs of the furniture inside Building 10, [cx, cz, halfX, halfZ].
+    // Read by CalculatorCityView so the player can't walk through the shelves.
+    @Volatile var radPropFootprints: List<FloatArray> = emptyList()
+
+    // ── The CCTV desk ────────────────────────────────────────────────────────
+    // The three computer monitors on the desk inside Building 10 show live views of
+    // the city, taken from the security cameras on the buildings. See CityCctv.
+    // The screens are found in the model by material: the blue panels inset in each
+    // monitor's black bezel (mutebutton.blend → Material.006, three of them, one per
+    // monitor). NOT the whiteboards on stands over by the wall — those are the other
+    // white panels in the room, and they stay white.
+    private val cctv = CityCctv()
+    private val SCREEN_MTL = "Material.006"
+    // Feeds re-rendered per frame, round robin. One is enough: with 12 cells every
+    // view still refreshes ~5x a second, which is what CCTV looks like anyway.
+    private val CCTV_FEEDS_PER_FRAME = 1
+    // Per-mesh bounding sphere [cx, cy, cz, r], parallel to `meshes`. Only the CCTV
+    // passes use it — a feed camera down in the streets sees a small slice of the
+    // city, and without the cull each screen costs a whole extra city.
+    private var meshSpheres = FloatArray(0)
+    private val frustum = Array(6) { FloatArray(4) }
 
     // Security cameras — one per building corner, drawn dynamically each frame
     // because they yaw to track the player. Each entry: [px, py, pz, outX, outZ]
@@ -99,6 +199,9 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     private var lampOffGroups: List<ObjGroup> = emptyList()
     private var cameraOnGroups: List<ObjGroup> = emptyList()
     private var doorGroups:    List<ObjGroup> = emptyList()
+    private var bridgeGroups:   Array<List<ObjGroup>> = arrayOf()   // 9 custom bridge pieces
+    private var muteButtonGroups: List<ObjGroup> = emptyList()      // building-10 mute button body
+    private var muteButtonBounds: List<ObjBounds> = emptyList()     // its props, for collision
     private var damagedGroupsA: List<ObjGroup> = emptyList()   // buildd1
     private var damagedGroupsB: List<ObjGroup> = emptyList()   // buildd2
     private var damagedGroupsC: List<ObjGroup> = emptyList()   // buildd3
@@ -145,8 +248,10 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     // flips. Indexed by digit-1.
     @Volatile var buildingCompleted: BooleanArray = BooleanArray(9)
     private var debrisGroups:  Array<List<ObjGroup>> = Array(10) { emptyList() }
-    // Per-interactive-building (digits 1..9) slide-up fraction. 0=closed, 1=fully retracted.
-    // Animated from CalculatorCityView during the door-open → walk-through sequence.
+    // Per-interactive-building (digits 1..9) slide-up fraction. 0=closed, 1=fully
+    // retracted. Animated from CalculatorCityView during the door-open →
+    // walk-through sequence. Building 10's door is not one of these — it's a black
+    // panel cut into the mute button's own wall (see radDoorOpen).
     @Volatile var doorOpenFraction: FloatArray = FloatArray(9)
     // Door instances populated in buildScene/addBuilding; consumed each frame by
     // drawDoors. Each entry: [doorCenterX, doorCenterY (=dh*0.5), doorCenterZ, faceIdx, scaleX, scaleY, scaleZ, slideMax, digitIndex(0..8)]
@@ -164,32 +269,172 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     private val LAMP_YAW_DEG = 225f  // 45° base + 180° flip; rotates lamp around the vertical Y axis
 
     // ── Shaders ───────────────────────────────────────────────────────────────
+    // Every mesh in this renderer is built in WORLD space (uMVP is only
+    // projection × view), so the vertex position doubles as the world position.
+    // That lets the fragment shader recover a true per-face normal from the
+    // screen-space derivatives of it — no normal attribute, no change to a single
+    // vertex buffer or draw call, and it covers the meshes that are rebuilt every
+    // frame (doors, monster, cameras) for free.
+    // vRel is the position RELATIVE TO THE CAMERA, not the absolute world position.
+    // That matters: the city runs out to +-2200, and at that magnitude a mediump
+    // float in the fragment stage has about 1-unit resolution, so the sub-pixel
+    // dFdx/dFdy of an absolute coordinate quantises to zero, cross() returns the
+    // zero vector, and normalize() of that is NaN - which is what blew every
+    // surface out to white. Relative to the camera the numbers are small and the
+    // derivatives survive. The normal is identical either way: subtracting a
+    // constant does not change a derivative.
     private val VS = """
         uniform mat4 uMVP;
+        uniform vec3 uCamPos;
+        // Per-draw world-space displacement. Used to drop, shove and shake a single
+        // building as the city falls apart; zero for everything else.
+        uniform vec3 uShift;
+        // ...and the same building TIPPING OVER: a rotation of uTip.w radians about
+        // the horizontal axis uTip.xyz, through the world point uPivot (the edge the
+        // building hinges on). w = 0 for everything that isn't currently going over.
+        // Rotating here rather than baking it into the vertices keeps every mesh
+        // buffer static; the fragment shader takes its normals from the derivatives
+        // of the position, so the lighting rolls over with the building for free.
+        uniform vec4 uTip;
+        uniform vec3 uPivot;
         attribute vec4 aPosition;
+        // Only the textured groups (a material with a map_Kd — the whiteboards'
+        // image planes) bind this; everything else leaves the array disabled and
+        // never looks at vUV.
+        attribute vec2 aUV;
         varying float vDepth;
         varying float vY;
+        varying vec3  vRel;
+        varying vec2  vUV;
         void main(){
-            gl_Position = uMVP * aPosition;
+            vUV = aUV;
+            vec3 p = aPosition.xyz;
+            if (uTip.w != 0.0) {
+                vec3 q = p - uPivot;
+                float c = cos(uTip.w);
+                float s = sin(uTip.w);
+                // Rodrigues rotation of q about the unit axis uTip.xyz.
+                q = q * c + cross(uTip.xyz, q) * s + uTip.xyz * dot(uTip.xyz, q) * (1.0 - c);
+                p = q + uPivot;
+            }
+            p += uShift;
+            gl_Position = uMVP * vec4(p, 1.0);
             vDepth = gl_Position.z / gl_Position.w;
-            vY = aPosition.y;
+            vY = p.y;
+            vRel = p - uCamPos;
         }""".trimIndent()
 
-    private val FS = """
+    // Lit shader. Needs GL_OES_standard_derivatives (universal on Android, but if
+    // it's missing we fall back to FS_FLAT below and the game looks as it did).
+    //   * sun      - one directional light, aimed from the sun disc in the sky
+    //   * lamps    - up to MAX_LIGHTS point lights, the nearest street/building
+    //                lamps to the camera, which take over as night falls
+    //   * ambient  - sky fill, cool and dim at night, so unlit faces still read
+    private val FS_LIT = """
+        #extension GL_OES_standard_derivatives : enable
+        #ifdef GL_FRAGMENT_PRECISION_HIGH
+        precision highp float;
+        #else
+        precision mediump float;
+        #endif
+        uniform vec4  uColor;
+        uniform float uFog;
+        uniform float uAerial;
+        uniform float uGray;
+        uniform float uLit;
+        uniform float uDark;
+        uniform vec3  uKeyDir;
+        uniform vec3  uKeyCol;
+        uniform vec3  uCamPos;
+        uniform vec3  uLightPos[$MAX_LIGHTS];
+        uniform float uLightRad[$MAX_LIGHTS];
+        uniform sampler2D uTex;
+        uniform float uTexOn;
+        varying float vDepth;
+        varying float vY;
+        varying vec3  vRel;
+        varying vec2  vUV;
+        void main(){
+            // An image, where there is one, stands in for the flat colour — and then
+            // takes the same sun, the same lamps, the same night as every other
+            // surface in the city, because that is all that happens below.
+            vec3 albedo = uTexOn > 0.5 ? texture2D(uTex, vUV).rgb : uColor.rgb;
+            vec3 col;
+            if (uLit > 0.5) {
+                // Flat (faceted) normal straight off the triangle, in camera-relative
+                // space (see VS). If the cross product is degenerate - a sliver of a
+                // triangle, or a face seen exactly edge-on - fall back to straight up
+                // rather than normalizing a zero vector into NaN, which renders white.
+                vec3 g = cross(dFdx(vRel), dFdy(vRel));
+                float glen = length(g);
+                vec3 N = glen > 1e-8 ? g / glen : vec3(0.0, 1.0, 0.0);
+                // Culling is disabled, so faces can point either way - flip the
+                // normal toward the viewer rather than letting walls go black.
+                // The view vector is simply -vRel: the camera is at the origin here.
+                if (dot(N, -vRel) < 0.0) N = -N;
+
+                float day = 1.0 - uDark;
+                // ONE key light, fixed in world space: sun by day, moon by night.
+                // Its direction and colour come in already crossfaded, so nothing
+                // about the lighting depends on where the player is standing.
+                float ndl = max(dot(N, uKeyDir), 0.0);
+                vec3 key = uKeyCol * ndl;
+                vec3 amb = mix(vec3(0.13, 0.16, 0.26), vec3(0.38, 0.39, 0.43), day);
+
+                // Lamps and the lit windows of unexplored buildings. Each carries
+                // its own radius; a radius of 0 means "off" (branch-free).
+                vec3 lamps = vec3(0.0);
+                for (int i = 0; i < $MAX_LIGHTS; i++) {
+                    float rad = max(uLightRad[i], 0.001);
+                    float on  = step(0.5, uLightRad[i]);
+                    // Lights are brought into the same camera-relative space.
+                    vec3  d   = (uLightPos[i] - uCamPos) - vRel;
+                    float dist = length(d);
+                    float att = clamp(1.0 - dist / rad, 0.0, 1.0);
+                    att = att * att * on;
+                    float nl = max(dot(N, d / max(dist, 0.001)), 0.0);
+                    lamps += vec3(1.00, 0.82, 0.45) * att * (0.35 + 0.65 * nl) * 0.75;
+                }
+                // Several can overlap; cap the total so a junction doesn't blow out.
+                lamps = min(lamps, vec3(1.3)) * uDark;
+
+                col = albedo * (amb + key + lamps);
+            } else {
+                // Unlit - lines, lava, the arcs, glows, shadow blobs, the sky, and
+                // the whole aerial intro. Keeps the original fake vertical-gradient
+                // "AO" so none of that artwork shifts.
+                float ao = mix(0.76 + clamp(vY/300.0,0.0,1.0)*0.24, 1.0, uAerial);
+                col = albedo * ao;
+            }
+            float fog = clamp(vDepth * uFog, 0.0, 0.55);
+            vec3 fogC = vec3(0.29, 0.22, 0.16);
+            col = mix(col, fogC, fog);
+            // Easter-egg grayscale (code 1134206): desaturate the whole city.
+            float luma = dot(col, vec3(0.299, 0.587, 0.114));
+            col = mix(col, vec3(luma), uGray);
+            gl_FragColor = vec4(col, uColor.a);
+        }""".trimIndent()
+
+    // Pre-lighting fallback: flat colour with a fake vertical gradient for "AO".
+    private val FS_FLAT = """
         precision mediump float;
         uniform vec4  uColor;
         uniform float uFog;
         uniform float uAerial;
         uniform float uGray;
+        uniform sampler2D uTex;
+        uniform float uTexOn;
         varying float vDepth;
         varying float vY;
+        varying vec3  vRel;
+        varying vec2  vUV;
         void main(){
+            vec3 albedo = uTexOn > 0.5 ? texture2D(uTex, vUV).rgb : uColor.rgb;
             float fog = clamp(vDepth * uFog, 0.0, 0.55);
             float ao  = mix(0.76 + clamp(vY/300.0,0.0,1.0)*0.24, 1.0, uAerial);
             vec3 fogC = vec3(0.29, 0.22, 0.16);
-            vec3 col  = uColor.rgb * ao;
+            vec3 col  = albedo * ao;
             col = mix(col, fogC, fog);
-            // Easter-egg grayscale (code 1134206): desaturate the whole city.
             float luma = dot(col, vec3(0.299, 0.587, 0.114));
             col = mix(col, vec3(luma), uGray);
             gl_FragColor = vec4(col, uColor.a);
@@ -232,6 +477,13 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     // Features
     private val LAVA_S: Float get() = CITY_N - 40f
     private val LAVA_N: Float get() = LAVA_S - 360f
+    // The lava's surface. It used to be drawn at y=20 — a sheet floating twenty units
+    // above the ground plane, which nothing ever revealed, because nothing ever went
+    // through it. Then the bridge started falling into it and you could watch the
+    // pieces sink past a lava surface hanging in the air above them. It sits on the
+    // ground now, a hair above it so it doesn't z-fight the ground quad, and the
+    // bridge (which is placed against this) came down with it.
+    private val LAVA_Y = 0.4f
     // Extra walkable lane west of the city. Building 7 sits in the westmost
     // column with a WEST-facing door; without this gap the door opens straight
     // into the perimeter wall and is unreachable. Pushing the wall ~one street
@@ -285,13 +537,36 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         GLES20.glDepthFunc(GLES20.GL_LESS)
         GLES20.glDisable(GLES20.GL_CULL_FACE)
-        prog    = buildProg(VS, FS)
+        // Lit shader needs GL_OES_standard_derivatives. It's on every Android GPU
+        // we care about, but if the compile fails we silently drop to the old flat
+        // shader rather than shipping a black screen.
+        val ext = GLES20.glGetString(GLES20.GL_EXTENSIONS) ?: ""
+        lightingOn = ext.contains("GL_OES_standard_derivatives")
+        prog = if (lightingOn) runCatching { buildProg(VS, FS_LIT) }.getOrElse { 0 } else 0
+        if (prog == 0) { lightingOn = false; prog = buildProg(VS, FS_FLAT) }
+
         aPos    = GLES20.glGetAttribLocation(prog, "aPosition")
         uMVP    = GLES20.glGetUniformLocation(prog, "uMVP")
         uCol    = GLES20.glGetUniformLocation(prog, "uColor")
         uFog    = GLES20.glGetUniformLocation(prog, "uFog")
         uAerial = GLES20.glGetUniformLocation(prog, "uAerial")
         uGray   = GLES20.glGetUniformLocation(prog, "uGray")
+        uShift  = GLES20.glGetUniformLocation(prog, "uShift")
+        uTip    = GLES20.glGetUniformLocation(prog, "uTip")
+        uPivot  = GLES20.glGetUniformLocation(prog, "uPivot")
+        aUV         = GLES20.glGetAttribLocation(prog, "aUV")
+        uTexSampler = GLES20.glGetUniformLocation(prog, "uTex")
+        uTexOn      = GLES20.glGetUniformLocation(prog, "uTexOn")
+        if (lightingOn) {
+            uLit      = GLES20.glGetUniformLocation(prog, "uLit")
+            uDark     = GLES20.glGetUniformLocation(prog, "uDark")
+            uKeyDir   = GLES20.glGetUniformLocation(prog, "uKeyDir")
+            uKeyCol   = GLES20.glGetUniformLocation(prog, "uKeyCol")
+            uCamPos   = GLES20.glGetUniformLocation(prog, "uCamPos")
+            uLightPos = GLES20.glGetUniformLocation(prog, "uLightPos")
+            uLightRad = GLES20.glGetUniformLocation(prog, "uLightRad")
+        }
+        cctv.init()
         loadModels()
         buildScene()
     }
@@ -307,6 +582,14 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             cameraNightColors = night.associate { it.materialName to floatArrayOf(it.r, it.g, it.b) }
         } catch (_: Throwable) {}
         try { doorGroups      = ObjLoader.load(a, "models/door.obj",                 "models/door.mtl") } catch (_: Throwable) {}
+        // Custom bridge pieces (1..9, south→north). Materials absent; groups are
+        // tagged by object name so the lamp "Icosphere" meshes can glow at night.
+        bridgeGroups = Array(9) { i ->
+            runCatching { ObjLoader.load(a, "models/bridge/bridge${i + 1}.obj", "models/bridge/bridge${i + 1}.mtl") }
+                .getOrDefault(emptyList())
+        }
+        try { muteButtonGroups = ObjLoader.load(a, "models/mutebutton.obj", "models/mutebutton.mtl") } catch (_: Throwable) {}
+        try { muteButtonBounds = ObjLoader.loadBounds(a, "models/mutebutton.obj") } catch (_: Throwable) {}
         try { damagedGroupsA  = ObjLoader.load(a, "models/builddamage/buildd1.obj",  "models/builddamage/buildd1.mtl") } catch (_: Throwable) {}
         try { damagedGroupsB  = ObjLoader.load(a, "models/builddamage/buildd2.obj",  "models/builddamage/buildd2.mtl") } catch (_: Throwable) {}
         try { damagedGroupsC  = ObjLoader.load(a, "models/builddamage/buildd3.obj",  "models/builddamage/buildd3.mtl") } catch (_: Throwable) {}
@@ -338,8 +621,40 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         GLES20.glUniform1f(uGray,
             if (com.fictioncutshort.justacalculator.logic.EasterEggTheme.grayscale) 1f else 0f)
 
+        if (lightingOn) {
+            val dk = darknessLevel.coerceIn(0f, 1f)
+            GLES20.glUniform1f(uDark, dk)
+            // Crossfade the one key light from sun to moon. Both bearings are fixed
+            // in world space, so the lighting never shifts with the player.
+            val kx = SUN[0] + (MOON[0] - SUN[0]) * dk
+            val ky = SUN[1] + (MOON[1] - SUN[1]) * dk
+            val kz = SUN[2] + (MOON[2] - SUN[2]) * dk
+            val kl = sqrt(kx*kx + ky*ky + kz*kz).coerceAtLeast(1e-4f)
+            GLES20.glUniform3f(uKeyDir, kx/kl, ky/kl, kz/kl)
+            val s = SUN_STRENGTH + (MOON_STRENGTH - SUN_STRENGTH) * dk
+            GLES20.glUniform3f(uKeyCol,
+                (SUN_COL[0] + (MOON_COL[0] - SUN_COL[0]) * dk) * s,
+                (SUN_COL[1] + (MOON_COL[1] - SUN_COL[1]) * dk) * s,
+                (SUN_COL[2] + (MOON_COL[2] - SUN_COL[2]) * dk) * s)
+            GLES20.glUniform3f(uCamPos, camX, camY, camZ)
+            uploadNearestLights()
+        }
+
         val proj = FloatArray(16); val view = FloatArray(16); val mvp = FloatArray(16)
         Matrix.perspectiveM(proj, 0, fov, sw.toFloat() / sh.toFloat(), 0.5f, 3000f)
+
+        // The ground shaking. Applied to the EYE, not the world, so the player is
+        // what gets thrown about while the city falls around them. Grows through
+        // the collapse.
+        var shX = 0f; var shY = 0f; var shZ = 0f
+        if (collapse > 0f) {
+            val q = collapse.coerceIn(0f, 1f)
+            val amp = 1.2f + q * 8f
+            val t = (System.nanoTime() / 1_000_000L) * 0.001f
+            shX = (sin(t * 27f) + sin(t * 61f) * 0.4f) * amp
+            shY = sin(t * 43f) * amp * 0.7f
+            shZ = (cos(t * 33f) + cos(t * 71f) * 0.4f) * amp
+        }
 
         if (aerialMode) {
             val lookingDown = abs(introLookZ - camZ) < 2f
@@ -354,9 +669,9 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 0f, 1f, 0f)
         } else {
             Matrix.setIdentityM(view, 0)
-            Matrix.rotateM(view, 0, camPitch, 1f, 0f, 0f)
-            Matrix.rotateM(view, 0, camYaw, 0f, 1f, 0f)
-            Matrix.translateM(view, 0, -camX, -camY, -camZ)
+            Matrix.rotateM(view, 0, camPitch + shY * 0.25f, 1f, 0f, 0f)
+            Matrix.rotateM(view, 0, camYaw + shX * 0.25f, 0f, 1f, 0f)
+            Matrix.translateM(view, 0, -(camX + shX), -(camY + shY), -(camZ + shZ))
         }
 
         Matrix.multiplyMM(mvp, 0, proj, 0, view, 0)
@@ -366,10 +681,44 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         val radA = ((radAngle % 360f) + 360f) % 360f
         val dkLvl = darknessLevel.coerceIn(0f, 1f)
 
+        // Standing inside Building 10 — its drum wall then draws as tinted glass so
+        // the city, the bridge and the arcs spinning around it all still read.
+        val insideRad = !aerialMode && radOuterR > 0f &&
+            hypot(camX - radBx, camZ - radBz) < radOuterR
+
+        // ── The collapse ─────────────────────────────────────────────────────
+        // Each building's meshes are shifted (and eventually dropped) as one, so
+        // the skyline comes apart building by building instead of all at once.
+        val col = collapse.coerceIn(0f, 1f)
+        val xf = FloatArray(10)
+        setXform(null)
+        // meshIdx -> collapse group, so the loop below can look its building up.
+        val groupOf: HashMap<Int, FloatArray>? = if (col > 0f) HashMap<Int, FloatArray>().also { m ->
+            for (g in collapseGroups) {
+                for (i in g[0].toInt()..g[1].toInt()) m[i] = g
+            }
+        } else null
+
+        // ── The CCTV desk ────────────────────────────────────────────────────
+        // Only while the player is actually in the room with the monitors: this
+        // re-renders the city from a security camera into one cell of the feed
+        // atlas, and it is the one thing in the frame that costs a second look at
+        // the whole scene. Runs BEFORE pass 1 so it can borrow the shader's
+        // uniforms and hand them straight back.
+        if (insideRad && cctv.ready) drawCctvFeeds(mvp, col, groupOf)
+
         // ── PASS 1 — opaque + soft-shadow meshes (glow deferred to pass 2)
         var blendMode = 0   // 0=off, 1=alpha (shadows)
         var curAerial = aerialBlend
-        for (m in meshes) {
+        for ((meshIdx, m) in meshes.withIndex()) {
+            // A building that has finished falling is simply not drawn any more.
+            if (groupOf != null) {
+                val g = groupOf[meshIdx]
+                if (g != null) {
+                    if (!collapseXform(g, col, xf)) continue
+                    setXform(xf)
+                } else setXform(null)
+            }
             // Hide aerialSkip detail until the city has spread to its final
             // CELL=260 layout (cellStage == 3), OR whenever the renderer is
             // in aerialMode (the forceAerial post-minigame fly-over). The
@@ -378,6 +727,8 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             // (smooth pitch+yaw forward motion).
             if (m.aerialSkip && (cellStage < 3 || aerialMode)) continue
             if (m.glow) continue
+            if (m.sky) continue                      // drawn below, camera-relative
+            if (m.radDoor && radDoorOpen) continue   // Building 10 opened — no door left
             val r: Float; val g: Float; val b: Float
             if (m.lava) {
                 val p = 0.5f + sin(lavaShift * 2f * PI.toFloat() + m.r * 4f).toFloat() * 0.5f
@@ -409,7 +760,8 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 }
             } else { r = m.r; g = m.g; b = m.b }
 
-            val want = if (m.softShadow) 1 else 0
+            val seeThrough = m.radShell && insideRad
+            val want = if (m.softShadow || seeThrough) 1 else 0
             if (want != blendMode) {
                 if (want == 0) {
                     GLES20.glDisable(GLES20.GL_BLEND)
@@ -427,8 +779,11 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 GLES20.glUniform1f(uAerial, wantAerial)
                 curAerial = wantAerial
             }
+            setLit(if (m.lava || m.radArc || m.softShadow || m.noAO ||
+                       m.mode == GLES20.GL_LINES) 0f else 1f)
 
-            GLES20.glUniform4f(uCol, r, g, b, m.a)
+            bindMeshTexture(m)
+            GLES20.glUniform4f(uCol, r, g, b, if (seeThrough) 0.22f else m.a)
             GLES20.glUniform1f(uFog, if (aerialMode) m.fog else 0f)
             m.buf.position(0)
             GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, m.buf)
@@ -439,6 +794,8 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             GLES20.glDisable(GLES20.GL_BLEND)
             GLES20.glDepthMask(true)
         }
+        setXform(null)   // the meshes drawn from here on carry their own transforms
+        clearMeshTexture()   // ...and none of them are textured
 
         if (showPlayer) {
             val ox = playerX; val oy = 32f + 8f; val oz = playerZ
@@ -447,6 +804,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
 
         drawCameras()
         drawDoors()
+        drawEntranceRgb()   // RGB frame on Building 8's door (visible from the street)
 
         // Monster drawn BEFORE the night overlay so the darkness covers it too —
         // it reads as a dark shape in the gloom rather than a self-lit cut-out.
@@ -459,6 +817,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             GLES20.glUniformMatrix4fv(uMVP, 1, false, identity, 0)
             GLES20.glUniform1f(uFog, 0f)
             GLES20.glUniform1f(uAerial, 1f)
+            setLit(0f)
             GLES20.glDisable(GLES20.GL_DEPTH_TEST)
             GLES20.glEnable(GLES20.GL_BLEND)
             GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
@@ -479,23 +838,75 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         // were being drawn off-screen (= invisible lamps + invisible monster).
         GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
 
+        // The monitors. Drawn AFTER the night overlay — a screen is a light source,
+        // and in a dark room it is the only thing you can see. Depth still holds, so
+        // walking behind the desk hides them.
+        if (insideRad && cctv.ready) {
+            cctv.draw(mvp, dkLvl)
+            GLES20.glUseProgram(prog)
+        }
+
+        // ── Sky bodies (sun + moon) ──────────────────────────────────────────
+        // Drawn AFTER the night overlay, so the moon isn't crushed by the very
+        // darkness it's supposed to be lighting. The camera's translation is folded
+        // into the matrix, so both keep a fixed bearing and never get closer no
+        // matter how far the player walks; depth testing still lets buildings pass
+        // in front of them. The sun fades out and the moon fades in with the night.
+        if (!aerialMode && cellStage >= 3) {
+            val skyMvp = mvp.copyOf()
+            Matrix.translateM(skyMvp, 0, camX, camY, camZ)
+            GLES20.glUniformMatrix4fv(uMVP, 1, false, skyMvp, 0)
+            setLit(0f)
+            GLES20.glUniform1f(uFog, 0f)
+            GLES20.glUniform1f(uAerial, 1f)
+            GLES20.glEnable(GLES20.GL_BLEND)
+            GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+            for (m in meshes) {
+                if (!m.sky) continue
+                val fade = if (m.crack) {
+                    // A crack opens once the collapse has run past its turn.
+                    if (col <= 0f) continue
+                    ((col - m.arcAngle * 0.6f) * 3f).coerceIn(0f, 1f)
+                } else if (m.skyNight) dkLvl else 1f - dkLvl
+                if (fade < 0.01f) continue
+                GLES20.glUniform4f(uCol, m.r, m.g, m.b, m.a * fade)
+                m.buf.position(0)
+                GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, m.buf)
+                GLES20.glEnableVertexAttribArray(aPos)
+                GLES20.glDrawArrays(m.mode, 0, m.cnt)
+            }
+            GLES20.glDisable(GLES20.GL_BLEND)
+            GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
+        }
+
         // ── PASS 2 — light sources drawn ADDITIVELY on top of the darkness so
         // they cut through it. Windows + camera lights were ALSO drawn in pass 1
         // (so they already wrote depth) — use GL_LEQUAL so the re-draw at equal
         // depth isn't rejected, otherwise their glow never appears.
         if (!aerialMode && dkLvl > 0.01f) {
             GLES20.glUniform1f(uAerial, 1f)  // disable AO so lights stay full-bright
+            setLit(0f)                       // light sources are emissive, never shaded
             GLES20.glEnable(GLES20.GL_BLEND)
             GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE)
             GLES20.glDepthMask(false)
             GLES20.glDepthFunc(GLES20.GL_LEQUAL)
-            for (m in meshes) {
+            for ((meshIdx, m) in meshes.withIndex()) {
                 if (m.aerialSkip && (cellStage < 3 || aerialMode)) continue
                 // Lit (un-completed) windows also glow here so they punch through
                 // the night as genuine light sources, not just dim tinted panes.
                 val litWindow = m.windowDigit in 1..9 &&
                     !((m.windowDigit - 1) in buildingCompleted.indices && buildingCompleted[m.windowDigit - 1])
                 if (!m.glow && !litWindow) continue
+                // A glow rides its building down too — the bridge's lamps are in
+                // here, and without this they burn on over the lava after the plank
+                // carrying them has gone into it.
+                if (groupOf != null) {
+                    val g = groupOf[meshIdx]
+                    if (g != null) {
+                        if (!collapseXform(g, col, xf)) continue
+                        setXform(xf)
+                    } else setXform(null)
+                }
                 val r: Float; val g: Float; val b: Float; val a: Float
                 if (litWindow) {
                     r = 1.0f; g = 0.82f; b = 0.30f       // warm window light
@@ -511,6 +922,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 GLES20.glEnableVertexAttribArray(aPos)
                 GLES20.glDrawArrays(m.mode, 0, m.cnt)
             }
+            setXform(null)
             // Camera red lights — additive, same warm "defy the dark" pass.
             drawCameraLights(dkLvl)
             // Illuminate the monster's red/white faces.
@@ -521,6 +933,240 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         }
     }
 
+    // ── Building 8 entrance: a running-RGB light frame around the door ──────────
+    // Drawn (additively) right after the doors so it's visible from the street,
+    // day or night. Only appears once Building 5 is finished. Sets up + restores
+    // its own GL blend/depth state.
+    private fun drawEntranceRgb() {
+        setLit(0f)   // emissive RGB frame
+        if (!b5EntranceGlow || aerialMode) return
+        val mount = doorMounts.firstOrNull { it[8].toInt() == 7 } ?: return   // digit 8
+        // Bolted to Building 8's wall, so it rides that wall down — and once the
+        // building has finished falling there is no doorway left to light.
+        val col = collapse.coerceIn(0f, 1f)
+        val xf = FloatArray(10)
+        val pt = FloatArray(3)
+        var falls = false
+        if (col > 0f) {
+            val g = collapseGroupNear(mount[0], mount[2])
+            if (g != null) {
+                if (!collapseXform(g, col, xf)) return
+                falls = true
+            }
+        }
+        GLES20.glEnable(GLES20.GL_BLEND)
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE)   // additive glow
+        GLES20.glDepthMask(false)
+        GLES20.glUniform1f(uAerial, 1f)
+        GLES20.glUniform1f(uFog, 0f)
+        val cx = mount[0]; val dh = mount[1]; val cz = mount[2]
+        val face = mount[3].toInt()
+        val dw = mount[4] * DOOR_HALF_W
+        // Wall-plane basis: n = outward normal, t = width tangent (up is +Y).
+        val nx: Float; val nz: Float; val tx: Float; val tz: Float
+        when (face) {
+            0 -> { nx = 0f; nz = 1f; tx = 1f; tz = 0f }
+            1 -> { nx = 0f; nz = -1f; tx = 1f; tz = 0f }
+            2 -> { nx = 1f; nz = 0f; tx = 0f; tz = 1f }
+            else -> { nx = -1f; nz = 0f; tx = 0f; tz = 1f }
+        }
+        val tOut = dw + 0.35f                 // hug the outer edge of the doorway
+        val yBot = 0.15f
+        val yTop = dh + 0.35f
+        val eSpan = 2f * tOut                 // top / bottom edge length
+        val hSpan = yTop - yBot               // side edge length
+        val perim = 2f * eSpan + 2f * hSpan
+        val n = (perim / 1.3f).toInt().coerceIn(24, 90)
+        val phase = ((System.nanoTime() / 1_000_000L) % 2600L) / 2600f
+        val br = 0.85f                        // bulb half-size (large, bright)
+        val push = 1.0f                       // sit well in front of the wall
+        GLES20.glUniform1f(uFog, 0f)
+        for (i in 0 until n) {
+            val d = (i.toFloat() / n) * perim
+            // Position (s along width, y up) around the rectangle perimeter.
+            val s: Float; val y: Float
+            when {
+                d < eSpan -> { s = -tOut + d; y = yBot }
+                d < eSpan + hSpan -> { s = tOut; y = yBot + (d - eSpan) }
+                d < 2f * eSpan + hSpan -> { s = tOut - (d - eSpan - hSpan); y = yTop }
+                else -> { s = -tOut; y = yTop - (d - 2f * eSpan - hSpan) }
+            }
+            val bx = cx + tx * s + nx * push
+            val bz = cz + tz * s + nz * push
+            val hue = ((i.toFloat() / n) + phase) % 1f
+            val (r, g, b) = hsvBright(hue)
+            val quad = floatArrayOf(
+                bx - tx * br, y - br, bz - tz * br,
+                bx + tx * br, y - br, bz + tz * br,
+                bx + tx * br, y + br, bz + tz * br,
+                bx - tx * br, y - br, bz - tz * br,
+                bx + tx * br, y + br, bz + tz * br,
+                bx - tx * br, y + br, bz - tz * br,
+            )
+            if (falls) {
+                var k = 0
+                while (k < quad.size) {
+                    applyXform(xf, quad[k], quad[k + 1], quad[k + 2], pt)
+                    quad[k] = pt[0]; quad[k + 1] = pt[1]; quad[k + 2] = pt[2]
+                    k += 3
+                }
+            }
+            val v = quad.toFB()
+            GLES20.glUniform4f(uCol, r, g, b, 1f)
+            v.position(0)
+            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, v)
+            GLES20.glEnableVertexAttribArray(aPos)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 6)
+        }
+        GLES20.glDisable(GLES20.GL_BLEND)
+        GLES20.glDepthMask(true)
+    }
+
+    /** Fully-saturated hue (0..1) → RGB. */
+    private fun hsvBright(h: Float): Triple<Float, Float, Float> {
+        val f = (h * 6f)
+        val i = f.toInt() % 6
+        val frac = f - f.toInt()
+        return when (i) {
+            0 -> Triple(1f, frac, 0f)
+            1 -> Triple(1f - frac, 1f, 0f)
+            2 -> Triple(0f, 1f, frac)
+            3 -> Triple(0f, 1f - frac, 1f)
+            4 -> Triple(frac, 0f, 1f)
+            else -> Triple(1f, 0f, 1f - frac)
+        }
+    }
+
+    // ── The CCTV feeds ────────────────────────────────────────────────────────
+    // Re-renders the city from a security camera into the feed atlas, then puts
+    // the shader back exactly as pass 1 expects to find it: same viewport, same
+    // matrix, same eye, and the lights nearest THAT eye rather than the camera's.
+
+    private fun drawCctvFeeds(mvpMain: FloatArray, col: Float, groupOf: HashMap<Int, FloatArray>?) {
+        // The monster is what the desk is really for: cameras near it drift off
+        // their beat and follow it, so it turns up on a screen before it turns up
+        // at the door.
+        cctv.watch(monsterX, monsterZ, monsterActive)
+        cctv.refresh(CCTV_FEEDS_PER_FRAME) { feedMvp, ex, ey, ez ->
+            drawFeedScene(feedMvp, ex, ey, ez, col, groupOf)
+        }
+        GLES20.glViewport(0, 0, sw, sh)
+        GLES20.glUniformMatrix4fv(uMVP, 1, false, mvpMain, 0)
+        GLES20.glUniform1f(uAerial, aerialBlend)
+        setXform(null)
+        if (lightingOn) {
+            GLES20.glUniform3f(uCamPos, camX, camY, camZ)
+            uploadNearestLights()
+        }
+    }
+
+    /** One feed: the city as that camera sees it, frustum-culled down to what it can. */
+    private fun drawFeedScene(
+        feedMvp: FloatArray, ex: Float, ey: Float, ez: Float,
+        col: Float, groupOf: HashMap<Int, FloatArray>?,
+    ) {
+        GLES20.glUniformMatrix4fv(uMVP, 1, false, feedMvp, 0)
+        GLES20.glUniform1f(uAerial, aerialBlend)
+        GLES20.glUniform1f(uFog, 0f)
+        if (lightingOn) {
+            GLES20.glUniform3f(uCamPos, ex, ey, ez)
+            uploadNearestLights(ex, ez)
+        }
+        extractFrustum(feedMvp)
+
+        val radA = ((radAngle % 360f) + 360f) % 360f
+        val dkLvl = darknessLevel.coerceIn(0f, 1f)
+        val xf = FloatArray(10)
+        setXform(null)
+
+        for ((i, m) in meshes.withIndex()) {
+            // A feed carries the city itself, not the mood: no shadow blobs, no
+            // glow pass, no sky. It's a 256px window on a monitor.
+            if (m.glow || m.sky || m.softShadow) continue
+            if (m.mode == GLES20.GL_LINES) continue
+            if (m.aerialSkip && cellStage < 3) continue
+            if (m.radDoor && radDoorOpen) continue
+            // Textured surfaces are all inside Building 10, which no street camera
+            // can see into — and this pass never binds a texture, so drawing them
+            // here would just paint them flat white.
+            if (m.tex != 0) continue
+
+            var falling = false
+            if (groupOf != null) {
+                val g = groupOf[i]
+                if (g != null) {
+                    if (!collapseXform(g, col, xf)) continue   // this one has already fallen
+                    falling = true
+                }
+            }
+            // A toppling building sweeps well outside its own bounds, so a sphere
+            // test against where it used to stand would cull it out of shot right
+            // when it's the thing worth watching. Only cull what is standing still.
+            if (!falling) {
+                if (!inFeedFrustum(i, 0f, 0f, 0f)) continue
+                setXform(null)
+            } else setXform(xf)
+
+            val r: Float; val g: Float; val b: Float
+            if (m.lava) {
+                val p = 0.5f + sin(lavaShift * 2f * PI.toFloat() + m.r * 4f).toFloat() * 0.5f
+                r = p; g = p * 0.28f; b = 0.02f
+            } else if (m.radArc) {
+                val seg = ((m.arcAngle % 360f) + 360f) % 360f
+                if (!arcInRange(seg, radA, radA + 108f) && !arcInRange(seg, radA + 180f, radA + 288f)) continue
+                r = 0.0f; g = 0.702f; b = 0.753f
+            } else if (m.windowDigit in 1..9) {
+                val idx = m.windowDigit - 1
+                if (idx in buildingCompleted.indices && buildingCompleted[idx]) {
+                    r = 0.02f; g = 0.02f; b = 0.03f
+                } else {
+                    r = 0.30f + 0.70f * dkLvl
+                    g = 0.78f + 0.08f * dkLvl
+                    b = 0.80f - 0.45f * dkLvl
+                }
+            } else { r = m.r; g = m.g; b = m.b }
+
+            setLit(if (m.lava || m.radArc || m.noAO) 0f else 1f)
+            GLES20.glUniform4f(uCol, r, g, b, m.a)
+            m.buf.position(0)
+            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, m.buf)
+            GLES20.glEnableVertexAttribArray(aPos)
+            GLES20.glDrawArrays(m.mode, 0, m.cnt)
+        }
+        setXform(null)
+
+        // The doors have to come along: the buildings have real holes cut for them.
+        drawDoors()
+        drawMonster()
+    }
+
+    /** Gribb–Hartmann planes of [m] (column-major), normalised, inward-facing. */
+    private fun extractFrustum(m: FloatArray) {
+        fun plane(i: Int, s: Float, row: Int) {
+            val p = frustum[i]
+            for (k in 0 until 4) p[k] = m[k * 4 + 3] + s * m[k * 4 + row]
+            val len = sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2])
+            if (len > 1e-6f) { p[0] /= len; p[1] /= len; p[2] /= len; p[3] /= len }
+        }
+        plane(0,  1f, 0); plane(1, -1f, 0)   // left, right
+        plane(2,  1f, 1); plane(3, -1f, 1)   // bottom, top
+        plane(4,  1f, 2); plane(5, -1f, 2)   // near, far
+    }
+
+    private fun inFeedFrustum(idx: Int, sx: Float, sy: Float, sz: Float): Boolean {
+        val b = idx * 4
+        if (b + 3 >= meshSpheres.size) return true
+        val r = meshSpheres[b + 3]
+        if (r <= 0f) return true
+        val x = meshSpheres[b] + sx
+        val y = meshSpheres[b + 1] + sy
+        val z = meshSpheres[b + 2] + sz
+        for (p in frustum) {
+            if (p[0] * x + p[1] * y + p[2] * z + p[3] < -r) return false
+        }
+        return true
+    }
+
     // ── Scene ─────────────────────────────────────────────────────────────────
 
     fun rebuildScene() { buildScene() }
@@ -529,22 +1175,34 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         meshes.clear()
         cameraMounts.clear()
         doorMounts.clear()
-        if (isLandscape) { buildSceneLandscape(); return }
+        lampLights.clear()
+        collapseGroups.clear()
+        cctv.setMonitors(emptyList())   // re-found from the model in addRadButton
+        cctv.feeds = emptyList()
+        if (isLandscape) { buildSceneLandscape(); finishScene(); return }
         addGround()
         for (b in BUILDINGS)      addBuildingShadow(b[1], b[2], b[3]*buildingHeightScale)
         for (f in FUNCTION_BLDGS) addBuildingShadow(f[0], f[1], f[2]*buildingHeightScale)
         for (i in DAMAGED_BLDGS.indices) addBuildingShadow(DAMAGED_BLDGS[i][0], DAMAGED_BLDGS[i][1], DAMAGED_BLDGS[i][2]*buildingHeightScale)
         for (o in OPERATOR_BLDGS) addBuildingShadow(o[0], o[1], o[2]*buildingHeightScale)
-        for (b in BUILDINGS) addBuilding(b[1], b[2], b[3]*buildingHeightScale, b[4].toInt(), b[0].toInt().toString())
+        for (b in BUILDINGS) collapsible(b[1], b[2]) {
+            addBuilding(b[1], b[2], b[3]*buildingHeightScale, b[4].toInt(), b[0].toInt().toString())
+        }
         // All non-door buildings (function / damaged / operator) share the ruin
         // renderer now — each takes its own row palette and Y rotation.
-        for (i in FUNCTION_BLDGS.indices) addDamagedBuilding(FUNCTION_BLDGS[i][0], FUNCTION_BLDGS[i][1], FUNCTION_BLDGS[i][2]*buildingHeightScale, FUNCTION_LABELS[i])
-        for (i in DAMAGED_BLDGS.indices)  addDamagedBuilding(DAMAGED_BLDGS[i][0],  DAMAGED_BLDGS[i][1],  DAMAGED_BLDGS[i][2]*buildingHeightScale,  DAMAGED_LABELS[i])
-        for (i in OPERATOR_BLDGS.indices) addDamagedBuilding(OPERATOR_BLDGS[i][0], OPERATOR_BLDGS[i][1], OPERATOR_BLDGS[i][2]*buildingHeightScale, OPERATOR_LABELS[i])
+        for (i in FUNCTION_BLDGS.indices) collapsible(FUNCTION_BLDGS[i][0], FUNCTION_BLDGS[i][1]) {
+            addDamagedBuilding(FUNCTION_BLDGS[i][0], FUNCTION_BLDGS[i][1], FUNCTION_BLDGS[i][2]*buildingHeightScale, FUNCTION_LABELS[i])
+        }
+        for (i in DAMAGED_BLDGS.indices) collapsible(DAMAGED_BLDGS[i][0], DAMAGED_BLDGS[i][1]) {
+            addDamagedBuilding(DAMAGED_BLDGS[i][0],  DAMAGED_BLDGS[i][1],  DAMAGED_BLDGS[i][2]*buildingHeightScale,  DAMAGED_LABELS[i])
+        }
+        for (i in OPERATOR_BLDGS.indices) collapsible(OPERATOR_BLDGS[i][0], OPERATOR_BLDGS[i][1]) {
+            addDamagedBuilding(OPERATOR_BLDGS[i][0], OPERATOR_BLDGS[i][1], OPERATOR_BLDGS[i][2]*buildingHeightScale, OPERATOR_LABELS[i])
+        }
         addWestWall()
         addLava()
         addGreenNorth()
-        addRadButton(80f * buildingHeightScale)
+        addRadButton(80f * buildingHeightScale, scale = RAD_SCALE)
         addDebris()
         addStickmen()
         if (bridgePieces > 0) addBridge(bridgePieces)
@@ -559,6 +1217,59 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             )
         }
         addCameras(BUILDINGS, FUNCTION_BLDGS, DAMAGED_BLDGS, OPERATOR_BLDGS)
+        addSkyCracks()
+        // Must run last: it reads back the window meshes everything above added.
+        collectWindowLights()
+        finishScene()
+    }
+
+    // Everything that has to read the finished scene back: the per-mesh bounds the
+    // CCTV cull needs, and the feed cameras, which are picked from the security
+    // cameras addCameras just hung on the buildings.
+    private fun finishScene() {
+        meshSpheres = FloatArray(meshes.size * 4)
+        for ((i, m) in meshes.withIndex()) {
+            val b = m.buf
+            var mnX = Float.MAX_VALUE; var mxX = -Float.MAX_VALUE
+            var mnY = Float.MAX_VALUE; var mxY = -Float.MAX_VALUE
+            var mnZ = Float.MAX_VALUE; var mxZ = -Float.MAX_VALUE
+            var k = 0
+            while (k + 2 < m.cnt * 3) {
+                val x = b.get(k); val y = b.get(k + 1); val z = b.get(k + 2)
+                if (x < mnX) mnX = x; if (x > mxX) mxX = x
+                if (y < mnY) mnY = y; if (y > mxY) mxY = y
+                if (z < mnZ) mnZ = z; if (z > mxZ) mxZ = z
+                k += 3
+            }
+            b.position(0)
+            if (mnX > mxX) continue
+            val cx = (mnX + mxX) * 0.5f; val cy = (mnY + mxY) * 0.5f; val cz = (mnZ + mxZ) * 0.5f
+            meshSpheres[i * 4]     = cx
+            meshSpheres[i * 4 + 1] = cy
+            meshSpheres[i * 4 + 2] = cz
+            meshSpheres[i * 4 + 3] = 0.5f * sqrt(
+                (mxX - mnX) * (mxX - mnX) + (mxY - mnY) * (mxY - mnY) + (mxZ - mnZ) * (mxZ - mnZ))
+        }
+        buildCctvFeeds()
+    }
+
+    // One feed per atlas cell, spread evenly over the cameras hanging on the
+    // buildings. Each looks out and down along the diagonal its corner faces —
+    // the same way its model is aimed — over a different distance, so no two
+    // screens show the same slab of street.
+    private fun buildCctvFeeds() {
+        val mounts = cameraMounts
+        if (mounts.isEmpty()) { cctv.feeds = emptyList(); return }
+        cctv.feeds = List(CityCctv.CELLS) { i ->
+            val m = mounts[i * mounts.size / CityCctv.CELLS]
+            val reach = 280f + (i % 3) * 140f         // how far down the street it looks
+            val floor = 45f + (i % 2) * 40f           // and how steeply
+            CctvFeed(
+                m[0], m[1], m[2],
+                m[0] + m[3] * reach, floor, m[2] + m[4] * reach,
+                i * 1.7f,
+            )
+        }
     }
 
     // ── Landscape scene (horizontal orientation) ──────────────────────────────
@@ -652,6 +1363,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             lampRows = listOf(-cell * 1.5f, -cell * 0.5f, cell * 0.5f, cell * 1.5f)
         )
         addCameras(lBUILDINGS, lFUNCTION_BLDGS, lDAMAGED_BLDGS, lOPERATOR_BLDGS)
+        collectWindowLights()
     }
 
     // Wall with gap: two sections north and south of the gap opening
@@ -1289,8 +2001,24 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
 
     private fun addLava() {
         val lxW=-600f; val lxE=600f
-        addRoundedRectFill(lxW, 20f, LAVA_N, lxE, LAVA_S - 20f,
+        addRoundedRectFill(lxW, LAVA_Y, LAVA_N, lxE, LAVA_S - 20f,
             12f, 1.0f, 0.32f, 0.04f, fog=0.05f)
+        // Molten streaks — red/orange, glow so they emit light at night (PASS 2).
+        val rnd = java.util.Random(4242L)
+        val y = LAVA_Y + 1f
+        val zSpan = abs(LAVA_N - LAVA_S)
+        for (i in 0 until 18) {
+            val cx = lxW + 70f + rnd.nextFloat() * (lxE - lxW - 140f)
+            val cz = LAVA_N + 40f + rnd.nextFloat() * (zSpan - 80f)
+            val hw = 7f + rnd.nextFloat() * 9f       // half-width
+            val hl = 28f + rnd.nextFloat() * 50f     // half-length (streaks run along Z)
+            val orange = i % 2 == 0
+            val r = if (orange) 1.0f else 0.95f
+            val g = if (orange) 0.46f else 0.13f
+            val b = if (orange) 0.06f else 0.02f
+            addQ(cx-hw, y, cz-hl,  cx+hw, y, cz-hl,  cx+hw, y, cz+hl,  cx-hw, y, cz+hl,
+                 r, g, b, a=1f, fog=0.05f, glow=true)
+        }
     }
 
     private fun addRoundedRectFill(
@@ -1334,31 +2062,102 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         addQ(-900f,0f,lzS, 900f,0f,lzS, 900f,0f,CITY_N, -900f,0f,CITY_N, 0.96f,0.94f,0.88f, fog=0.0f)
     }
 
-    // ── Sun — vertical disc in sky, only visible during gameplay ─────────────
+    // ── Sun — a disc in the SKY, at the far end of the SUN bearing ───────────
+    // Built around the point SUN * SUN_DIST, then re-centred on the camera each
+    // frame (the `sky` flag), so it reads as a body at infinity rather than a
+    // slab parked inside the city. It never gets nearer, it keeps its place in
+    // the sky as the player walks, and the buildings sweep across it.
+    // Emissive: the sun is a light source, so it must never be shaded.
+
+    /**
+     * Cracks in the sky. Black jagged rifts hung on the sky dome, camera-relative
+     * like the sun, so they sit ON the sky rather than in the city. Drawn only
+     * during the collapse, opening one after another — the sky tearing, not
+     * shattering all at once.
+     */
+    private fun addSkyCracks() {
+        val rnd = java.util.Random(20261013L)   // fixed: the same sky tears the same way
+        val n = 7
+        for (i in 0 until n) {
+            var az = rnd.nextFloat() * 360f
+            var el = 22f + rnd.nextFloat() * 50f
+            var width = 26f + rnd.nextFloat() * 26f
+            val segs = 7 + rnd.nextInt(5)
+            fun pt(azimuth: Float, elev: Float, w: Float): FloatArray {
+                val a = Math.toRadians(azimuth.toDouble())
+                val e = Math.toRadians(elev.toDouble())
+                val r = SKY_DIST * 0.92f
+                return floatArrayOf(
+                    (cos(e) * sin(a)).toFloat() * r,
+                    sin(e).toFloat() * r,
+                    (cos(e) * cos(a)).toFloat() * r,
+                    w)
+            }
+            val verts = mutableListOf<Float>()
+            var prev = pt(az, el, width)
+            for (sgi in 0 until segs) {
+                az += (rnd.nextFloat() - 0.35f) * 13f
+                el += (rnd.nextFloat() - 0.6f) * 9f
+                width *= 0.86f
+                val cur = pt(az, el, width)
+                val w0 = prev[3]; val w1 = cur[3]
+                verts += listOf(
+                    prev[0], prev[1] - w0, prev[2],  cur[0], cur[1] - w1, cur[2],  cur[0], cur[1] + w1, cur[2],
+                    prev[0], prev[1] - w0, prev[2],  cur[0], cur[1] + w1, cur[2],  prev[0], prev[1] + w0, prev[2],
+                )
+                prev = cur
+            }
+            val arr = verts.toFloatArray()
+            if (arr.isEmpty()) continue
+            // Near-black: a crack is the ABSENCE of sky.
+            meshes.add(Mesh(arr.toFB(), GLES20.GL_TRIANGLES, arr.size / 3,
+                0.02f, 0.01f, 0.03f, 1f, fog = 0f,
+                aerialSkip = true, sky = true, crack = true,
+                arcAngle = (i + 1).toFloat() / n))   // reused field: when this one opens
+        }
+    }
 
     private fun addSun() {
-        val sx=450f; val sy=520f; val sz=-1400f; val segs=24
-        val pi=PI.toFloat()
-        val rings = listOf(
+        // Sun: fades out as night comes on.
+        addSkyDisc(SUN, 95f, listOf(
             floatArrayOf(1.0f, 1.00f, 0.92f, 0.40f),   // golden core
             floatArrayOf(1.6f, 0.85f, 0.48f, 0.75f),   // inner purple
             floatArrayOf(2.5f, 0.55f, 0.22f, 0.72f),   // mid purple
             floatArrayOf(3.8f, 0.30f, 0.10f, 0.45f),   // outer glow
-        )
+        ), night = false)
+        // Moon: the night's key light, on its own fixed bearing, fading in as the
+        // sun goes. Pale and cold, with a tight halo rather than a broad glow.
+        addSkyDisc(MOON, 70f, listOf(
+            floatArrayOf(1.0f, 0.93f, 0.95f, 1.00f),   // pale core
+            floatArrayOf(1.35f, 0.62f, 0.70f, 0.92f),  // cold rim
+            floatArrayOf(2.1f, 0.30f, 0.38f, 0.62f),   // faint halo
+        ), night = true)
+    }
+
+    // A disc hung in the sky along `dir`, built around dir * SKY_DIST. The `sky`
+    // flag re-centres it on the camera each frame, so it behaves as a body at
+    // infinity: never nearer, always the same bearing, with the city passing in
+    // front of it. Emissive - a light source must never be shaded.
+    private fun addSkyDisc(dir: FloatArray, baseR: Float, rings: List<FloatArray>, night: Boolean) {
+        val sx = dir[0] * SKY_DIST; val sy = dir[1] * SKY_DIST; val sz = dir[2] * SKY_DIST
+        val segs = 24
+        val pi = PI.toFloat()
+        // The disc's face is normal to +Z. Both bodies sit off the player's
+        // north/south axis, so each is seen close to face-on from the city.
         for (ring in rings) {
             val scale=ring[0]; val cr=ring[1]; val cg=ring[2]; val cb=ring[3]
-            val r = 140f*scale
+            val r = baseR*scale
             val verts = mutableListOf<Float>()
             for (i in 0 until segs) {
                 val a0 = i.toFloat()/segs*2f*pi
                 val a1 = (i+1).toFloat()/segs*2f*pi
-                // Vertical disc in XY plane (normal facing +Z, visible when looking north)
                 verts += listOf(sx, sy, sz)
                 verts += listOf(sx+r*cos(a0), sy+r*sin(a0), sz)
                 verts += listOf(sx+r*cos(a1), sy+r*sin(a1), sz)
             }
             val arr = verts.toFloatArray()
-            meshes.add(Mesh(arr.toFB(), GLES20.GL_TRIANGLES, arr.size/3, cr,cg,cb,1f, fog=0f, aerialSkip=true))
+            meshes.add(Mesh(arr.toFB(), GLES20.GL_TRIANGLES, arr.size/3, cr,cg,cb,1f, fog=0f,
+                aerialSkip=true, sky=true, skyNight=night))
         }
     }
 
@@ -1543,15 +2342,24 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     private fun addStickmen() {
         if (stickmanGroups.isEmpty() && stickman2Groups.isEmpty()) return
         val h = STICKMAN_TARGET_H
+        // Each figure is its own collapsible thing, and the kind that gets carried up
+        // rather than knocked down (see collapseXform). A tight footprint, so no
+        // camera or door on a nearby building can be mistaken for part of one.
+        fun statue(groups: List<ObjGroup>, minY: Float, mh: Float,
+                   x: Float, z: Float, yaw: Float, fog: Float) {
+            collapsible(x, z, 20f, 20f, COLLAPSE_SWEPT) {
+                addCharacterInstance(groups, minY, mh, x, z, 0f, h, yaw, fog)
+            }
+        }
         // ── Hiding behind the top row (just north of the row-A buildings) ────
-        addCharacterInstance(stickmanGroups,  STICKMAN_MIN_Y,  STICKMAN_H,  C1, RA - BD - 30f, 0f, h, 0.5f,  fog = 0.32f)
-        addCharacterInstance(stickman2Groups, STICKMAN2_MIN_Y, STICKMAN2_H, C3, RA - BD - 30f, 0f, h, -1.0f, fog = 0.32f)
+        statue(stickmanGroups,  STICKMAN_MIN_Y,  STICKMAN_H,  C1, RA - BD - 30f, 0.5f,  0.32f)
+        statue(stickman2Groups, STICKMAN2_MIN_Y, STICKMAN2_H, C3, RA - BD - 30f, -1.0f, 0.32f)
         // ── Between the damaged buildings (row E gaps) ───────────────────────
-        addCharacterInstance(stickmanGroups,  STICKMAN_MIN_Y,  STICKMAN_H,  (C2 + C3) * 0.5f, RE, 0f, h, 2.3f,  fog = 0.30f)
-        addCharacterInstance(stickman2Groups, STICKMAN2_MIN_Y, STICKMAN2_H, (C1 + C2) * 0.5f, RE, 0f, h, -0.4f, fog = 0.30f)
+        statue(stickmanGroups,  STICKMAN_MIN_Y,  STICKMAN_H,  (C2 + C3) * 0.5f, RE, 2.3f,  0.30f)
+        statue(stickman2Groups, STICKMAN2_MIN_Y, STICKMAN2_H, (C1 + C2) * 0.5f, RE, -0.4f, 0.30f)
         // ── Under the city (south rubble field) ──────────────────────────────
-        addCharacterInstance(stickmanGroups,  STICKMAN_MIN_Y,  STICKMAN_H,  -150f, RE + BD + 90f,  0f, h, 3.4f, fog = 0.30f)
-        addCharacterInstance(stickman2Groups, STICKMAN2_MIN_Y, STICKMAN2_H,  175f, RE + BD + 120f, 0f, h, 1.2f, fog = 0.30f)
+        statue(stickmanGroups,  STICKMAN_MIN_Y,  STICKMAN_H,  -150f, RE + BD + 90f,  3.4f, 0.30f)
+        statue(stickman2Groups, STICKMAN2_MIN_Y, STICKMAN2_H,  175f, RE + BD + 120f, 1.2f, 0.30f)
     }
 
     // Landscape: same three zones in the rotated layout.
@@ -1572,6 +2380,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     // ── Player orb ────────────────────────────────────────────────────────────
 
     private fun drawOrb(cx: Float, cy: Float, cz: Float, r: Float, mvp: FloatArray) {
+        setLit(0f)
         val top=floatArrayOf(cx,cy+r,cz); val bot=floatArrayOf(cx,cy-r,cz)
         val n=floatArrayOf(cx,cy,cz-r);   val s=floatArrayOf(cx,cy,cz+r)
         val e=floatArrayOf(cx+r,cy,cz);   val w=floatArrayOf(cx-r,cy,cz)
@@ -1609,14 +2418,34 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
 
     // ── RAD button — large cylindrical button floating on the lava ───────────
 
-    private fun addRadButton(h: Float, bx: Float = 0f, bz: Float = -CELL * 5.75f) {  // -1610 at CELL=280
+    // How much bigger the city's (enterable) mute button is than the raw model.
+    // Must stay in step with RAD_SCALE in CalculatorCityView, which derives the
+    // player's collision shell and doorway from it.
+    private val RAD_SCALE = 3f
+
+    // Building 10's doorway — an opening the model itself carries in its drum wall,
+    // measured from the mesh: it spans 90°..101° around the drum (0° = +X, 90° = +Z,
+    // i.e. the south face, toward the bridge) and rises to 12.5 of the wall's 33.5.
+    // Nothing is cut here; the hole is simply filled with a black panel (the door),
+    // which stops being drawn once the player has given their rating (radDoorOpen).
+    private val RAD_DOOR_DEG      = 95.5f   // centre of the model's opening
+    private val RAD_DOOR_HALF_DEG = 5.75f   // ⇒ ~53 world units wide at r0 = 264
+    private val RAD_DOOR_TOP_FRAC = 0.373f  // 12.5 / 33.5 of the drum's height
+    @Volatile var radDoorOpen = false
+
+    // The city's mute button is enterable (Building 10), so it's blown up to
+    // RAD_SCALE — at 1× the props inside the model only come up to the player's
+    // knee. The landscape decoration keeps 1×.
+    private fun addRadButton(h: Float, bx: Float = 0f, bz: Float = -CELL * 5.75f,
+                             scale: Float = 1f) {
         val baseY = 0f               // sits on ground level
-        val topY  = baseY + h
-        val r0    = 88f              // outer radius
-        val rimW  = 60f              // rim width
-        val rimH  =  6f              // rim height above top face
+        var topY  = baseY + h
+        val r0    = 88f * scale      // outer radius
+        val rimW  = 60f * scale      // rim width
+        val rimH  =  6f * scale      // rim height above top face
         val sides = 16
         val fog   = 0.06f
+        radBx = bx; radBz = bz; radOuterR = r0
 
         // Colors
         val tR=1.00f; val tG=1.00f; val tB=1.00f   // top face white
@@ -1624,7 +2453,133 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         val rR=0.98f; val rG=0.62f; val rB=0.14f   // rim lighter orange
         val eR=0.30f; val eG=0.14f; val eB=0.01f   // dark outline
 
-        for (i in 0 until sides) {
+        val mute = muteButtonGroups
+        if (mute.isNotEmpty()) {
+            // Building 10 = the player's mutebutton model, scaled to radius r0.
+            var mnX=Float.MAX_VALUE; var mxX=-Float.MAX_VALUE
+            var mnY=Float.MAX_VALUE; var mxY=-Float.MAX_VALUE
+            var mnZ=Float.MAX_VALUE; var mxZ=-Float.MAX_VALUE
+            for (g in mute) { var k=0; while (k < g.verts.size) {
+                val x=g.verts[k]; val y=g.verts[k+1]; val z=g.verts[k+2]
+                if (x<mnX) mnX=x; if (x>mxX) mxX=x; if (y<mnY) mnY=y; if (y>mxY) mxY=y
+                if (z<mnZ) mnZ=z; if (z>mxZ) mxZ=z; k+=3 } }
+            val cxL=(mnX+mxX)*0.5f; val czL=(mnZ+mxZ)*0.5f
+            val wdt=maxOf(mxX-mnX, mxZ-mnZ).coerceAtLeast(1e-3f)
+            val scl=(2f*r0)/wdt
+            topY = (mxY-mnY)*scl
+            // Split each material group into the button's SHELL (the drum wall and
+            // its lid) and its INTERIOR (everything standing on the floor — the
+            // buttons the player walks in to reach). Only the shell is drawn
+            // see-through from inside, so the city stays visible past it.
+            //   · wall   → local radius rides the drum's outer edge
+            //   · lid    → sits high above the floor clutter
+            // The interior props all top out at ~23% of the model's height and
+            // stay inside 0.92 of its radius, so these thresholds separate cleanly.
+            val shellR = (wdt * 0.5f) * 0.94f
+            val shellY = (mxY - mnY) * 0.45f
+            radDoorTopY = (mxY - mnY) * RAD_DOOR_TOP_FRAC * scl
+            for (g in mute) {
+                // A textured group (the whiteboards' image planes) goes in whole. It
+                // is interior by definition — nothing on the drum's wall carries an
+                // image — and the shell/inner split below reorders triangles, which
+                // would tear its UVs away from the vertices they belong to.
+                val texName = g.texture
+                if (texName != null && g.uvs.isNotEmpty()) {
+                    val out = FloatArray(g.verts.size)
+                    var j = 0
+                    while (j + 2 < out.size) {
+                        out[j]     = (g.verts[j]     - cxL) * scl + bx
+                        out[j + 1] = (g.verts[j + 1] - mnY) * scl + baseY
+                        out[j + 2] = (g.verts[j + 2] - czL) * scl + bz
+                        j += 3
+                    }
+                    val texId = modelTexture(texName)
+                    if (texId != 0) {
+                        meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3,
+                            1f, 1f, 1f, 1f, fog, tex = texId, uv = g.uvs.toFB()))
+                        continue
+                    }
+                    // No image on disk — fall through and draw it flat, as before.
+                }
+                val shell = ArrayList<Float>()
+                val inner = ArrayList<Float>()
+                var k = 0
+                while (k + 8 < g.verts.size) {
+                    // Classify by triangle centroid in the model's own coordinates.
+                    var cX = 0f; var cY = 0f; var cZ = 0f
+                    for (v in 0 until 3) {
+                        cX += g.verts[k + v*3]; cY += g.verts[k + v*3 + 1]; cZ += g.verts[k + v*3 + 2]
+                    }
+                    cX /= 3f; cY /= 3f; cZ /= 3f
+                    val rLoc = hypot(cX - cxL, cZ - czL)
+                    val dst = if (rLoc > shellR || (cY - mnY) > shellY) shell else inner
+                    for (v in 0 until 9) dst.add(g.verts[k + v])
+                    k += 9
+                }
+                // Colours arrive gamma-corrected from ObjLoader; the lighting does
+                // the rest of the work now. The exception is the monitors' panels:
+                // they're painted blue in the model, but a screen only has a colour
+                // when something is on it — the live feed is drawn over them (see
+                // buildCctvScreens), so the glass underneath goes near-black.
+                val isScreen = g.materialName == SCREEN_MTL
+                val r  = if (isScreen) 0.03f  else g.r
+                val gg = if (isScreen) 0.035f else g.g
+                val b  = if (isScreen) 0.04f  else g.b
+                for (isShell in listOf(true, false)) {
+                    val src = if (isShell) shell else inner
+                    if (src.isEmpty()) continue
+                    val out = FloatArray(src.size)
+                    var j = 0
+                    while (j < src.size) {
+                        out[j]     = (src[j]     - cxL) * scl + bx
+                        out[j + 1] = (src[j + 1] - mnY) * scl + baseY
+                        out[j + 2] = (src[j + 2] - czL) * scl + bz
+                        j += 3
+                    }
+                    meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size/3, r, gg, b, 1f, fog,
+                        radShell = isShell))
+                }
+            }
+
+            // The door: a black panel filling the model's own opening, following the
+            // drum's curve. Skipped entirely once the rating has been given
+            // (radDoorOpen), leaving just the doorway the model already has.
+            run {
+                val segs = 6
+                val a0 = RAD_DOOR_DEG - RAD_DOOR_HALF_DEG
+                val a1 = RAD_DOOR_DEG + RAD_DOOR_HALF_DEG
+                for (i in 0 until segs) {
+                    val t0 = Math.toRadians((a0 + (a1 - a0) * i / segs).toDouble())
+                    val t1 = Math.toRadians((a0 + (a1 - a0) * (i + 1) / segs).toDouble())
+                    val x0 = bx + cos(t0).toFloat() * r0; val z0 = bz + sin(t0).toFloat() * r0
+                    val x1 = bx + cos(t1).toFloat() * r0; val z1 = bz + sin(t1).toFloat() * r0
+                    val v = floatArrayOf(
+                        x0, baseY, z0,  x1, baseY, z1,  x1, baseY + radDoorTopY, z1,
+                        x0, baseY, z0,  x1, baseY + radDoorTopY, z1,  x0, baseY + radDoorTopY, z0,
+                    )
+                    meshes.add(Mesh(v.toFB(), GLES20.GL_TRIANGLES, 6,
+                        0.02f, 0.02f, 0.03f, 1f, 0f, noAO = true, radDoor = true))
+                }
+            }
+
+            // The desk. Only the enterable Building 10 gets live monitors — the
+            // landscape scene keeps the button as a 1x decoration you never walk into.
+            if (scale > 1f) buildCctvScreens(mute, cxL, czL, mnY, scl, bx, baseY, bz)
+
+            // Collision footprints for the furniture inside — anything tall enough to
+            // walk into. Skips the drum itself and the floor-flat props (rugs, papers).
+            val props = mutableListOf<FloatArray>()
+            for (ob in muteButtonBounds) {
+                if (ob.name.startsWith("Cylinder") && (ob.maxY - ob.minY) > (mxY - mnY) * 0.45f) continue
+                if (ob.maxY - mnY < (mxY - mnY) * 0.03f) continue    // too flat to block
+                val wx0 = (ob.minX - cxL) * scl + bx; val wx1 = (ob.maxX - cxL) * scl + bx
+                val wz0 = (ob.minZ - czL) * scl + bz; val wz1 = (ob.maxZ - czL) * scl + bz
+                props.add(floatArrayOf(
+                    (wx0 + wx1) * 0.5f, (wz0 + wz1) * 0.5f,
+                    abs(wx1 - wx0) * 0.5f, abs(wz1 - wz0) * 0.5f))
+            }
+            radPropFootprints = props
+        } else for (i in 0 until sides) {
             val a0 = i.toFloat() / sides * 2f * PI.toFloat()
             val a1 = (i + 1).toFloat() / sides * 2f * PI.toFloat()
             val x0 = bx + cos(a0).toFloat() * r0;    val z0v = bz + sin(a0).toFloat() * r0
@@ -1671,50 +2626,103 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 0f, 0f, 0f, 1f, fog, radArc = true, arcAngle = segCenterDeg))
         }
 
-        // Door — dark purple void on the south face (toward the city)
-        val dw = r0 * 0.30f
-        val dh = topY * 0.40f
-        val doorZ = bz + r0 + 0.5f   // just outside the south pole of the cylinder
-        addQ(bx-dw, 0f, doorZ,  bx+dw, 0f, doorZ,  bx+dw, dh, doorZ,  bx-dw, dh, doorZ,
-             0.12f, 0.06f, 0.18f, fog=fog)
+        // The doorway is cut straight out of the drum above (and filled with the
+        // black door panel) — there is no separate door model on this building.
     }
 
-    // ── Bridge — one segment per completed building, spanning lava ───────────
-    // Starts at LAVA_S (just south of north buildings) and extends north in 9 pieces.
+    // ── The monitors on the desk ────────────────────────────────────────────────
+    // Finds the model's screen panels (SCREEN_MTL), maps each one into world space
+    // with the same transform the rest of the button gets, and hands them to the
+    // CCTV rig as a 2x2 grid of live feeds each. Nothing here is hard-coded to a
+    // position: move the desk in Blender and the screens move with it. If the model
+    // stops having those panels, [CityCctv] simply has nothing to draw.
+    private fun buildCctvScreens(
+        mute: List<ObjGroup>, cxL: Float, czL: Float, mnY: Float,
+        scl: Float, bx: Float, baseY: Float, bz: Float,
+    ) {
+        val monitors = mutableListOf<CctvMonitor>()
+        var cell = 0
+        for (g in mute) {
+            if (g.materialName != SCREEN_MTL) continue
+            if (cell + 4 > CityCctv.CELLS) break
+            val w = FloatArray(g.verts.size)
+            var j = 0
+            while (j + 2 < w.size) {
+                w[j]     = (g.verts[j]     - cxL) * scl + bx
+                w[j + 1] = (g.verts[j + 1] - mnY) * scl + baseY
+                w[j + 2] = (g.verts[j + 2] - czL) * scl + bz
+                j += 3
+            }
+            // A monitor faces whoever is standing in the room, i.e. away from the
+            // wall it's backed against and toward the drum's axis.
+            var sx = 0f; var sz = 0f; var n = 0
+            j = 0
+            while (j + 2 < w.size) { sx += w[j]; sz += w[j + 2]; n++; j += 3 }
+            sx /= n; sz /= n
+            var ix = bx - sx; var iz = bz - sz
+            val il = hypot(ix, iz)
+            if (il < 1e-3f) { ix = 0f; iz = 1f } else { ix /= il; iz /= il }
+
+            val m = CityCctv.frontQuad(w, ix, iz, cell, 2, 2, 0.6f) ?: continue
+            monitors.add(m)
+            cell += m.cellCount
+        }
+        cctv.setMonitors(monitors)
+    }
+
+    // ── Bridge — the player's custom pieces (bridge1..9), one per completed
+    // building, laid south→north across the lava. Piece 1 is the south approach,
+    // piece 9 the north approach. Lamp bulbs (object "Icosphere") glow at night.
     private fun addBridge(pieces: Int) {
-        val bw        = 22f          // half-width
-        // Deck must sit ABOVE the lava plane (y = 20f in addLava) — at y = 5f
-        // it was depth-occluded by the lava and never visible from the aerial view.
-        val yDeck     = 22f          // deck height (just above the lava surface)
-        val yRail     = yDeck + 12f  // railing top
-        val zStart    = LAVA_S       // -512 (south edge of lava)
-        val pieceLen  = abs(LAVA_N - LAVA_S) / 9f  // ~40 units each
+        if (bridgeGroups.size < 9) return
+        val modelLen = 6.2f                        // approx local Z length of a piece
+        val pieceLen = abs(LAVA_N - LAVA_S) / 9f   // ~40 world units per slot
+        val lenScale = pieceLen / modelLen         // Z scale spans the lava
+        val girth = lenScale * 1.55f               // wider + taller so the bridge reads bigger
+        val yBase = LAVA_Y                         // model y=0 sits on the lava surface
 
         for (i in 0 until pieces.coerceAtMost(9)) {
-            val z0 = zStart - i * pieceLen          // more negative = further north
-            val z1 = z0 - pieceLen
-            val fog = 0.04f
+            val groups = bridgeGroups[i]
+            if (groups.isEmpty()) continue
+            // Local centre (X,Z) of the whole piece → drop it in the middle of its slot.
+            var minX = Float.MAX_VALUE; var maxX = -Float.MAX_VALUE
+            var minZ = Float.MAX_VALUE; var maxZ = -Float.MAX_VALUE
+            for (g in groups) { var k = 0; while (k < g.verts.size) {
+                val x = g.verts[k]; val z = g.verts[k + 2]
+                if (x < minX) minX = x; if (x > maxX) maxX = x
+                if (z < minZ) minZ = z; if (z > maxZ) maxZ = z; k += 3 } }
+            val cxLocal = (minX + maxX) * 0.5f
+            val czLocal = (minZ + maxZ) * 0.5f
+            val zSlot = LAVA_S - (i + 0.5f) * pieceLen
 
-            // Deck (warm wood placeholder)
-            addQ(-bw, yDeck, z0,  bw, yDeck, z0,  bw, yDeck, z1,  -bw, yDeck, z1,
-                 0.68f, 0.52f, 0.28f, fog = fog)
-
-            // Left side beam
-            addQ(-bw, yDeck, z0,  -bw, yDeck, z1,  -bw, yRail, z1,  -bw, yRail, z0,
-                 0.50f, 0.38f, 0.18f, fog = fog)
-            // Right side beam
-            addQ(bw, yDeck, z1,  bw, yDeck, z0,  bw, yRail, z0,  bw, yRail, z1,
-                 0.50f, 0.38f, 0.18f, fog = fog)
-
-            // Plank seam lines across the deck
-            val planks = 5
-            for (p in 0..planks) {
-                val zp = z0 - (pieceLen / planks) * p
-                addL(-bw, yDeck + 0.8f, zp,  bw, yDeck + 0.8f, zp,  0.35f, 0.25f, 0.10f)
+            // Each piece is its own collapsible thing, with its own footprint: when
+            // the city goes, the bridge comes apart at the joints the player built it
+            // at — nine planks, each picking its own moment, some tipping off their
+            // end and some just dropping into the lava.
+            collapsible(0f, zSlot, (maxX - minX) * girth * 0.5f, pieceLen * 0.5f) {
+                for (g in groups) {
+                    val src = g.verts
+                    val out = FloatArray(src.size)
+                    var k = 0
+                    while (k < src.size) {
+                        out[k]     = (src[k]     - cxLocal) * girth
+                        out[k + 1] = src[k + 1] * girth + yBase
+                        out[k + 2] = (src[k + 2] - czLocal) * lenScale + zSlot
+                        k += 3
+                    }
+                    if (out.isEmpty()) continue
+                    val lamp = g.materialName == "Icosphere"        // the lamp bulb
+                    val post = g.materialName.startsWith("Cylinder") // lamp post
+                    val r: Float; val gg: Float; val b: Float
+                    when {
+                        lamp -> { r = 1f; gg = 0.84f; b = 0.4f }     // warm bulb (glows at night)
+                        post -> { r = 0.32f; gg = 0.30f; b = 0.28f }  // dark metal post
+                        else -> { r = 0.62f; gg = 0.55f; b = 0.46f }  // stone/wood deck
+                    }
+                    meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3,
+                        r, gg, b, 1f, 0.04f, glow = lamp, noAO = lamp))
+                }
             }
-            // Railing lines along the sides
-            addL(-bw, yRail, z0,  -bw, yRail, z1,  0.35f, 0.25f, 0.10f)
-            addL( bw, yRail, z0,   bw, yRail, z1,  0.35f, 0.25f, 0.10f)
         }
     }
 
@@ -1770,6 +2778,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 addInstancedGroup(g, px, baseY, pz, s, yaw = yawRad,
                     aerialSkip = true, glow = true, alpha = 1f,
                     glowColor = floatArrayOf(1.0f, 0.86f, 0.42f))
+                registerLampLight(g, px, baseY, pz, s, yawRad)
             }
         }
         // Warm pool of light on the street under each building-corner lamp.
@@ -1804,12 +2813,63 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                     addInstancedGroup(g, px, yOff, pz, s, yaw = yaw,
                         aerialSkip = true, glow = true, alpha = 1f,
                         glowColor = floatArrayOf(1.0f, 0.86f, 0.42f))
+                    registerLampLight(g, px, yOff, pz, s, yaw)
                 }
             }
             // Warm ground halo — fades in with darkness via glow flag. Boosted so
             // each lamp throws a visible pool of light onto the street at night.
             addHaloRing(px, pz, 1f,  30f, 1.00f, 0.78f, 0.34f, 0.75f)
             addHaloRing(px, pz, 30f, 64f, 1.00f, 0.78f, 0.34f, 0.42f)
+        }
+    }
+
+    // Register a point light at a lamp's bulb. The bulb group's centroid is put
+    // through exactly the same transform addInstancedGroup uses, so the light sits
+    // where the glowing bulb is actually drawn.
+    private fun registerLampLight(g: ObjGroup, tx: Float, ty: Float, tz: Float, s: Float, yaw: Float) {
+        val src = g.verts
+        if (src.isEmpty()) return
+        var mx = 0f; var my = 0f; var mz = 0f; var n = 0
+        var i = 0
+        while (i + 2 < src.size) { mx += src[i]; my += src[i+1]; mz += src[i+2]; n++; i += 3 }
+        if (n == 0) return
+        mx /= n; my /= n; mz /= n
+        val xs = mx * s; val ys = my * s; val zs = mz * s
+        val cy = cos(yaw); val sy = sin(yaw)
+        lampLights.add(floatArrayOf(
+            xs * cy + zs * sy + tx,
+            ys + ty,
+            -xs * sy + zs * cy + tz,
+            LAMP_LIGHT_RADIUS,
+            -1f))                       // a lamp: always lit
+    }
+
+    // One point light per building, sitting at the centre of its window panes, so
+    // an unexplored building actually throws its warm light onto the street. The
+    // light is tagged with the digit and is dropped once that building is done —
+    // matching the windows going black in the shader.
+    private fun collectWindowLights() {
+        val sums = HashMap<Int, FloatArray>()   // digit -> [x, y, z, count]
+        for (m in meshes) {
+            val d = m.windowDigit
+            if (d !in 1..9) continue
+            val acc = sums.getOrPut(d) { floatArrayOf(0f, 0f, 0f, 0f) }
+            val buf = m.buf
+            buf.position(0)
+            var i = 0
+            while (i + 2 < m.cnt * 3) {
+                acc[0] += buf.get(i); acc[1] += buf.get(i + 1); acc[2] += buf.get(i + 2)
+                acc[3] += 1f
+                i += 3
+            }
+            buf.position(0)
+        }
+        for ((digit, acc) in sums) {
+            if (acc[3] < 1f) continue
+            lampLights.add(floatArrayOf(
+                acc[0] / acc[3], acc[1] / acc[3], acc[2] / acc[3],
+                WINDOW_LIGHT_RADIUS,
+                digit.toFloat()))
         }
     }
 
@@ -2113,6 +3173,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         tilt: Float, tdx: Float, tdz: Float,
         faces: MutableList<Pair<FloatArray, FloatArray>>
     ) {
+        setLit(1f)   // the monster's body takes the sun and the lamps it passes
         val yaw = Math.toRadians(angleDeg.toDouble()).toFloat()
         val cy = cos(yaw); val sy = sin(yaw)
         val oy = 4f * s
@@ -2169,6 +3230,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     // Additive pass that illuminates the monster's red/white faces through the
     // night overlay (drawn in PASS 2, after the MVP is restored).
     private fun drawMonsterFaces(dkLvl: Float) {
+        setLit(0f)   // the face glows in the dark
         if (aerialMode || monsterFaceArrs.isEmpty()) return
         GLES20.glUniform1f(uFog, 0f)
         val k = (0.6f * dkLvl).coerceIn(0f, 1f)
@@ -2193,10 +3255,18 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     }
 
     private fun drawCamerasModel() {
+        setLit(1f)
         val s = CAMERA_SCALE
         val tx = playerX; val tz = playerZ
         val ty = PLAYER_LOOK_Y
         val offsetYaw = Math.toRadians(CAMERA_MODEL_YAW_OFFSET_DEG.toDouble()).toFloat()
+
+        // A camera is bolted to a building corner, so when that building goes over,
+        // the camera goes with it — otherwise the city falls and leaves a grid of
+        // cameras hanging in the air, still watching.
+        val col = collapse.coerceIn(0f, 1f)
+        val xf = FloatArray(10)
+        val pt = FloatArray(3)
 
         // One accumulator per material group — collapses N mounts × M materials
         // into M draw calls per frame instead of N*M.
@@ -2205,6 +3275,15 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         for (mount in cameraMounts) {
             val mx = mount[0]; val my = mount[1]; val mz = mount[2]
             val outX = mount[3]; val outZ = mount[4]
+
+            var falls = false
+            if (col > 0f) {
+                val g = collapseGroupNear(mx, mz)
+                if (g != null) {
+                    if (!collapseXform(g, col, xf)) continue   // its building is gone, and so is it
+                    falls = true
+                }
+            }
 
             val tdx = tx - mx; val tdz = tz - mz
             val tdy = ty - my
@@ -2245,9 +3324,15 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                     // 2) Yaw around Y: aligns horizontal forward with player direction.
                     val xr =  px * cy + pz * sy
                     val zr = -px * sy + pz * cy
-                    dst.add(xr + mx)
-                    dst.add(py + my)
-                    dst.add(zr + mz)
+                    // 3) …and, if its building is on its way down, the fall.
+                    if (falls) {
+                        applyXform(xf, xr + mx, py + my, zr + mz, pt)
+                        dst.add(pt[0]); dst.add(pt[1]); dst.add(pt[2])
+                    } else {
+                        dst.add(xr + mx)
+                        dst.add(py + my)
+                        dst.add(zr + mz)
+                    }
                     i += 3
                 }
             }
@@ -2287,6 +3372,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
 
     // Additive bright-red camera lights, drawn in PASS 2 after the MVP is restored.
     private fun drawCameraLights(dkLvl: Float) {
+        setLit(0f)   // the lens dot is a light source
         if (aerialMode || cameraLightArrs.isEmpty()) return
         GLES20.glUniform1f(uFog, 0f)
         GLES20.glUniform4f(uCol, 1.0f, 0.06f, 0.07f, (0.95f * dkLvl).coerceIn(0f, 1f))
@@ -2301,6 +3387,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     }
 
     private fun drawCamerasProcedural() {
+        setLit(1f)
         val tx = playerX; val tz = playerZ
         val bodyVerts = mutableListOf<Float>()
         val lensVerts = mutableListOf<Float>()
@@ -2368,15 +3455,29 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     }
 
     private fun drawDoors() {
+        setLit(1f)
         if (aerialMode || doorMounts.isEmpty() || doorGroups.isEmpty()) return
         // Accumulate transformed verts per material group → one draw call per group.
         val perGroup = Array(doorGroups.size) { mutableListOf<Float>() }
         val openArr = doorOpenFraction
+        // A door goes down with its building, for the same reason a camera does.
+        val col = collapse.coerceIn(0f, 1f)
+        val xf = FloatArray(10)
+        val pt = FloatArray(3)
         for (mount in doorMounts) {
             val cx = mount[0]; val dh = mount[1]; val cz = mount[2]
             val face = mount[3].toInt()
             val sX = mount[4]; val sYClosed = mount[5]; val sZ = mount[6]
             val digitIdx = mount[8].toInt()
+
+            var falls = false
+            if (col > 0f) {
+                val g = collapseGroupNear(cx, cz)
+                if (g != null) {
+                    if (!collapseXform(g, col, xf)) continue
+                    falls = true
+                }
+            }
             val open = if (digitIdx in openArr.indices) openArr[digitIdx].coerceIn(0f, 1f) else 0f
             // Slide-up = the door's bottom rises while the top stays pinned to the
             // top of the opening. This retracts the panel cleanly into the wall
@@ -2405,9 +3506,14 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                     // Yaw around Y. New x = x*cosY + z*sinY ; new z = -x*sinY + z*cosY.
                     val xr =  xs * cosY + zs * sinY
                     val zr = -xs * sinY + zs * cosY
-                    dst.add(xr + cx)
-                    dst.add(ys + centerY)
-                    dst.add(zr + cz)
+                    if (falls) {
+                        applyXform(xf, xr + cx, ys + centerY, zr + cz, pt)
+                        dst.add(pt[0]); dst.add(pt[1]); dst.add(pt[2])
+                    } else {
+                        dst.add(xr + cx)
+                        dst.add(ys + centerY)
+                        dst.add(zr + cz)
+                    }
                     i += 3
                 }
             }
@@ -2487,16 +3593,333 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         meshes.add(Mesh(floatArrayOf(x0,y0,z0,x1,y1,z1).toFB(), GLES20.GL_LINES, 2, r,g,b, fog=0.70f))
     }
 
+    /**
+     * Records the meshes a building adds, so the whole thing can be dropped as one
+     * object when the city comes down. Each gets its own start time and its own
+     * lean, from a hash of where it stands - so the collapse is ragged and
+     * repeatable rather than random and synchronised.
+     */
+    // [hx]/[hz] are the thing's half-extents on the ground. They set the edge it
+    // hinges on when it goes over, so they have to be its own size — a bridge plank
+    // pivoting on a building-sized footprint would swing round a point out in the
+    // lava beside it, and read as thrown rather than tipped.
+    private inline fun collapsible(
+        cx: Float, cz: Float, hx: Float = BW, hz: Float = BD,
+        kind: Float = COLLAPSE_FALLS, add: () -> Unit,
+    ) {
+        val first = meshes.size
+        add()
+        if (meshes.size <= first) return
+        // Deterministic per-position pseudo-random: same city, same collapse.
+        val h = ((cx * 73.13f + cz * 31.7f).toInt() * 2654435761L.toInt())
+        val r0 = ((h ushr 8) and 0xFFFF) / 65535f     // 0..1 - when it starts going
+        val r1 = ((h ushr 20) and 0xFF) / 255f        // 0..1 - which way it leans
+        // The buildings can take their time — they are right there, and the ragged
+        // order is the point. The stickmen cannot: they go up, and the screen starts
+        // fading to black at 0.72, so one that waited until 0.6 to leave the ground
+        // would still be standing there when the lights went out. They go early.
+        val startAt = if (kind == COLLAPSE_SWEPT) 0.03f + r0 * 0.17f else 0.05f + r0 * 0.55f
+        collapseGroups.add(floatArrayOf(
+            first.toFloat(), (meshes.size - 1).toFloat(), cx, cz,
+            startAt, r1, hx, hz, kind
+        ))
+    }
+
+    // What the collapse does to a thing: the city's buildings and the bridge come
+    // DOWN, and the stickmen standing around watching it all go get picked up and
+    // thrown into the sky. They were never really part of the city anyway.
+    private val COLLAPSE_FALLS = 0f
+    private val COLLAPSE_SWEPT = 1f
+
+    /**
+     * Where this building is, mid-collapse — the whole rigid transform:
+     *
+     *   out[0..2]  shift      world displacement (the drop, and the shaking)
+     *   out[3..5]  axis       horizontal axis it is turning about, unit length
+     *   out[6]     angle      radians it has turned through (0 = standing straight)
+     *   out[7..9]  pivot      the world point it turns about — the base edge it
+     *                         hinges on, so it swings over rather than spinning in
+     *                         mid-air
+     *
+     * Returns false once it is gone, and then it simply stops being drawn.
+     *
+     * Roughly three in five buildings TIP OVER: they hinge on one base edge and come
+     * down across the street, taking the lighting with them (the shader rotates the
+     * position, and the normals fall out of that). The rest sink and lean, which is
+     * what they all used to do — a whole skyline going over the same way looks
+     * choreographed, and this is meant to look like it is coming apart.
+     */
+    private fun collapseXform(g: FloatArray, t: Float, out: FloatArray): Boolean {
+        val seed = g[5]
+        val cx = g[2]; val cz = g[3]
+        out[3] = 0f; out[4] = 1f; out[5] = 0f     // a safe axis for angle == 0
+        out[6] = 0f
+        out[7] = cx; out[8] = 0f; out[9] = cz
+
+        val startAt = g[4]
+        if (t <= startAt) {
+            // Not its turn yet - but the whole city is trembling by now.
+            val tremble = (t / startAt).coerceIn(0f, 1f) * 2.5f
+            out[0] = sin(t * 137f + cx) * tremble
+            out[1] = 0f
+            out[2] = cos(t * 119f + cz) * tremble
+            return true
+        }
+        // Its own fall, over the remaining time.
+        val p = ((t - startAt) / (1f - startAt).coerceAtLeast(0.001f)).coerceIn(0f, 1f)
+        if (p >= 1f) return false                      // gone
+        val shake = (1f - p) * 6f
+
+        if (g[8] == COLLAPSE_SWEPT) {
+            // Whatever is taking the city apart takes the stickmen too, but it does
+            // not drop them: it lifts them, turning them over and over, out and up
+            // and away, until they are specks and then nothing. They go up while
+            // everything else goes down, which is the whole point of them.
+            //
+            // Not p*p: something snatched off the ground leaves it NOW. A pure square
+            // creeps for the first half of its life, and a stickman that creeps looks
+            // like a stickman that is standing still.
+            val lift = 0.35f * p + 0.65f * p * p
+            val dir = seed * 43.7f
+            val dx = cos(dir); val dz = sin(dir)
+            out[3] = dz; out[4] = 0f; out[5] = -dx     // tumbling end over end
+            out[6] = lift * 13f                        // a fast, loose spin — several turns
+            out[7] = cx; out[8] = 0f; out[9] = cz      // about its own feet
+            out[0] = dx * lift * 300f + sin(t * 149f + cx) * shake
+            out[1] = lift * 1600f                      // straight up, and away
+            out[2] = dz * lift * 300f + cos(t * 131f + cz) * shake
+            return true
+        }
+
+        if (seed > 0.40f) {
+            // A toppler. It goes over in the direction its seed picked, hinging on
+            // the base edge on that side: rotating about the axis perpendicular to
+            // the fall direction carries the roof over and down. Past 90° it is
+            // lying in the street; it keeps turning a little past that, and sinks,
+            // so it doesn't end up resting on the ground looking placed.
+            val dir = seed * 43.7f                     // deterministic, and unrelated to when it starts
+            val dx = cos(dir); val dz = sin(dir)
+            out[3] = dz; out[4] = 0f; out[5] = -dx     // axis ⟂ fall direction: the roof swings toward (dx, dz)
+            out[6] = p * p * 1.85f                     // → ~106°, accelerating like something that has lost its footing
+            out[7] = cx + dx * g[6] * 0.85f            // the edge it hinges on — its own edge, not a building's
+            out[8] = 0f
+            out[9] = cz + dz * g[7] * 0.85f
+            out[0] = sin(t * 149f + cx) * shake
+            out[1] = -p * p * 90f                      // settles into its own rubble
+            out[2] = cos(t * 131f + cz) * shake
+            return true
+        }
+
+        // A sinker: straight down, with a lean, as before.
+        val drop = p * p * 420f                        // accelerating, like gravity
+        val lean = (seed - 0.5f) * 140f * p
+        out[0] = lean + sin(t * 149f + cx) * shake
+        out[1] = -drop
+        out[2] = lean * 0.6f + cos(t * 131f + cz) * shake
+        return true
+    }
+
+    // ── Fixtures ─────────────────────────────────────────────────────────────
+    // The cameras, the doors and the entrance lights are not in `meshes` — they are
+    // rebuilt in world space every frame (they track the player, they slide open).
+    // So the collapse has to be carried to them by hand, or they hang in the air
+    // over the rubble of the building they were bolted to.
+
+    /** The collapsing building a fixture at (x, z) belongs to, if any. */
+    private fun collapseGroupNear(x: Float, z: Float): FloatArray? {
+        var best: FloatArray? = null
+        var bestD = Float.MAX_VALUE
+        for (g in collapseGroups) {
+            if (g[8] != COLLAPSE_FALLS) continue    // a camera does not fly off with a stickman
+            val dx = x - g[2]; val dz = z - g[3]
+            val d = dx * dx + dz * dz
+            if (d < bestD) { bestD = d; best = g }
+        }
+        val g = best ?: return null
+        // Corner cameras sit a little outside the footprint, so allow some slack —
+        // but not so much that a fixture gets adopted by the building across the road.
+        return if (abs(x - g[2]) <= g[6] + 45f && abs(z - g[3]) <= g[7] + 45f) g else null
+    }
+
+    /** Applies a [collapseXform] to one world-space point. */
+    private fun applyXform(xf: FloatArray, x: Float, y: Float, z: Float, out: FloatArray) {
+        var px = x; var py = y; var pz = z
+        val ang = xf[6]
+        if (ang != 0f) {
+            val qx = x - xf[7]; val qy = y - xf[8]; val qz = z - xf[9]
+            val kx = xf[3]; val ky = xf[4]; val kz = xf[5]
+            val c = cos(ang); val s = sin(ang)
+            val crx = ky * qz - kz * qy
+            val cry = kz * qx - kx * qz
+            val crz = kx * qy - ky * qx
+            val kd = (kx * qx + ky * qy + kz * qz) * (1f - c)
+            px = qx * c + crx * s + kx * kd + xf[7]
+            py = qy * c + cry * s + ky * kd + xf[8]
+            pz = qz * c + crz * s + kz * kd + xf[9]
+        }
+        out[0] = px + xf[0]
+        out[1] = py + xf[1]
+        out[2] = pz + xf[2]
+    }
+
+    // Surfaces with real geometry take the sun and the lamps; the self-lit and 2D
+    // things (lines, lava, the spinning arcs, glows, shadow blobs, the sky quad,
+    // the night overlay) stay flat. Uniform state persists with the program, so
+    // the cached value is valid across frames.
+    // The aerial intro is deliberately flat — it has to read as a calculator
+    // keypad, not as a lit city — so lighting is forced off whenever it's running.
+    // ── Model textures ───────────────────────────────────────────────────────
+    // A material with a map_Kd (the whiteboards' image planes) paints with an image
+    // instead of a flat colour. The exporter copies whatever images the .blend uses
+    // into assets/models/textures/ and names them in the MTL, so a new textured
+    // surface in any model needs nothing here — export it and it appears.
+
+    /** Uploads [name] from assets/models/textures/, once. 0 if it isn't there. */
+    private fun modelTexture(name: String): Int {
+        modelTextures[name]?.let { return it }
+        val a = assets ?: return 0
+        val id = try {
+            val bmp = a.open("models/textures/$name").use {
+                android.graphics.BitmapFactory.decodeStream(it)
+            } ?: return 0
+            val ids = IntArray(1)
+            GLES20.glGenTextures(1, ids, 0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, ids[0])
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+            android.opengl.GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bmp, 0)
+            bmp.recycle()
+            ids[0]
+        } catch (t: Throwable) {
+            android.util.Log.w("CityGL", "texture missing: $name")
+            0
+        }
+        modelTextures[name] = id
+        return id
+    }
+
+    // Whether the last draw was textured. The bind itself is NOT cached — the CCTV
+    // pass binds its atlas to the same texture unit, so a cached bind would come back
+    // next frame with the feed atlas painted across the whiteboards.
+    private var curTexOn = false
+    private fun clearMeshTexture() {
+        if (!curTexOn) return
+        GLES20.glUniform1f(uTexOn, 0f)
+        GLES20.glDisableVertexAttribArray(aUV)
+        curTexOn = false
+    }
+    private fun bindMeshTexture(m: Mesh): Boolean {
+        val uv = m.uv
+        if (m.tex == 0 || uv == null) {
+            clearMeshTexture()
+            return false
+        }
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, m.tex)
+        GLES20.glUniform1i(uTexSampler, 0)
+        if (!curTexOn) { GLES20.glUniform1f(uTexOn, 1f); curTexOn = true }
+        uv.position(0)
+        GLES20.glVertexAttribPointer(aUV, 2, GLES20.GL_FLOAT, false, 8, uv)
+        GLES20.glEnableVertexAttribArray(aUV)
+        return true
+    }
+
+    // The collapse transform currently uploaded. Every draw that isn't a falling
+    // building passes null and gets the identity — and because the uniforms persist
+    // with the program, the cache stays valid across frames.
+    private val curXform = FloatArray(10)
+    private var curXformSet = false
+    private fun setXform(xf: FloatArray?) {
+        if (xf == null) {
+            if (!curXformSet) return                     // already identity
+            GLES20.glUniform3f(uShift, 0f, 0f, 0f)
+            GLES20.glUniform4f(uTip, 0f, 1f, 0f, 0f)
+            GLES20.glUniform3f(uPivot, 0f, 0f, 0f)
+            curXformSet = false
+            return
+        }
+        if (curXformSet && xf.contentEquals(curXform)) return
+        GLES20.glUniform3f(uShift, xf[0], xf[1], xf[2])
+        GLES20.glUniform4f(uTip, xf[3], xf[4], xf[5], xf[6])
+        GLES20.glUniform3f(uPivot, xf[7], xf[8], xf[9])
+        xf.copyInto(curXform)
+        curXformSet = true
+    }
+
+    private var curLitU = -1f
+    private fun setLit(v: Float) {
+        val want = if (aerialMode) 0f else v
+        if (lightingOn && want != curLitU) { GLES20.glUniform1f(uLit, want); curLitU = want }
+    }
+
+    // The shader carries MAX_LIGHTS point lights; the city has far more lamps than
+    // that, so each frame we hand it the ones nearest the camera. Lamps beyond
+    // their own reach are dropped (radius 0 = off).
+    // [px]/[pz] is the eye the set is chosen around — the player's camera for the
+    // frame itself, and the security camera's own position when a CCTV feed is
+    // being rendered (otherwise a feed of a distant street would be lit by the
+    // lamps standing behind the player, back in Building 10).
+    private fun uploadNearestLights(px: Float = camX, pz: Float = camZ) {
+        var n = 0
+        if (darknessLevel > 0.02f && !aerialMode && lampLights.isNotEmpty()) {
+            val near = lampLights
+                .filter { l ->
+                    // A building's windows go dark once it has been explored; the
+                    // lamps (digit -1) always burn.
+                    val digit = l[4].toInt()
+                    digit !in 1..9 ||
+                        !((digit - 1) in buildingCompleted.indices && buildingCompleted[digit - 1])
+                }
+                .sortedBy { l ->
+                    val dx = l[0] - px; val dz = l[2] - pz
+                    dx * dx + dz * dz
+                }
+                .take(MAX_LIGHTS)
+            for (l in near) {
+                lightPosBuf[n * 3] = l[0]; lightPosBuf[n * 3 + 1] = l[1]; lightPosBuf[n * 3 + 2] = l[2]
+                lightRadBuf[n] = l[3]
+                n++
+            }
+        }
+        while (n < MAX_LIGHTS) {
+            lightPosBuf[n * 3] = 0f; lightPosBuf[n * 3 + 1] = 0f; lightPosBuf[n * 3 + 2] = 0f
+            lightRadBuf[n] = 0f
+            n++
+        }
+        GLES20.glUniform3fv(uLightPos, MAX_LIGHTS, lightPosBuf, 0)
+        GLES20.glUniform1fv(uLightRad, MAX_LIGHTS, lightRadBuf, 0)
+    }
+
+    // Returns 0 if anything fails to compile or link, so callers can fall back
+    // instead of binding a dead program (which just renders black).
     private fun buildProg(vs:String, fs:String): Int {
         val v=comp(GLES20.GL_VERTEX_SHADER,vs)
         val f=comp(GLES20.GL_FRAGMENT_SHADER,fs)
+        if (v == 0 || f == 0) return 0
         val p=GLES20.glCreateProgram()
         GLES20.glAttachShader(p,v); GLES20.glAttachShader(p,f); GLES20.glLinkProgram(p)
+        val ok = IntArray(1)
+        GLES20.glGetProgramiv(p, GLES20.GL_LINK_STATUS, ok, 0)
+        if (ok[0] == 0) {
+            android.util.Log.w("CityGL", "link failed: " + GLES20.glGetProgramInfoLog(p))
+            GLES20.glDeleteProgram(p)
+            return 0
+        }
         return p
     }
     private fun comp(t:Int, s:String): Int {
         val sh=GLES20.glCreateShader(t)
-        GLES20.glShaderSource(sh,s); GLES20.glCompileShader(sh); return sh
+        GLES20.glShaderSource(sh,s); GLES20.glCompileShader(sh)
+        val ok = IntArray(1)
+        GLES20.glGetShaderiv(sh, GLES20.GL_COMPILE_STATUS, ok, 0)
+        if (ok[0] == 0) {
+            android.util.Log.w("CityGL", "shader compile failed: " + GLES20.glGetShaderInfoLog(sh))
+            GLES20.glDeleteShader(sh)
+            return 0
+        }
+        return sh
     }
 
     // Returns true if `angle` falls within the arc from `start` to `end` (degrees, wraps 360)

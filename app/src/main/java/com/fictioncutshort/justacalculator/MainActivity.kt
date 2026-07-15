@@ -132,6 +132,8 @@ class MainActivity : ComponentActivity() {
         android.util.Log.d("JustACalc", "🟢 MainActivity.onCreate START — savedInstanceState=${savedInstanceState != null}")
         super.onCreate(savedInstanceState)
         CalculatorActions.init(applicationContext)
+        // TEMPORARY: seed a "just finished Building 5" test state (see DebugSeed).
+        com.fictioncutshort.justacalculator.logic.DebugSeed.seed(applicationContext)
         android.util.Log.d("JustACalc", "🟢 MainActivity.onCreate AFTER init")
         setContent {
             MaterialTheme {
@@ -387,14 +389,39 @@ fun CalculatorScreen() {
         // as "not post-story" and the else-branch wiped in_city_phase, bouncing
         // them back to the calculator. We still exclude explicit replay/restart
         // and pre-story branch steps so a stale flag can't hijack a fresh run.
+        // Once the story is over, the city is gone — it fell down. Never restore it,
+        // whatever in_city_phase still says. This is the backstop for the ending
+        // save: even a stale flag left by an old build can't drag a finished player
+        // back into the collapsed city.
+        val storyEnded = com.fictioncutshort.justacalculator.logic.EndingStore.isDone(context)
         val cityRestore = inCityPhaseInPrefs
             && !needsRestartInPrefs
+            && !storyEnded
+            && currentStepOnLaunch !in preStoryBranchSteps
+
+        // Pre-city phase-2 stages (ad cards / pexeso) don't set in_city_phase, so
+        // they need their own restore off the persisted phase2_stage marker. This
+        // is what makes minimising/killing during the ad cards or the pexeso game
+        // drop the player back at that stage instead of the calculator. Same safety
+        // guards as cityRestore; the city itself is handled above via in_city_phase.
+        val phase2Stage = CalculatorActions.loadPhase2Stage()
+        val phase2PreCityRestore = (phase2Stage == "adcards" || phase2Stage == "pexeso")
+            && !needsRestartInPrefs
+            && !storyEnded
             && currentStepOnLaunch !in preStoryBranchSteps
 
         if (cityRestore) {
             state.value = state.value.copy(
                 showAdCards = true,
                 showCityDirectly = true,
+                allButtonsRad = false
+            )
+        } else if (phase2PreCityRestore) {
+            // showCityDirectly stays false; AdCardStack starts at CARDS, or at the
+            // pexeso game's start when the marker says "pexeso" (see the call site).
+            state.value = state.value.copy(
+                showAdCards = true,
+                showCityDirectly = false,
                 allButtonsRad = false
             )
         } else if (postStorySafe) {
@@ -451,7 +478,7 @@ fun CalculatorScreen() {
                         allButtonsRad = false
                     )
                 }
-                inCityPhaseInPrefs -> {
+                inCityPhaseInPrefs && !storyEnded -> {
                     state.value = state.value.copy(
                         showAdCards = true,
                         showCityDirectly = true,
@@ -472,6 +499,7 @@ fun CalculatorScreen() {
             CalculatorActions.clearDormancyPressedButtons()
             CalculatorActions.clearInCityPhase()
             CalculatorActions.clearShowAdCards()
+            CalculatorActions.clearPhase2Stage()
             CalculatorActions.clearPhase1Complete()
             if (state.value.showAdCards || state.value.showCityDirectly ||
                 state.value.showDormancy || state.value.showEndOfPart1) {
@@ -1757,16 +1785,24 @@ fun CalculatorScreen() {
         current.pendingAutoStep,
         current.awaitingChoice,
         current.awaitingNumber,
-        current.conversationStep
+        current.conversationStep,
+        com.fictioncutshort.justacalculator.logic.EndingStore.phase
     ) {
         val stepHasAutoProgress = CalculatorActions.getStepConfigPublic(current.conversationStep).autoProgressDelay > 0L
+        // The closing lines run themselves, so the button spins through them — the
+        // conversationStep gates below are about the story, and the ending is past
+        // all of them.
+        val endingTalking = com.fictioncutshort.justacalculator.logic.EndingStore.phase ==
+                com.fictioncutshort.justacalculator.logic.EndingStore.Phase.DIALOGUE
         val shouldShowSpinner = (
                 current.isTyping ||
                         stepHasAutoProgress ||
+                        endingTalking ||
                         ((current.waitingForAutoProgress || current.pendingAutoStep >= 0) &&
                                 !current.awaitingChoice && !current.awaitingNumber)
                 ) &&
-                (current.conversationStep < 167 ||
+                (endingTalking ||
+                    current.conversationStep < 167 ||
                     current.conversationStep in 250..257 ||
                     current.conversationStep in 350..357 ||
                     current.conversationStep in 700..703 ||
@@ -1844,14 +1880,28 @@ fun CalculatorScreen() {
     // Calculator is still rendered underneath in outline-only mode
     // (PortraitCalculatorContent / LandscapeCalculatorLayout check showAdCards).
     if (current.showAdCards) {
+        // Resume the pexeso game (at its start) if that's the stage we were on when
+        // last minimised/killed. Read once here; AdCardStack captures it on its first
+        // composition. City resumes take the startAtCity path above instead.
+        val resumeAtPexeso = !current.showCityDirectly &&
+            CalculatorActions.loadPhase2Stage() == "pexeso"
         AdCardStack(
             onPexesoComplete = {
                 CalculatorActions.clearShowAdCards()
                 CalculatorActions.clearInCityPhase()
+                CalculatorActions.clearPhase2Stage()
                 state.value = state.value.copy(showAdCards = false, showCityDirectly = false)
             },
             startAtCity = current.showCityDirectly,
-            onCityEntered = { CalculatorActions.saveInCityPhase() }
+            startAtPexeso = resumeAtPexeso,
+            // Persist the coarse stage as the stack advances, so ad-cards/pexeso
+            // survive a minimise/kill (mirrors how the city persists on entry).
+            onStageChanged = { stage -> CalculatorActions.persistPhase2Stage(stage) },
+            onCityEntered = { CalculatorActions.saveInCityPhase() },
+            // The city's debug menu can bail out into phase 1. jumpToChapter rebuilds
+            // a fresh CalculatorState and clears the city-phase flag, so this tears
+            // the city/ad-card stack down and lands the calculator at the chapter.
+            onJumpToPhase1 = { chapter -> CalculatorActions.jumpToChapter(state, chapter) }
         )
     }
     // ========== PHASE 1 RELEASE: END SCREEN ==========
@@ -1901,8 +1951,90 @@ fun CalculatorScreen() {
         }
     }
 
-    // Debug menu overlay - at the outermost level to cover everything
-    if (current.showDebugMenu) {
+    // ── The ending ────────────────────────────────────────────────────────────
+    // The city set EndingStore.phase as it finished falling down. That pulls the
+    // player out of the city for good and hands the story back to the calculator,
+    // which is where it started and where it says goodbye.
+    val endingPhase = com.fictioncutshort.justacalculator.logic.EndingStore.phase
+    LaunchedEffect(endingPhase) {
+        when (endingPhase) {
+            com.fictioncutshort.justacalculator.logic.EndingStore.Phase.NAME -> {
+                // Black screen + the name wheels. Tear down the city behind it.
+                state.value = state.value.copy(
+                    showAdCards = false,
+                    showCityDirectly = false,
+                    showDormancy = false,
+                    showEndOfPart1 = false,
+                )
+            }
+            com.fictioncutshort.justacalculator.logic.EndingStore.Phase.DIALOGUE -> {
+                // Back on the calculator for the last thing it ever says.
+                val script = com.fictioncutshort.justacalculator.logic.EndingStore.script(context)
+                state.value = state.value.copy(
+                    showAdCards = false,
+                    showCityDirectly = false,
+                    showDormancy = false,
+                    showEndOfPart1 = false,
+                    showDebugMenu = false,
+                    inConversation = true,
+                    isTyping = true,
+                    message = "",
+                    fullMessage = script.getOrElse(
+                        com.fictioncutshort.justacalculator.logic.EndingStore.line
+                    ) { "" },
+                )
+            }
+            else -> Unit
+        }
+    }
+    // The goodbye says itself. Every closing line — in all three endings — plays out
+    // on its own: it types, it sits there long enough to be read, and the next one
+    // follows. The player is not made to press ++ through the calculator's last
+    // words. Pressing it still works and just gets them there sooner.
+    //
+    // Not gated on isMuted, unlike the story's own auto-progress: mute means "stop
+    // making conversation", and by now the conversation is over. This is the end of it.
+    val endingLine = com.fictioncutshort.justacalculator.logic.EndingStore.line
+    LaunchedEffect(endingPhase, endingLine, current.isTyping) {
+        if (endingPhase != com.fictioncutshort.justacalculator.logic.EndingStore.Phase.DIALOGUE) {
+            return@LaunchedEffect
+        }
+        if (current.isTyping) return@LaunchedEffect      // let it finish saying it first
+        // The typing animation has already paced most of the reading; this is the
+        // pause after the full stop, and longer lines get a longer one.
+        val hold = (2200L + state.value.fullMessage.length * 22L).coerceAtMost(7000L)
+        kotlinx.coroutines.delay(hold)
+        // Only if nothing moved underneath us: a ++ press during the pause advances
+        // the line itself, and this effect simply restarts on the new one.
+        if (com.fictioncutshort.justacalculator.logic.EndingStore.phase ==
+                com.fictioncutshort.justacalculator.logic.EndingStore.Phase.DIALOGUE &&
+            com.fictioncutshort.justacalculator.logic.EndingStore.line == endingLine &&
+            !state.value.isTyping
+        ) {
+            CalculatorActions.advanceEndingDialogue(state)
+        }
+    }
+
+    if (endingPhase == com.fictioncutshort.justacalculator.logic.EndingStore.Phase.NAME) {
+        com.fictioncutshort.justacalculator.ui.screens.EndingBlackScreen(onDone = {})
+    }
+
+    // Debug menu overlay - at the outermost level to cover everything.
+    // Phase 1 is the shipped calculator, and the mute button is a real control a
+    // player uses, so five stray taps must not drop them into the dev menu: the
+    // passcode gates it. The unlock is per-opening, and is dropped again as soon
+    // as the menu closes.
+    var debugUnlocked by remember { mutableStateOf(false) }
+    LaunchedEffect(current.showDebugMenu) {
+        if (!current.showDebugMenu) debugUnlocked = false
+    }
+    if (current.showDebugMenu && !debugUnlocked) {
+        com.fictioncutshort.justacalculator.ui.screens.DebugPasswordGate(
+            onUnlock = { debugUnlocked = true },
+            onCancel = { CalculatorActions.hideDebugMenu(state) }
+        )
+    }
+    if (current.showDebugMenu && debugUnlocked) {
         Box(
             modifier = Modifier
                 .fillMaxSize()

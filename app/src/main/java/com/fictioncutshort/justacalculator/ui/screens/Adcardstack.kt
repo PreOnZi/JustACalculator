@@ -232,7 +232,15 @@ private fun DamagedCalculatorBackground(modifier: Modifier = Modifier) {
 fun AdCardStack(
     onPexesoComplete: () -> Unit,   // Reserved for when the full experience ends
     startAtCity: Boolean = false,
+    // Resume straight into the pexeso game (at its start) — used when the app was
+    // minimised/killed mid-pexeso. Ignored if startAtCity is also set.
+    startAtPexeso: Boolean = false,
     onCityEntered: () -> Unit = {},
+    // Reports the coarse phase-2 stage ("adcards" / "pexeso" / "city") as the stack
+    // advances, so the host can persist it for minimise/kill restore.
+    onStageChanged: (String) -> Unit = {},
+    // Passed straight through to the city so its debug menu can jump into phase 1.
+    onJumpToPhase1: ((com.fictioncutshort.justacalculator.data.Chapter) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -241,7 +249,15 @@ fun AdCardStack(
     // u2500u2500 State u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
     val cards = remember { buildCardStack() }
     var swipedCount by remember { mutableIntStateOf(0) }       // 0-5 cards swiped
-    var phase by remember { mutableStateOf(if (startAtCity) AdCardPhase.CITY else AdCardPhase.CARDS) }
+    var phase by remember {
+        mutableStateOf(
+            when {
+                startAtCity   -> AdCardPhase.CITY
+                startAtPexeso -> AdCardPhase.PEXESO
+                else          -> AdCardPhase.CARDS
+            }
+        )
+    }
 
     // Persist the city phase whenever it is active — including on the very first
     // composition. Entry is sticky regardless of HOW the player got here (normal
@@ -253,6 +269,18 @@ fun AdCardStack(
         android.util.Log.d("JustACalc", "TANK-DEBUG AdCardStack phase=$phase (prev=$previousPhase)")
         if (phase == AdCardPhase.CITY) {
             onCityEntered()
+        }
+        // Persist the coarse stage so a minimise/kill resumes here. Only CITY emits
+        // "city" — that's the phase that also sets in_city_phase (via onCityEntered),
+        // and the two must agree for the city-restore path. The momentary COLLAPSING
+        // and TUNNEL transitions fall back to "pexeso" (a fully restorable stage) so
+        // a kill mid-transition still lands sensibly rather than dropping through.
+        when (phase) {
+            AdCardPhase.CARDS      -> onStageChanged("adcards")
+            AdCardPhase.COLLAPSING,
+            AdCardPhase.PEXESO,
+            AdCardPhase.TUNNEL     -> onStageChanged("pexeso")
+            AdCardPhase.CITY       -> onStageChanged("city")
         }
         previousPhase = phase
     }
@@ -290,7 +318,8 @@ fun AdCardStack(
     }
 
     // ── Collapse trigger + pexeso reveal transition
-    var pexesoReveal by remember { mutableFloatStateOf(0f) }
+    // Start fully revealed when we resume directly into the pexeso game.
+    var pexesoReveal by remember { mutableFloatStateOf(if (startAtPexeso) 1f else 0f) }
     val pexesoRevealAnim by animateFloatAsState(
         targetValue   = pexesoReveal,
         animationSpec = tween(400),
@@ -391,10 +420,12 @@ fun AdCardStack(
                         adCards = cards, pexesoCards = pexesoCards,
                     )
                     AdCardPhase.TUNNEL -> WarpTunnel(
-                        onComplete = { phase = AdCardPhase.CITY }
+                        onComplete = { phase = AdCardPhase.CITY },
+                        onJumpToPhase1 = onJumpToPhase1
                     )
                     AdCardPhase.CITY -> CalculatorCityView(
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier.fillMaxSize(),
+                        onJumpToPhase1 = onJumpToPhase1
                     )
                     AdCardPhase.PEXESO -> Box(
                         modifier = Modifier
@@ -445,7 +476,10 @@ fun AdCardStack(
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun WarpTunnel(onComplete: () -> Unit) {
+private fun WarpTunnel(
+    onComplete: () -> Unit,
+    onJumpToPhase1: ((com.fictioncutshort.justacalculator.data.Chapter) -> Unit)? = null,
+) {
     var tick by remember { mutableLongStateOf(0L) }
     LaunchedEffect(Unit) { while (true) { delay(16L); tick++ } }
 
@@ -476,7 +510,8 @@ private fun WarpTunnel(onComplete: () -> Unit) {
         // ── City underneath (fades in as tunnel fades out) ────────────────────
         if (showCity) {
             CalculatorCityView(
-                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = cityAlpha }
+                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = cityAlpha },
+                onJumpToPhase1 = onJumpToPhase1
             )
         }
 

@@ -1,21 +1,39 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# ProGuard / R8 rules for the release build.
+# R8 shrinking + resource shrinking are enabled in build.gradle.kts.
+# Most third-party libs below ship their own consumer rules, but because this
+# app leans on native (JNI) and reflection-heavy libraries, we keep them
+# explicitly so an aggressive R8 pass can't strip something loaded at runtime.
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# --- Keep line numbers for readable release crash reports ------------------
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# --- SceneView + Filament (native OpenGL renderer, accessed via JNI) --------
+# Filament's Java classes are called from native code; do not touch them.
+-keep class com.google.android.filament.** { *; }
+-keep class io.github.sceneview.** { *; }
+-dontwarn com.google.android.filament.**
+-dontwarn io.github.sceneview.**
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# --- ML Kit face detection --------------------------------------------------
+-keep class com.google.mlkit.** { *; }
+-keep class com.google.android.gms.internal.mlkit_vision_face.** { *; }
+-dontwarn com.google.mlkit.**
+
+# --- osmdroid ---------------------------------------------------------------
+-keep class org.osmdroid.** { *; }
+-dontwarn org.osmdroid.**
+
+# --- Coil (image loading) ---------------------------------------------------
+-dontwarn coil.**
+
+# --- General safety nets ----------------------------------------------------
+# Keep every JNI entry point regardless of which library declares it.
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
+# Keep enum internals (valueOf/values used reflectively by some libs).
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}

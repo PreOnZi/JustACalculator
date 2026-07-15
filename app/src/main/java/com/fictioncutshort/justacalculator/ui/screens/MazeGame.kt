@@ -939,14 +939,29 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
     // narrative and the specific buildings that actually use the underlying
     // APIs (camera in Door 4, etc.).
 
+    // ── Saved run ─────────────────────────────────────────────────────────────
+    // The maze is fully determined by (level, seed) - buildWorldGrid, placeKeys and
+    // placeTraps are all seeded from it - so remembering those two numbers rebuilds
+    // the EXACT maze the player was walking, red-trap regenerations and all. On top
+    // of that we keep which keys they've already found, which articles they've been
+    // shown, and which decoys they've taken, so nothing is handed to them twice.
+    val savedLevel = remember { com.fictioncutshort.justacalculator.logic.BuildingProgress.getInt(context, 2, "level", 0) }
+    val savedSeed  = remember { com.fictioncutshort.justacalculator.logic.BuildingProgress.getInt(context, 2, "seed", 0) }
+    val savedKeys  = remember { com.fictioncutshort.justacalculator.logic.BuildingProgress.getInts(context, 2, "keys") }
+
     // ── Mutable layout/world holders (swapped on each red-trap regeneration) ──
-    val worldHolder  = remember { mutableStateOf(buildWorldGrid(MazeLayout(0), 0)) }
-    val keysHolder   = remember { mutableStateOf(placeKeys(worldHolder.value, MazeLayout(0))) }
-    val trapsHolder  = remember {
-        val kp = keysHolder.value.map { it.row to it.col }.toHashSet()
-        mutableStateOf(placeTraps(worldHolder.value, MazeLayout(0), kp))
+    val layout0 = remember { MazeLayout(savedLevel) }
+    val worldHolder  = remember { mutableStateOf(buildWorldGrid(layout0, savedSeed)) }
+    val keysHolder   = remember {
+        val ks = placeKeys(worldHolder.value, layout0, savedSeed + 88812)
+        for (k in ks) if (k.id in savedKeys) k.collected = true
+        mutableStateOf(ks)
     }
-    val layoutHolder = remember { mutableStateOf(MazeLayout(0)) }
+    val trapsHolder  = remember {
+        val kp = keysHolder.value.filter { !it.collected }.map { it.row to it.col }.toHashSet()
+        mutableStateOf(placeTraps(worldHolder.value, layout0, kp, savedSeed + 55577))
+    }
+    val layoutHolder = remember { mutableStateOf(layout0) }
 
     // Read current snapshot into vals so the Canvas redraws when they change
     val layout = layoutHolder.value
@@ -955,7 +970,7 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
     val traps  = trapsHolder.value
 
     // Ball start: first floor tile in Room N
-    val (startR0, startC0) = remember { findStart(worldHolder.value, MazeLayout(0)) }
+    val (startR0, startC0) = remember { findStart(worldHolder.value, layout0) }
     var ballRow by remember { mutableStateOf(startR0) }
     var ballCol by remember { mutableStateOf(startC0) }
     var velR    by remember { mutableStateOf(0f) }
@@ -963,8 +978,8 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
 
     // Camera
     var cameraZoom   by remember { mutableStateOf(0f) }
-    var cameraFocusR by remember { mutableStateOf(MazeLayout(0).wgridRows / 2f) }
-    var cameraFocusC by remember { mutableStateOf(MazeLayout(0).wgridCols / 2f) }
+    var cameraFocusR by remember { mutableStateOf(layout0.wgridRows / 2f) }
+    var cameraFocusC by remember { mutableStateOf(layout0.wgridCols / 2f) }
 
     // Gyro
     var gyroTiltX by remember { mutableStateOf(0f) }
@@ -980,7 +995,7 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
     var warnAlpha    by remember { mutableStateOf(0f) }
 
     // Game state
-    val collected      = remember { mutableStateListOf<Int>() }
+    val collected      = remember { mutableStateListOf<Int>().apply { addAll(savedKeys) } }
     val collectedTraps = remember { mutableStateListOf<Int>() }  // triggers recompose on trap pick-up
     var darkTrapCount  by remember { mutableIntStateOf(0) }
     var flickerAlpha   by remember { mutableStateOf(0f) }
@@ -988,7 +1003,8 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
     var won            by remember { mutableStateOf(false) }
 
     // Key study intro (shown before maze starts)
-    var keyStudyDone by remember { mutableStateOf(false) }
+    // On a resumed run the player has already sat through the key study.
+    var keyStudyDone by remember { mutableStateOf(savedKeys.isNotEmpty() || savedLevel > 0) }
 
     // Examine overlay state
     val coroutineScope    = rememberCoroutineScope()
@@ -1109,6 +1125,10 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
         val newLevel  = curLayout.level + 1
         val newLayout = MazeLayout(newLevel)
         val newSeed   = chaosRng.nextInt()
+        // The maze the player is now in - remember it, or a relaunch would drop
+        // them into a different maze holding the keys from this one.
+        com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 2, "level", newLevel)
+        com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 2, "seed", newSeed)
         val newWorld  = buildWorldGrid(newLayout, newSeed)
         val newKeys   = placeKeys(newWorld, newLayout, newSeed + 88812)
         val collectedIds = collected.toHashSet()
@@ -1210,6 +1230,7 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
                         // No model defined — collect instantly (original behaviour)
                         key.collected = true
                         collected.add(key.id)
+                        com.fictioncutshort.justacalculator.logic.BuildingProgress.putInts(context, 2, "keys", collected.toList())
                         val groupSlots = KEY_GROUP_DECOY_SLOTS[key.id] ?: emptySet()
                         globalCollectedDecoySlots.value = globalCollectedDecoySlots.value + groupSlots
                         for (t in curTraps) {
@@ -1286,6 +1307,9 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
 
     LaunchedEffect(won) {
         if (!won) return@LaunchedEffect
+        // The collected keys become the player's key currency.
+        com.fictioncutshort.justacalculator.logic.CurrencyStore.award(
+            context, com.fictioncutshort.justacalculator.logic.Currency.KEYS, collected.size, "b2")
         delay(3000)
         sceneEnabled = false  // unmount all SceneView composables before teardown
         delay(400)            // allow Compose to process the unmount
@@ -1609,6 +1633,7 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
                             val key = currentExamine.key
                             key.collected = true
                             collected.add(key.id)
+                        com.fictioncutshort.justacalculator.logic.BuildingProgress.putInts(context, 2, "keys", collected.toList())
                             // Wipe all decoys that belong to this key's group
                             val groupSlots = KEY_GROUP_DECOY_SLOTS[key.id] ?: emptySet()
                             globalCollectedDecoySlots.value = globalCollectedDecoySlots.value + groupSlots

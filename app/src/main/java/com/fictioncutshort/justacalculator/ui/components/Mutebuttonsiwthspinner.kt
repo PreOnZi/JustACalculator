@@ -71,11 +71,21 @@ fun MuteButtonWithSpinner(
 ) {
     val context = LocalContext.current
 
-    // Debounced spinner state - prevents flickering during rapid state changes
-    var shouldSpin by remember { mutableStateOf(isAutoProgressing) }
-    val currentAutoProgressing by rememberUpdatedState(isAutoProgressing)
+    // ── After the story ──────────────────────────────────────────────────────
+    // The two endings that keep the calculator alive (compliant, explorer) leave
+    // the mute button there but STILL: nothing is talking any more, so nothing
+    // spins. The resistance ending takes the button away entirely — it said it did
+    // not want to talk to you, and it meant it.
+    val storyOver = com.fictioncutshort.justacalculator.logic.EndingStore.isDone(context)
+    val buttonRemoved = com.fictioncutshort.justacalculator.logic.EndingStore.muteButtonRemoved(context)
+    if (buttonRemoved) return
 
-    LaunchedEffect(isAutoProgressing) {
+    // Debounced spinner state - prevents flickering during rapid state changes
+    var shouldSpin by remember { mutableStateOf(isAutoProgressing && !storyOver) }
+    val currentAutoProgressing by rememberUpdatedState(isAutoProgressing && !storyOver)
+
+    LaunchedEffect(isAutoProgressing, storyOver) {
+        if (storyOver) { shouldSpin = false; return@LaunchedEffect }
         if (isAutoProgressing) {
             // Start spinning immediately when auto-progressing
             shouldSpin = true

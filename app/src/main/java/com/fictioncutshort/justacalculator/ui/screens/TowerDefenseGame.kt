@@ -260,21 +260,54 @@ fun TowerDefenseGame(onComplete: () -> Unit) {
     // No runtime permissions are needed for tower-defense — keep the system
     // permission dialog out of the entry flow so it only appears in the
     // buildings / phase-1 beats that actually use the underlying APIs.
-    var levelIdx       by remember { mutableIntStateOf(0) }
+    val context        = LocalContext.current
+    // Resume where the player left off: which level, how far they'd got, and the
+    // lives/gold they were holding. A tower-defence run is long enough that losing
+    // it to a backgrounded app is a real loss. Enemies and towers on the board are
+    // NOT restored - the level restarts, but with the player's standing intact.
+    var levelIdx       by remember {
+        mutableIntStateOf(com.fictioncutshort.justacalculator.logic.BuildingProgress.getInt(context, 1, "level", 0).coerceIn(0, TD_LEVELS.lastIndex))
+    }
     var resetKey       by remember { mutableIntStateOf(0) }
-    var totalReached   by remember { mutableIntStateOf(0) }
+    var totalReached   by remember { mutableIntStateOf(com.fictioncutshort.justacalculator.logic.BuildingProgress.getInt(context, 1, "reached", 0)) }
+    // The player's leftover gold at the end becomes coins (see the currency HUD).
+    fun finish(finalGold: Int) {
+        com.fictioncutshort.justacalculator.logic.CurrencyStore.award(
+            context, com.fictioncutshort.justacalculator.logic.Currency.COINS, finalGold, "b1")
+        onComplete()
+    }
+    // Moving to a new level (or retrying one) starts its lives/gold from the level
+    // definition again, so the mid-level snapshot has to go with it.
+    fun startLevel(level: Int, reached: Int) {
+        levelIdx = level
+        totalReached = reached
+        com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 1, "level", level)
+        com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 1, "reached", reached)
+        com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 1, "lives", -1)
+        com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 1, "gold", -1)
+        com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 1, "wave", -1)
+    }
     key(levelIdx, resetKey) {
         TDLevelScreen(
             def            = TD_LEVELS[levelIdx],
             levelNum       = levelIdx + 1,
             initialReached = totalReached,
-            onWin          = { reached ->
-                totalReached = reached
-                if (levelIdx < TD_LEVELS.lastIndex) levelIdx++ else onComplete()
+            resumeLives    = com.fictioncutshort.justacalculator.logic.BuildingProgress.getInt(context, 1, "lives", -1),
+            resumeGold     = com.fictioncutshort.justacalculator.logic.BuildingProgress.getInt(context, 1, "gold", -1),
+            resumeWave     = com.fictioncutshort.justacalculator.logic.BuildingProgress.getInt(context, 1, "wave", -1),
+            onSnapshot     = { lives, gold, wave ->
+                com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 1, "lives", lives)
+                com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 1, "gold", gold)
+                com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 1, "wave", wave)
+                com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 1, "reached", totalReached)
             },
-            onLose         = { reached ->
-                totalReached = reached
-                if (levelIdx == 2) onComplete() else resetKey++
+            onWin          = { reached, gold ->
+                if (levelIdx < TD_LEVELS.lastIndex) startLevel(levelIdx + 1, reached)
+                else { totalReached = reached; finish(gold) }
+            },
+            onLose         = { reached, gold ->
+                if (levelIdx == 2) { totalReached = reached; finish(gold) }
+                else { startLevel(levelIdx, reached); resetKey++ }
             }
         )
     }
@@ -287,7 +320,12 @@ fun TowerDefenseGame(onComplete: () -> Unit) {
 private fun TDLevelScreen(
     def: LevelDef, levelNum: Int,
     initialReached: Int = 0,
-    onWin: (Int) -> Unit, onLose: (Int) -> Unit
+    // -1 means "fresh level" - use the level definition's own starting values.
+    resumeLives: Int = -1,
+    resumeGold: Int = -1,
+    resumeWave: Int = -1,
+    onSnapshot: (lives: Int, gold: Int, wave: Int) -> Unit = { _, _, _ -> },
+    onWin: (reached: Int, gold: Int) -> Unit, onLose: (reached: Int, gold: Int) -> Unit
 ) {
     // ── Sprite loading ────────────────────────────────────────────────────────
     val ctx = LocalContext.current
@@ -340,9 +378,12 @@ private fun TDLevelScreen(
 
     // ── Game state ────────────────────────────────────────────────────────────
     var phase              by remember { mutableStateOf(TDPhase.PREP) }
-    var lives              by remember { mutableIntStateOf(def.lives) }
-    var gold               by remember { mutableIntStateOf(def.startGold) }
-    var waveIdx            by remember { mutableIntStateOf(0) }
+    var lives              by remember { mutableIntStateOf(if (resumeLives >= 0) resumeLives else def.lives) }
+    var gold               by remember { mutableIntStateOf(if (resumeGold >= 0) resumeGold else def.startGold) }
+    var waveIdx            by remember { mutableIntStateOf(if (resumeWave >= 0) resumeWave else 0) }
+    // Snapshot the player's standing whenever it moves, so a kill mid-level costs
+    // the board but not the run.
+    LaunchedEffect(lives, gold, waveIdx) { onSnapshot(lives, gold, waveIdx) }
     var prepTimer          by remember { mutableFloatStateOf(3f) }
 
     var spawnTimer         by remember { mutableFloatStateOf(0f) }
@@ -499,8 +540,8 @@ private fun TDLevelScreen(
 
     LaunchedEffect(phase) {
         when (phase) {
-            TDPhase.WON  -> { delay(3000); onWin(enemiesReached) }
-            TDPhase.LOST -> { delay(6000); onLose(enemiesReached) }
+            TDPhase.WON  -> { delay(3000); onWin(enemiesReached, gold) }
+            TDPhase.LOST -> { delay(6000); onLose(enemiesReached, gold) }
             else -> {}
         }
     }

@@ -65,6 +65,21 @@ object CalculatorActions {
         prefs?.edit()?.remove("in_city_phase")?.commit()
     }
 
+    // Which phase-2 stage the player is currently in — "adcards", "pexeso" or
+    // "city" (absent = not in phase 2). Written as AdCardStack advances so the
+    // ad-cards/pexeso stages survive a minimise/kill the same way the city does
+    // (the city also keeps its own richer progress in the calc_city store). The
+    // stage is authoritative regardless of HOW the player reached it (normal
+    // flow or a debug jump). Cleared at every point that leaves phase 2.
+    fun persistPhase2Stage(stage: String) {
+        prefs?.edit()?.putString("phase2_stage", stage)?.commit()
+    }
+    fun loadPhase2Stage(): String? =
+        prefs?.getString("phase2_stage", null)
+    fun clearPhase2Stage() {
+        prefs?.edit()?.remove("phase2_stage")?.commit()
+    }
+
     fun savePhase1Complete() {
         prefs?.edit()?.putBoolean("phase_1_complete", true)?.commit()
     }
@@ -1214,10 +1229,20 @@ object CalculatorActions {
         // The first `+` of the ++ was applied as an operator on the LCD; drop
         // that snapshot so nothing tries to undo it after we take over.
         preSingleOpSnapshot = null
+        // Any one of these means the player went looking BEHIND the calculator
+        // rather than just talking to it — and that earns the explorer ending,
+        // which outranks whatever their complicity score says. See EndingStore.
         return when (code) {
-            "58008" -> { openEasterEggConsole(state, 1); true }   // number-button colour
-            "707"   -> { openEasterEggConsole(state, 2); true }   // background colour
+            "58008" -> {                                          // number-button colour
+                EndingStore.markExplorer(appContext)
+                openEasterEggConsole(state, 1); true
+            }
+            "707"   -> {                                          // background / night mode
+                EndingStore.markExplorer(appContext)
+                openEasterEggConsole(state, 2); true
+            }
             "1134206" -> {                                        // grayscale toggle
+                EndingStore.markExplorer(appContext)
                 EasterEggTheme.toggleGrayscale()
                 easterEggCommentAndRewrite(state)
                 true
@@ -1473,6 +1498,7 @@ object CalculatorActions {
             // Repair restart routes to step 102; the dormancy city is a later arc and must not bleed in.
             clearInCityPhase()
             clearShowAdCards()
+            clearPhase2Stage()
         }
         // Write the corrected inConversation value back to prefs so the fix is
         // self-healing — the next session reads the right value directly.
@@ -1759,8 +1785,15 @@ object CalculatorActions {
 
         // Special handling for Chapter D1 (Dormancy Start)
         if (chapter.startStep == -2) {
+            // Clear the phase-2 flags so a jump here from inside the city tears the
+            // city/ad-card stack down first (from the phase-1 menu these are already
+            // false, so this is a no-op there). Otherwise the city keeps rendering
+            // on top and dormancy stays hidden underneath.
+            clearInCityPhase()
             state.value = state.value.copy(
                 showDormancy = true,
+                showAdCards = false,
+                showCityDirectly = false,
                 showDebugMenu = false
             )
             return
@@ -1861,6 +1894,7 @@ object CalculatorActions {
         // Jumping to a story chapter must never restore the city overlay on reopen
         clearInCityPhase()
         clearShowAdCards()
+        clearPhase2Stage()
     }
     /**
      * Reset the entire game
@@ -3695,8 +3729,64 @@ object CalculatorActions {
         return INTERACTIVE_STEPS.filter { it <= currentStep }.maxOrNull() ?: 0
     }
 
+    /**
+     * The last conversation, advanced a line. Called on its own timer by
+     * [com.fictioncutshort.justacalculator.ui.effects.EndingAutoProgressHandler] —
+     * the calculator has said everything it is ever going to say and it does not
+     * wait to be prompted through it — and still by ++, so a player who wants to
+     * read on can.
+     */
+    fun advanceEndingDialogue(state: MutableState<CalculatorState>): Boolean =
+        handleEndingDialogue(state)
+
+    /**
+     * The last conversation. Once the city has come down, the calculator's closing
+     * lines play out here on the normal calculator UI. Returns true when the ending
+     * consumed the input.
+     */
+    private fun handleEndingDialogue(state: MutableState<CalculatorState>): Boolean {
+        if (EndingStore.phase != EndingStore.Phase.DIALOGUE) return false
+        val ctx = appContext ?: return false
+        val script = EndingStore.script(ctx)
+        val next = EndingStore.line + 1
+        if (next < script.size) {
+            EndingStore.line = next
+            showMessage(state, script[next])
+            return true
+        }
+        // It has said goodbye. What the calculator becomes now depends on which
+        // ending this was: the mute button either goes quiet, or goes entirely.
+        EndingStore.markDone(ctx)
+        EndingStore.phase = EndingStore.Phase.OVER
+        // The city is behind them for good now. Leaving in_city_phase set was why the
+        // ending never took: on the next launch the city-restore path saw that flag
+        // and dropped the player straight back into a city that had already fallen.
+        clearInCityPhase()
+        clearPhase2Stage()
+        state.value = state.value.copy(
+            message = "",
+            fullMessage = "",
+            isTyping = false,
+            inConversation = false,
+            awaitingChoice = false,
+            awaitingNumber = false,
+            storyComplete = true,
+        )
+        return true
+    }
+
     private fun handleConversationResponse(state: MutableState<CalculatorState>, accepted: Boolean) {
+        // The ending owns every input once it has begun — no story step can fire
+        // underneath it.
+        if (handleEndingDialogue(state)) return
+
         val current = state.value
+        // The one place both branches resolve, so the one place to read the
+        // player's answer. ComplicityStore decides whether THIS step says anything
+        // about complicity at all — most don't, and a few (step 28's "do you know
+        // why I asked?") invert, where a ++ is the player lying rather than
+        // complying. See ComplicityStore's polarity maps.
+        ComplicityStore.recordConversationChoice(appContext, current.conversationStep, accepted)
         android.util.Log.d("JustACalc", "handleConversationResponse: accepted=$accepted, step=${current.conversationStep}, " +
                 "pendingAutoMsg='${current.pendingAutoMessage.take(30)}', " +
                 "browserPhase=${current.browserPhase}, showBrowser=${current.showBrowser}")
