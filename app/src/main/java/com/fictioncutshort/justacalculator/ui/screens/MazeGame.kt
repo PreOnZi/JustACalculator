@@ -1010,8 +1010,9 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
     val coroutineScope    = rememberCoroutineScope()
     var examineTarget     by remember { mutableStateOf<ExamineTarget?>(null) }
     var examineCooldown   by remember { mutableStateOf(false) }
-    // Pending red-trap effect (set when player accepts a decoy from the overlay)
-    var pendingRedTrap    by remember { mutableStateOf<MazeTrap?>(null) }
+    // Bumped to complicate the maze — either accepting a decoy, OR leaving a key the
+    // player was meant to take (regenerates the maze but keeps that key placeable).
+    var complicationTick  by remember { mutableIntStateOf(0) }
     // Article quiz shown when rolling over an orange trap
     var articleQuizTarget by remember { mutableStateOf<ArticleQuiz?>(null) }
     // Persistent across rebuilds: which article numbers have been shown
@@ -1119,8 +1120,8 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
     }
 
     // ── Red-trap effect triggered after player accepts a decoy in the overlay ──
-    LaunchedEffect(pendingRedTrap) {
-        val trap = pendingRedTrap ?: return@LaunchedEffect
+    LaunchedEffect(complicationTick) {
+        if (complicationTick == 0) return@LaunchedEffect
         val curLayout = layoutHolder.value
         val newLevel  = curLayout.level + 1
         val newLayout = MazeLayout(newLevel)
@@ -1161,7 +1162,6 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
         flickerAlpha = 0f
         message = "that's not the right key"
         delay(1400); message = null
-        pendingRedTrap = null
     }
 
     // ── Game loop ─────────────────────────────────────────────────────────────
@@ -1654,14 +1654,30 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
                             collectedTraps.add(trap.id)
                             val slot = trap.id % DECOY_KEY_APPEARANCES.size
                             globalCollectedDecoySlots.value = globalCollectedDecoySlots.value + slot
-                            pendingRedTrap = trap  // kicks off the LaunchedEffect rebuild
+                            complicationTick++  // kicks off the maze-complication rebuild
                         }
                     }
+                    examineCooldown = true
+                    coroutineScope.launch { delay(1000); examineCooldown = false }
                 },
                 onLeave = {
-                    examineTarget = null
+                    when (currentExamine) {
+                        is ExamineTarget.Decoy -> {
+                            // Leaving a fake key was the right call — it vanishes.
+                            examineTarget = null
+                            val trap = currentExamine.trap
+                            trap.collected = true
+                            collectedTraps.add(trap.id)
+                        }
+                        is ExamineTarget.RealKey -> {
+                            // Leaving a key you were meant to take: the maze complicates
+                            // (like a wrong pick), but the key stays, still collectable later.
+                            examineTarget = null
+                            complicationTick++
+                        }
+                    }
                     examineCooldown = true
-                    coroutineScope.launch { delay(600); examineCooldown = false }
+                    coroutineScope.launch { delay(1000); examineCooldown = false }
                 },
             )
         }

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- These raw resources are loaded dynamically via Resources.getIdentifier(),
+     so the resource shrinker cannot see the references statically. Keep them.
+       thump     -> Door4Room.playOneShotRaw(context, "thump", ...)
+       ending_vo -> Calculatorcityview getIdentifier("ending_vo","raw",...)
+                    (optional VO track added at runtime; kept so a future drop-in works) -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/thump,@raw/ending_vo" />

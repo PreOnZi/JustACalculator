@@ -79,7 +79,18 @@ fun TermsScreen(
                 textAlign = TextAlign.Center
             )
 
-            Spacer(modifier = Modifier.height(80.dp))
+            Spacer(modifier = Modifier.height(22.dp))
+
+            Text(
+                text = "While effort was put into adapting the calculator for horizontal screens, it has been developed with vertical view-first in mind.",
+                fontSize = 12.sp,
+                fontFamily = CalculatorDisplayFont,
+                color = Color(0xFF2D2D2D),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 8.dp)
+            )
+
+            Spacer(modifier = Modifier.height(46.dp))
 
             // Privacy Policy button (smaller, secondary)
             Button(
@@ -282,6 +293,8 @@ This app does not collect, store, or transmit any personal data.
 That is our promise.
 
 Because to really take advantage of the calculator... Do what it tells you!
+
+Generative AI: Generative AI, mainly Claude AI, has been used for development of the calculator. However, its use was strictly code-based. Claude was not used to consult art direction, the story or to build the majority of visual artifacts. 3D models have been built from scratch in Blender, the story has been developed based only on human ideas & discussions, and the same goes for art direction.
 
 For more comprehensive privacy policy (which is highly recommended you visit) please follow the link below:""",
                     fontSize = 14.sp,

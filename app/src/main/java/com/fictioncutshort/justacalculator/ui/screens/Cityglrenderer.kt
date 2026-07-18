@@ -133,6 +133,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         val aerialSkip: Boolean = false,   // skip during aerial intro
         val radArc: Boolean = false, val arcAngle: Float = 0f,  // spinning arc ring segment
         val glow: Boolean = false,         // additive blend, fades in with darknessLevel
+        val lamp: Boolean = false,         // lamp bulb/halo glow — stays dark by day, warms in only at dusk
         val softShadow: Boolean = false,   // alpha blend, dark ground shadow under buildings
         val noAO: Boolean = false,         // force uAerial=1 for self-lit / metallic fixtures
         val windowDigit: Int = -1,         // 1..9 → main-building window panel, colour driven per-frame
@@ -610,7 +611,17 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     }
     private var sw = 1; private var sh = 1
 
+    private var lastFrameMs = 0L
     override fun onDrawFrame(gl: GL10?) {
+        // Frame-rate cap (~33 fps). The scene rendered continuously at full device
+        // frame-rate, which ran the GPU hot and drained the battery; pacing the GL
+        // thread here roughly halves that sustained load with no visible cost.
+        val nowMs = android.os.SystemClock.uptimeMillis()
+        val since = nowMs - lastFrameMs
+        if (lastFrameMs != 0L && since in 0 until 30L) {
+            try { Thread.sleep(30L - since) } catch (_: InterruptedException) {}
+        }
+        lastFrameMs = android.os.SystemClock.uptimeMillis()
         if (needsRebuild) { needsRebuild = false; buildScene() }
         // Easter-egg background colour (707) + grayscale (1134206) — both read
         // live so a tweak made on the calculator shows next time the city draws.
@@ -912,7 +923,11 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                     r = 1.0f; g = 0.82f; b = 0.30f       // warm window light
                     a = 0.85f * dkLvl
                 } else {
-                    r = m.r; g = m.g; b = m.b; a = m.a * dkLvl
+                    // Lamp bulbs/halos stay dark through the day and only warm up once
+                    // real dusk sets in (dkLvl past ~0.5) — they used to glow the moment
+                    // the first building was done. Other glow sources keep their ramp.
+                    val glowLvl = if (m.lamp) ((dkLvl - 0.5f) / 0.4f).coerceIn(0f, 1f) else dkLvl
+                    r = m.r; g = m.g; b = m.b; a = m.a * glowLvl
                 }
                 if (a < 0.01f) continue
                 GLES20.glUniform4f(uCol, r, g, b, a)
@@ -2777,7 +2792,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             if (g.materialName == "Material.002") {
                 addInstancedGroup(g, px, baseY, pz, s, yaw = yawRad,
                     aerialSkip = true, glow = true, alpha = 1f,
-                    glowColor = floatArrayOf(1.0f, 0.86f, 0.42f))
+                    glowColor = floatArrayOf(1.0f, 0.86f, 0.42f), lamp = true)
                 registerLampLight(g, px, baseY, pz, s, yawRad)
             }
         }
@@ -2812,7 +2827,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 if (g.materialName == "Material.002") {
                     addInstancedGroup(g, px, yOff, pz, s, yaw = yaw,
                         aerialSkip = true, glow = true, alpha = 1f,
-                        glowColor = floatArrayOf(1.0f, 0.86f, 0.42f))
+                        glowColor = floatArrayOf(1.0f, 0.86f, 0.42f), lamp = true)
                     registerLampLight(g, px, yOff, pz, s, yaw)
                 }
             }
@@ -2879,7 +2894,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         g: ObjGroup, tx: Float, ty: Float, tz: Float, s: Float,
         yaw: Float = 0f,
         aerialSkip: Boolean = false, glow: Boolean = false, alpha: Float = 1f,
-        noAO: Boolean = false, glowColor: FloatArray? = null
+        noAO: Boolean = false, glowColor: FloatArray? = null, lamp: Boolean = false
     ) {
         val src = g.verts
         val out = FloatArray(src.size)
@@ -2899,7 +2914,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         val cb = glowColor?.getOrNull(2) ?: g.b
         meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3,
             cr, cg, cb, a = alpha, fog = if (aerialSkip) 0f else 0.05f,
-            aerialSkip = aerialSkip, glow = glow, noAO = noAO))
+            aerialSkip = aerialSkip, glow = glow, noAO = noAO, lamp = lamp))
     }
 
     private fun addLampPostsAt(positions: List<FloatArray>) {
@@ -3017,7 +3032,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             val xo0 = cx + cos(a0).toFloat() * rOut; val zo0 = cz + sin(a0).toFloat() * rOut
             val xo1 = cx + cos(a1).toFloat() * rOut; val zo1 = cz + sin(a1).toFloat() * rOut
             addQ(xi0, y, zi0, xi1, y, zi1, xo1, y, zo1, xo0, y, zo0,
-                 r, g, b, a = alpha, fog = 0f, aerialSkip = true, glow = true)
+                 r, g, b, a = alpha, fog = 0f, aerialSkip = true, glow = true, lamp = true)
         }
     }
 
@@ -3583,10 +3598,10 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                      r:Float,g:Float,b:Float, a:Float=1f, fog:Float=0.65f,
                      aerialSkip: Boolean = false,
                      glow: Boolean = false,
-                     softShadow: Boolean = false) {
+                     softShadow: Boolean = false, lamp: Boolean = false) {
         val v = floatArrayOf(x0,y0,z0,x1,y1,z1,x2,y2,z2, x0,y0,z0,x2,y2,z2,x3,y3,z3)
         meshes.add(Mesh(v.toFB(), GLES20.GL_TRIANGLES, 6, r,g,b,a,fog,
-            aerialSkip = aerialSkip, glow = glow, softShadow = softShadow))
+            aerialSkip = aerialSkip, glow = glow, softShadow = softShadow, lamp = lamp))
     }
     private fun addL(x0:Float,y0:Float,z0:Float, x1:Float,y1:Float,z1:Float,
                      r:Float,g:Float,b:Float) {
@@ -3863,7 +3878,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     // lamps standing behind the player, back in Building 10).
     private fun uploadNearestLights(px: Float = camX, pz: Float = camZ) {
         var n = 0
-        if (darknessLevel > 0.02f && !aerialMode && lampLights.isNotEmpty()) {
+        if (darknessLevel > 0.5f && !aerialMode && lampLights.isNotEmpty()) {
             val near = lampLights
                 .filter { l ->
                     // A building's windows go dark once it has been explored; the

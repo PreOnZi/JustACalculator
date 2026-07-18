@@ -35,7 +35,7 @@ import com.fictioncutshort.justacalculator.R
  * shows the "Part 1 complete" screen instead of advancing to ad cards / city.
  * Flip to true once the post-dormancy content (Phase 2) is ready to ship.
  */
-const val PHASE_2_ENABLED = false
+const val PHASE_2_ENABLED = true
 
 // ═══════════════════════════════════════════════════════════════════════════
 // COLORS - Retro calculator theme

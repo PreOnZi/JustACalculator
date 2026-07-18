@@ -56,6 +56,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -471,8 +474,9 @@ private fun AppSocialInstagram() {
             Text("Innergram", color = Color.Black, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
         }
         LazyColumn(modifier = Modifier.fillMaxSize(), userScrollEnabled = !LocalScrollLag.current) {
-            items(posts.size) { idx ->
-                val p = posts[idx]
+            // Endless feed: the same posts repeat forever as you keep scrolling.
+            items(Int.MAX_VALUE) { idx ->
+                val p = posts[idx % posts.size]
                 InstaPost(name = p.name, image = p.image, caption = p.caption)
             }
         }
@@ -508,7 +512,12 @@ private fun InstaPost(name: String, image: Any?, caption: String) {
             Text("💬", color = Color.Black, fontSize = 18.sp)
             Text("↗", color = Color.Black, fontSize = 20.sp)
         }
-        Text("$name · $caption", color = Color.Black, fontSize = 13.sp,
+        Text(
+            buildAnnotatedString {
+                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(name) }
+                append(" · $caption")
+            },
+            color = Color.Black, fontSize = 13.sp,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
         Spacer(modifier = Modifier.height(12.dp))
     }
@@ -532,8 +541,9 @@ private fun AppSocialTikTok() {
         modifier = Modifier.fillMaxSize().background(Color.Black),
         userScrollEnabled = !LocalScrollLag.current
     ) {
-        items(posts.size) { idx ->
-            val p = posts[idx]
+        // Endless feed: the same posts repeat forever as you keep scrolling.
+        items(Int.MAX_VALUE) { idx ->
+            val p = posts[idx % posts.size]
             Box(
                 modifier = Modifier
                     .fillMaxWidth()

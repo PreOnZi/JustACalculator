@@ -67,6 +67,8 @@ enum class AdCardPhase {
     CARDS,       // Swiping through the 5 top cards
     COLLAPSING,  // Stack falls after card 5 swiped
     PEXESO,      // Memory game
+    BEEP,        // Black-screen "Can you hear the beep?" audio check
+    INTRO,       // Black screen: vo001 over radio.mp3, then vo002
     TUNNEL,      // Warp-through transition → city
     CITY         // 3-D calculator cityscape
 }
@@ -279,6 +281,8 @@ fun AdCardStack(
             AdCardPhase.CARDS      -> onStageChanged("adcards")
             AdCardPhase.COLLAPSING,
             AdCardPhase.PEXESO,
+            AdCardPhase.BEEP,
+            AdCardPhase.INTRO,
             AdCardPhase.TUNNEL     -> onStageChanged("pexeso")
             AdCardPhase.CITY       -> onStageChanged("city")
         }
@@ -423,6 +427,35 @@ fun AdCardStack(
                         onComplete = { phase = AdCardPhase.CITY },
                         onJumpToPhase1 = onJumpToPhase1
                     )
+                    AdCardPhase.BEEP -> BeepCheckScreen(
+                        onConfirmed = { phase = AdCardPhase.INTRO }
+                    )
+                    AdCardPhase.INTRO -> {
+                        val introCtx = LocalContext.current
+                        // vo001 over the radio bed, then vo002 right after; the radio
+                        // plays out its full length under both. Only once vo002 finishes
+                        // do we drop into the city (its aerial-flicker intro), so 003 can
+                        // fire when the camera starts moving.
+                        LaunchedEffect(Unit) {
+                            com.fictioncutshort.justacalculator.logic.VoiceoverManager.init(introCtx)
+                            com.fictioncutshort.justacalculator.logic.VoiceoverManager.playWithRadio(
+                                voRes = R.raw.vo001,
+                                radioRes = R.raw.radio,
+                                radioVolume = 0.55f,
+                                onVoComplete = {
+                                    com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(
+                                        resId = R.raw.vo002,
+                                        cctv = false,
+                                        onComplete = {
+                                            com.fictioncutshort.justacalculator.logic.VoiceoverManager.stopRadio()
+                                            phase = AdCardPhase.CITY
+                                        }
+                                    )
+                                }
+                            )
+                        }
+                        Box(modifier = Modifier.fillMaxSize().background(Color.Black))
+                    }
                     AdCardPhase.CITY -> CalculatorCityView(
                         modifier = Modifier.fillMaxSize(),
                         onJumpToPhase1 = onJumpToPhase1
@@ -437,7 +470,7 @@ fun AdCardStack(
                             flipped = pexesoFlipped, matched = pexesoMatched,
                             enlargedIdx = pexesoEnlarged,
                             showReunion = showPairReunion,
-                            onReunionComplete = { phase = AdCardPhase.TUNNEL },
+                            onReunionComplete = { phase = AdCardPhase.BEEP },
                             onCardFlip = { idx ->
                                 if (pexesoLocked) return@PexesoGame
                                 if (pexesoMatched.contains(idx) || pexesoFlipped.contains(idx)) return@PexesoGame

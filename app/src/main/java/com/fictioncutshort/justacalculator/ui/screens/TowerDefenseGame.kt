@@ -384,7 +384,25 @@ private fun TDLevelScreen(
     // Snapshot the player's standing whenever it moves, so a kill mid-level costs
     // the board but not the run.
     LaunchedEffect(lives, gold, waveIdx) { onSnapshot(lives, gold, waveIdx) }
-    var prepTimer          by remember { mutableFloatStateOf(3f) }
+    // Narration: vo005 plays over level 1's opening PREP and is cut off the instant
+    // the first wave starts (the wave sounds take over); vo006 fills the lull
+    // between waves 1 and 2.
+    LaunchedEffect(Unit) {
+        com.fictioncutshort.justacalculator.logic.VoiceoverManager.init(ctx)
+        if (levelNum == 1 && waveIdx == 0 && phase == TDPhase.PREP) {
+            com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo005, cctv = false)
+        }
+    }
+    LaunchedEffect(phase, waveIdx) {
+        if (levelNum == 1 && phase == TDPhase.WAVE && waveIdx == 0) {
+            com.fictioncutshort.justacalculator.logic.VoiceoverManager.stopAll()
+        } else if (levelNum == 1 && phase == TDPhase.PREP && waveIdx == 1) {
+            com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo006, cctv = false)
+        }
+    }
+    // Level 1's opening prep is stretched so vo005 can very nearly finish before the
+    // first wave sounds cut it off (the narration is ~11.6 s); other levels stay snappy.
+    var prepTimer          by remember { mutableFloatStateOf(if (levelNum == 1) 11.5f else 3f) }
 
     var spawnTimer         by remember { mutableFloatStateOf(0f) }
     var spawnIdx           by remember { mutableIntStateOf(0) }

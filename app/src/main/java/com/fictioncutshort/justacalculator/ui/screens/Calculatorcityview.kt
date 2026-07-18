@@ -600,6 +600,27 @@ fun CalculatorCityView(
     // Bumped whenever a building overlay closes, so the currency HUD re-reads
     // the persisted balances a building may have just deposited.
     var currencyRefresh by remember { mutableIntStateOf(0) }
+    // Which building was just completed — read by the forceAerial fly-over below to
+    // fire the right narration cue when the aerial view lands back in the city.
+    var lastCompletedBuilding by remember { mutableIntStateOf(0) }
+    // Handoff to the decoupled landing-cue effect. The forceAerial coroutine cancels
+    // itself when it sets forceAerial=false, so delayed landing cues (vo018) can't run
+    // inline — they run keyed on this instead.
+    var landCueBuilding by remember { mutableIntStateOf(0) }
+    // Building 6's landing cue (vo027) waits for vo025/026 to finish + a long gap
+    // before it plays. Run on its OWN latch, not landCueBuilding, so completing the
+    // next building (which reassigns landCueBuilding) can't cancel the pending vo027.
+    var b6LandCue by remember { mutableIntStateOf(0) }
+    // Guard so the monster's first-encounter line (vo020) only plays once per session.
+    // (Not persisted — the persisted flag got set prematurely by the old cancelled
+    // coroutine, leaving vo020 permanently muted on affected saves.)
+    var monsterLinePlayed by remember { mutableStateOf(false) }
+    // Latched true on the first catch; drives vo020 from an effect that can't be
+    // cancelled by catchPhase resetting to 0 mid-delay.
+    var monsterCaught by remember { mutableStateOf(false) }
+    // Fingers the player answered they'd sacrifice at building 9's door riddle —
+    // read when the flappy game launches to pick vo033 (1-2) vs vo034 (3+).
+    var building9Fingers by remember { mutableIntStateOf(-1) }
     var tankGameCompleted by remember { mutableStateOf(prefs.getBoolean("td_b3_done", false)) }
     var bridgePieces     by remember { mutableIntStateOf(prefs.getInt("bridge_pieces", if (prefs.getBoolean("td_b1_done", false)) 1 else 0)) }
     // Crossing the finished bridge is one-way — once the player reaches the far
@@ -633,7 +654,11 @@ fun CalculatorCityView(
     // After Building 5 is finished, the "today's draw" lottery popup appears once,
     // after roughly 10s of actual walking. Choosing Play / Lucky Dip quietly
     // stakes ALL the player's coins (settled later as a total loss in Building 8).
-    val b5Done = remember { prefs.getBoolean("td_b5_done", false) }
+    // Reactive: this must flip to true when Building 5 is finished DURING the
+    // current city session (a plain remember{} would freeze at the value read
+    // when the city first composed, so the popup would only ever fire on a later
+    // relaunch). Set to true in the Building 5 onComplete below.
+    var b5Done by remember { mutableStateOf(prefs.getBoolean("td_b5_done", false)) }
     LaunchedEffect(b5Done) {
         if (!b5Done || com.fictioncutshort.justacalculator.logic.CurrencyStore.lotteryShown(context)) return@LaunchedEffect
         var walked = 0f
@@ -642,7 +667,7 @@ fun CalculatorCityView(
             // Read live state each tick (isWalking/overlayOpen are per-recomposition vals).
             val anyOverlay = doorOpeningDigit != null || showBuilding5Map || showBuilding6Game ||
                 showBuilding7Filter || showBuilding8Casino || showBuilding9Flappy || showTankGame ||
-                showDoor4 || showTowerDefense || showMaze || showCityLottery ||
+                showDoor4 || showTowerDefense || showMaze || showCityLottery || forceAerial ||
                 doorPromptDigit != null || riddleDigit != null
             if (anyOverlay) continue
             // Mostly credited by walking, but also a slow idle drip so it always fires.
@@ -776,43 +801,37 @@ fun CalculatorCityView(
         // they happened to be by then (halfway back across the bridge, say). So the
         // quiet stretch is now a vigil: step outside during it and the voiceover
         // stops, and nothing happens until they come back and stand there properly.
-        var ending: String
-        var vo: MediaPlayer?
-        var voMs: Long
+        var ending = ""
+        // Fifteen seconds of just standing there before the ending narration begins —
+        // a vigil: stepping outside during it cancels everything, and nothing happens
+        // until they come back and stand there properly.
+        val ENDING_VO_START_DELAY_MS = 15_000L
         while (true) {
             while (!insideTheButton()) delay(200)
 
             // The ending is decided HERE and frozen, so every screen after this agrees.
             ending = com.fictioncutshort.justacalculator.logic.EndingStore.choose(context)
 
-            // The voiceover. Absent for now - when the recording exists, drop it in as
-            // res/raw/ending_vo and this picks it up and paces the whole sequence off
-            // its real length instead of the placeholder.
-            val voId = context.resources.getIdentifier("ending_vo", "raw", context.packageName)
-            vo = if (voId != 0) MediaPlayer.create(context, voId) else null
-            voMs = vo?.duration?.toLong() ?: ENDING_VO_PLACEHOLDER_MS
-            try { vo?.start() } catch (_: Throwable) {}
-
-            // Thirty seconds of just standing there, listening.
-            val quiet = COLLAPSE_STARTS_AT_MS.coerceAtMost(voMs)
             var waited = 0L
             var walkedOut = false
-            while (waited < quiet) {
+            while (waited < ENDING_VO_START_DELAY_MS) {
                 delay(100)
                 waited += 100
                 if (!insideTheButton()) { walkedOut = true; break }
             }
             if (!walkedOut) break               // they stayed. The city comes down.
-
-            try { vo?.stop(); vo?.release() } catch (_: Throwable) {}
-            vo = null
         }
         // Past this point the collapse is committed, and they are standing in it.
         endStarted = true
 
-        // Then the world starts going. The collapse runs for whatever is left of
-        // the voiceover, so the two always finish together.
-        val fallMs = (voMs - COLLAPSE_STARTS_AT_MS.coerceAtMost(voMs)).coerceAtLeast(6000L)
+        // vo038 — the ending narration. It starts now (15 s after they stepped in) and
+        // the collapse runs for its whole length, so the world goes fully black exactly
+        // as the voiceover ends.
+        val vo: MediaPlayer? = MediaPlayer.create(context, R.raw.vo038)
+        val voMs = vo?.duration?.toLong() ?: ENDING_VO_PLACEHOLDER_MS
+        try { vo?.start() } catch (_: Throwable) {}
+
+        val fallMs = voMs.coerceAtLeast(6000L)
         val t0 = System.currentTimeMillis()
         var lastBoom = 0L
         while (true) {
@@ -948,11 +967,28 @@ fun CalculatorCityView(
             2 -> showMaze = true
             3 -> showTankGame = true
             4 -> showDoor4 = true
-            5 -> showBuilding5Map = true
+            5 -> {
+                showBuilding5Map = true
+                // vo029 — entering building 5 (the correct pin has just been accepted).
+                com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo029, cctv = false)
+            }
             6 -> showBuilding6Game = true
             7 -> showBuilding7Filter = true
-            8 -> showBuilding8Casino = true
-            9 -> showBuilding9Flappy = true
+            8 -> {
+                showBuilding8Casino = true
+                // vo031 — entering building 8.
+                com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo031, cctv = false)
+            }
+            9 -> {
+                showBuilding9Flappy = true
+                // vo033/034 during the flappy game, keyed to the finger answer given
+                // at the door (1-2 fingers → vo033, 3+ → vo034).
+                if (building9Fingers in 1..2) {
+                    com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo033, cctv = false)
+                } else if (building9Fingers >= 3) {
+                    com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo034, cctv = false)
+                }
+            }
             else -> {
                 entryProgress++
                 prefs.edit().putInt("entry_progress", entryProgress).apply()
@@ -1006,10 +1042,80 @@ fun CalculatorCityView(
         if (forceAerial) {
             applyFootprint(0)         // restore full aerial buildings for the fly-over
             triggerWhiteFlash()
+            // Building 7's post-completion narration rides the aerial fly-over:
+            // vo013 comes in over the view, vo014/vo015 follow right after.
+            if (lastCompletedBuilding == 7) {
+                com.fictioncutshort.justacalculator.logic.VoiceoverManager.playSequence(
+                    listOf(R.raw.vo013, R.raw.vo014, R.raw.vo015), cctv = false
+                )
+            }
             delay(5000)
             applyFootprint(3)         // back to slim ground footprint
             triggerWhiteFlash()
+            // Hand the landing cue to the decoupled effect BEFORE ending the fly-over:
+            // setting forceAerial=false cancels this coroutine at its next suspension.
+            landCueBuilding = lastCompletedBuilding
+            lastCompletedBuilding = 0
             forceAerial = false
+        }
+    }
+
+    // Landing narration, decoupled from the forceAerial coroutine so delayed cues
+    // (vo018) survive the forceAerial=false that ends the fly-over.
+    LaunchedEffect(landCueBuilding) {
+        when (landCueBuilding) {
+            1 -> com.fictioncutshort.justacalculator.logic.VoiceoverManager.playSequence(
+                    listOf(R.raw.vo007, R.raw.vo008))
+            2 -> com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo028)
+            3 -> {
+                // Building 3 done: the world settles again (glitch off) as night falls.
+                com.fictioncutshort.justacalculator.logic.VoiceoverManager.glitchMode = false
+                com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo019)
+            }
+            4 -> {
+                // After building 4 the world feels "off": glitch on. vo018 plays clean,
+                // 5 s after landing.
+                com.fictioncutshort.justacalculator.logic.VoiceoverManager.glitchMode = true
+                delay(5000)
+                com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(
+                    R.raw.vo018, glitch = false)
+            }
+            5 -> com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo030)
+            6 -> b6LandCue++   // vo027 is delayed — hand it to its own effect (below)
+            8 -> com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo032)
+        }
+        if (landCueBuilding != 0) landCueBuilding = 0
+    }
+
+    // Building 6 landing cue (vo027), decoupled onto its own latch so the long
+    // pre-roll wait survives the next building reassigning landCueBuilding.
+    LaunchedEffect(b6LandCue) {
+        if (b6LandCue == 0) return@LaunchedEffect
+        // vo025/vo026 started at the building-6 finish and may still be playing.
+        // Let it finish, then leave ~8 s of breathing space before vo027 so they
+        // don't run into each other.
+        while (com.fictioncutshort.justacalculator.logic.VoiceoverManager.isPlaying()) delay(200)
+        delay(8000)
+        com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo027)
+    }
+
+    // Voiceover routing: while the player is out walking the city streets the
+    // narration sounds like it's leaking out of the buildings' CCTV cameras
+    // (muffled). Inside any building/overlay it plays normally.
+    LaunchedEffect(overlayOpen) {
+        com.fictioncutshort.justacalculator.logic.VoiceoverManager.cctvMode = !overlayOpen
+    }
+
+    // vo020 — the monster's first-encounter line. Fires once, the first time the
+    // catch cinematic runs (catchPhase leaves 0), just after the buzz/flash lands.
+    LaunchedEffect(catchPhase) {
+        if (catchPhase != 0) monsterCaught = true
+    }
+    LaunchedEffect(monsterCaught) {
+        if (monsterCaught && !monsterLinePlayed) {
+            monsterLinePlayed = true
+            delay(1400)
+            com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo020, cctv = true)
         }
     }
 
@@ -1062,6 +1168,13 @@ fun CalculatorCityView(
                 // even though the cellStage / footprint changes are stepped.
                 launch {
                     delay(3000)
+                    // Aerial view has stabilised and the camera now carries forward
+                    // (phase 2). vo003 comes in over the already-running wind, played
+                    // flat — the player isn't walking the streets yet, so no CCTV routing.
+                    com.fictioncutshort.justacalculator.logic.VoiceoverManager.init(context)
+                    com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(
+                        R.raw.vo003, cctv = false
+                    )
                     val phase2Frames = 188            // 3 s at 16 ms / frame
                     var level = 0
                     applyFootprint(0)
@@ -1099,6 +1212,10 @@ fun CalculatorCityView(
             // pin the settle blend at 1 so post-intro's landing→player lerp
             // produces the player pose exactly, no extra glide.
             landingToPlayerBlend = 1f
+            // Landed. From here the player walks the streets, so voiceover routes
+            // through the CCTV-camera feel (muffled). vo004 is the first such line.
+            com.fictioncutshort.justacalculator.logic.VoiceoverManager.cctvMode = true
+            com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo004)
         } else {
             renderer.buildingHeightScale = 2f
             renderer.needsRebuild = true
@@ -1229,8 +1346,16 @@ fun CalculatorCityView(
                 // North bound has to clear the whole of Building 10 (centre
                 // -CELL_V*5.75, outer radius RAD_R) so the player can walk right
                 // to the back wall inside it.
-                val zBoundsMin = if (!isLandscape && bridgePieces >= 9) -CELL_V * 5.75f - RAD_R - 20f
-                                 else PRA - CELL_V * 0.30f
+                // How far north the built bridge reaches: pieces fill from the city
+                // (south) edge of the lava northward, 1/9 of the span each.
+                val deckEndZ = LAVA_FRONT_Z - (bridgePieces / 9f) * LAVA_DEPTH
+                val zBoundsMin = when {
+                    !isLandscape && bridgePieces >= 9 -> -CELL_V * 5.75f - RAD_R - 20f
+                    // Partial bridge: let them walk out onto the built planks and a
+                    // little past the end (so they can step off into the lava).
+                    !isLandscape && bridgePieces > 0  -> minOf(PRA - CELL_V * 0.30f, deckEndZ - 25f)
+                    else                              -> PRA - CELL_V * 0.30f
+                }
                 // South bound: normally the city's south edge — but once the bridge
                 // has been crossed it clamps to the lava's far bank, so there's no
                 // walking back over the deck into the city.
@@ -1312,11 +1437,12 @@ fun CalculatorCityView(
                     }
                 }
 
-                // Bridge rails: while over the lava on the FINISHED bridge, keep the
-                // player between the rails so they can't fall off (or touch lava).
-                val overLava = !isLandscape && bridgePieces >= 9 &&
-                    pZ < LAVA_FRONT_Z && pZ > LAVA_NORTH_Z
-                if (overLava) pX = pX.coerceIn(-BRIDGE_DECK_HALF, BRIDGE_DECK_HALF)
+                // Bridge rails: while over a built plank keep the player between the
+                // rails so they walk the deck (finished OR partial bridge). Past the
+                // last plank there's no rail — that's the drop.
+                val overDeck = !isLandscape && bridgePieces > 0 &&
+                    pZ < LAVA_FRONT_Z && pZ >= deckEndZ
+                if (overDeck) pX = pX.coerceIn(-BRIDGE_DECK_HALF, BRIDGE_DECK_HALF)
 
                 // Stepping off the north end of the deck latches the crossing —
                 // from here the city is shut behind the player, permanently.
@@ -1329,8 +1455,11 @@ fun CalculatorCityView(
                 // ── Lava boundary — vibrate + flash + teleport ────────────────
                 // Only the actual lava STRIP burns (not the green terrain north of
                 // it, where the mute button sits); the finished bridge is safe.
-                val onBridge = bridgePieces >= 9 &&
-                    (if (isLandscape) true else kotlin.math.abs(pX) <= BRIDGE_DECK_HALF + 2f)
+                // Safe on a built plank: over the lava, within the deck width, and not
+                // past the last piece. Off the end (pZ < deckEndZ) → the lava takes them.
+                val onBridge = if (isLandscape) bridgePieces >= 9
+                    else bridgePieces > 0 && pZ >= deckEndZ &&
+                        kotlin.math.abs(pX) <= BRIDGE_DECK_HALF + 2f
                 val inLavaNow = !onBridge && (if (isLandscape)
                     pX < LAVA_WEST_X_L && pZ > LAVA_NORTH_Z_L && pZ < LAVA_SOUTH_Z_L
                 else
@@ -2062,6 +2191,13 @@ fun CalculatorCityView(
                         doorPromptDigit = null
                         riddleInput = ""
                         riddleDigit = digit
+                        // vo009 fires the moment they agree to enter building 7 — before
+                        // the riddle — so it has time to play; vo010 inside the room waits
+                        // for it to finish (see Building7VanityRoom).
+                        if (digit == 7) {
+                            com.fictioncutshort.justacalculator.logic.VoiceoverManager
+                                .play(R.raw.vo009, cctv = true)
+                        }
                     },
                     onNo  = {
                         doorCooldownDigit = digit
@@ -2081,6 +2217,22 @@ fun CalculatorCityView(
                         onInputChange = { riddleInput = it },
                         onSubmit      = { rating ->
                             riddleDigit = null
+                            // Building 9's riddle asks how many fingers they'd give up;
+                            // stash the answer so vo033/vo034 can fire during the flappy game.
+                            if (digit == 9) building9Fingers = riddleInput.toIntOrNull() ?: 0
+                            // Building 6's riddle ("how much is life worth?") gets a reply
+                            // sized to the figure they put in: vo021 (0-1000), vo022
+                            // (1001-1,000,000), vo023 (1,000,000+).
+                            if (digit == 6) {
+                                val worth = riddleInput.toLongOrNull() ?: 0L
+                                val worthVo = when {
+                                    worth <= 1_000L      -> R.raw.vo021
+                                    worth <= 1_000_000L  -> R.raw.vo022
+                                    else                 -> R.raw.vo023
+                                }
+                                com.fictioncutshort.justacalculator.logic.VoiceoverManager
+                                    .play(worthVo, cctv = true)
+                            }
                             riddleInput = ""
                             if (digit in 1..9) {
                                 // Sliding door + walk-through is handled by the
@@ -2098,6 +2250,15 @@ fun CalculatorCityView(
                                 if (rating >= 0) {
                                     com.fictioncutshort.justacalculator.logic.ComplicityStore
                                         .recordRating(context, rating)
+                                    // Their rating of the city gets a reply: vo035 (1-3),
+                                    // vo036 (4-6), vo037 (7-10).
+                                    val ratingVo = when {
+                                        rating <= 3 -> R.raw.vo035
+                                        rating <= 6 -> R.raw.vo036
+                                        else        -> R.raw.vo037
+                                    }
+                                    com.fictioncutshort.justacalculator.logic.VoiceoverManager
+                                        .play(ratingVo, cctv = true)
                                 }
                                 doorOpeningDigit = RAD_DIGIT
                             }
@@ -2123,6 +2284,7 @@ fun CalculatorCityView(
                     renderer.bridgePieces = bridgePieces
                     prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
                     towerDefenseCompleted = true
+                    lastCompletedBuilding = 1
                     prefs.edit().putBoolean("td_b1_done", true).apply()
                     prefs.edit().putBoolean("completed_1", true).apply()
                     com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 1)
@@ -2149,6 +2311,7 @@ fun CalculatorCityView(
                     renderer.bridgePieces = bridgePieces
                     prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
                     prefs.edit().putBoolean("completed_2", true).apply()
+                    lastCompletedBuilding = 2
                     com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 2)
                     renderer.b2DoorGreen = true
                     renderer.needsRebuild = true
@@ -2171,6 +2334,7 @@ fun CalculatorCityView(
                 onComplete = {
                     showTankGame = false
                     tankGameCompleted = true
+                    lastCompletedBuilding = 3
                     prefs.edit().putBoolean("td_b3_done", true).apply()
                     prefs.edit().putBoolean("completed_3", true).apply()
                     com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 3)
@@ -2200,6 +2364,7 @@ fun CalculatorCityView(
                     renderer.bridgePieces = bridgePieces
                     prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
                     prefs.edit().putBoolean("td_b4_done", true).apply()
+                    lastCompletedBuilding = 4
                     prefs.edit().putBoolean("completed_4", true).apply()
                     com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 4)
                     renderer.needsRebuild = true
@@ -2223,6 +2388,8 @@ fun CalculatorCityView(
                     renderer.bridgePieces = bridgePieces
                     prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
                     prefs.edit().putBoolean("td_b5_done", true).apply()
+                    b5Done = true   // arm the coins-lottery popup for this session
+                    lastCompletedBuilding = 5
                     prefs.edit().putBoolean("completed_5", true).apply()
                     com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 5)
                     renderer.b5EntranceGlow = true   // light up Building 8's entrance
@@ -2251,6 +2418,7 @@ fun CalculatorCityView(
                     renderer.bridgePieces = bridgePieces
                     prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
                     prefs.edit().putBoolean("td_b6_done", true).apply()
+                    lastCompletedBuilding = 6
                     prefs.edit().putBoolean("completed_6", true).apply()
                     com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 6)
                     renderer.needsRebuild = true
@@ -2274,6 +2442,11 @@ fun CalculatorCityView(
                     showBuilding7Filter = false
                     entryProgress++
                     prefs.edit().putInt("entry_progress", entryProgress).apply()
+                    // Building 7 lays its bridge piece too (this was missing, so the
+                    // 2nd plank never appeared over the lava after finishing it).
+                    bridgePieces = (bridgePieces + 1).coerceAtMost(9)
+                    renderer.bridgePieces = bridgePieces
+                    prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
                     prefs.edit().putBoolean("building_done_7", true).apply()
                     prefs.edit().putBoolean("completed_7", true).apply()
                     com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 7)
@@ -2282,6 +2455,10 @@ fun CalculatorCityView(
                     pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
                     pZ = if (isLandscape) PLAYER_START_Z_L else PLAYER_START_Z
                     camYaw = 0f
+                    // Building 7 has no bridge piece, but we still fly the aerial view so
+                    // its post-completion narration (vo013→015) has somewhere to land.
+                    lastCompletedBuilding = 7
+                    forceAerial = true
                 }
             )
         }
@@ -2294,6 +2471,7 @@ fun CalculatorCityView(
                     entryProgress++
                     prefs.edit().putInt("entry_progress", entryProgress).apply()
                     prefs.edit().putBoolean("building_done_8", true).apply()
+                    lastCompletedBuilding = 8
                     prefs.edit().putBoolean("completed_8", true).apply()
                     com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 8)
                     // Completing Building 8 lays another bridge piece (aerial reveal).
@@ -2685,8 +2863,18 @@ private fun RiddleDialog(
                 else wrongFlash = true
             }
             AnswerType.TIME_24H -> {
-                if (input.filter { it.isDigit() }.length >= 4) onSubmit(-1)
-                else wrongFlash = true
+                val d = input.filter { it.isDigit() }
+                val hh = d.take(2).toIntOrNull()
+                val mm = d.drop(2).take(2).toIntOrNull()
+                if (d.length >= 4 && hh != null && mm != null && hh in 0..23 && mm in 0..59) {
+                    val cal = java.util.Calendar.getInstance()
+                    val nowMin = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 +
+                        cal.get(java.util.Calendar.MINUTE)
+                    val ansMin = hh * 60 + mm
+                    var diff = kotlin.math.abs(nowMin - ansMin)
+                    diff = minOf(diff, 24 * 60 - diff)   // wrap across midnight
+                    if (diff <= 3) onSubmit(-1) else wrongFlash = true
+                } else wrongFlash = true
             }
             // OPEN covers the mute button's slider, which is always accepted -
             // the point is what they answered, not whether it was 'right'.
