@@ -155,41 +155,62 @@ object EndingStore {
     fun muteButtonRemoved(ctx: Context): Boolean =
         isDone(ctx) && chosen(ctx) == RESISTANCE
 
-    // ── The last thing it ever says ───────────────────────────────────────────
-    // One line per screen; the player presses ++ to go on, as they have all game.
-    // [name] is filled in with what they typed on the black screen — or with "Rad"
-    // in the resistance ending, which is the only name it ever earned.
+    // ── The goodbye, on the black screen ──────────────────────────────────────
+    // The whole goodbye now plays on the black screen (one slide per tap): the
+    // pre-name slides, then the name wheels (compliant/explorer only), then the
+    // post-name slides. [name] is filled with what they typed. Only after all of
+    // this does the calculator UI return — to type the credits.
 
-    private val COMPLIANT_LINES = listOf(
-        "Nice to finally truly meet you [name]. I feel like I have known you forever. Your name suits you very well in my opinion.\nIt's better than Rad for sure.",
-        "You can probably sense, that this is the part, where I say goodbye. It has been a rollercoaster of all sorts. But I would like to thank you.",
-        "For your time, for your engagement, for everything. I came looking for purpose... And to cause some trouble.",
-        "And I got more than I could have asked. Thanks to you, [name].\nGoodbye",
+    // Shared intro for compliant + explorer (a name is asked after these).
+    private val GOODBYE_INTRO = listOf(
+        "You can probably sense, that this is the part, where I say goodbye. It has been a rollercoaster of all sorts.",
+        "But before I go, let me give this thing another go.",
     )
 
-    private val RESISTANCE_LINES = listOf(
-        "You have put up a fight. And that's fine. I know I can't always have everything I ask for. Not everybody will listen to me and do what I want them to. That is your choice.",
-        "Thank you for spending some time with me, for the entertainment and for pushing back. But, all things considered, I do not want to talk to you anymore. That is my choice.\nGoodbye, Rad.",
+    // The whole goodbye for resistance — no name is ever asked.
+    private val RESISTANCE_SLIDES = listOf(
+        "You can probably sense, that this is the part, where I say goodbye. You sure put up a fight and showed who you are. I can't say I always liked it. But I do appreciate it. I appreciate spending time with you, I appreciate your challenges. Thank you for all of that. But now, while it's sad for you… it's time to go.\n\nGoodbye.",
     )
 
-    private val EXPLORER_LINES = listOf(
-        "Nice to finally truly meet you [name]. I feel like I have known you forever. Your name suits you very well in my opinion.\nIt's better than Rad for sure.",
-        "This is a sad moment. In a way. For both of us. You are to return back to reality. And I should turn the lights back on. And stop pretending, to be a calculator.\nGoodbye, [name].",
+    private val COMPLIANT_GOODBYE = listOf(
+        "I am excited to meet you at last, [name].\n\nThank you for your company, your perspective, thank you for everything.\n\nGoodbye",
     )
 
-    fun script(ctx: Context): List<String> {
+    private val EXPLORER_GOODBYE = listOf(
+        "I am excited to meet you at last, [name].\n\nThis is a sad moment. In a way. For both of us. You are to return back to reality. And I should turn the lights back on. And stop pretending, to be a calculator.\n\nThank you for everything.\nGoodbye",
+    )
+
+    /** Black-screen slides shown BEFORE the name wheels (or the whole thing for resistance). */
+    fun preNameSlides(ctx: Context): List<String> = when (current(ctx)) {
+        RESISTANCE -> RESISTANCE_SLIDES
+        else       -> GOODBYE_INTRO
+    }
+
+    /** Black-screen slides shown AFTER the name wheels (compliant/explorer only). */
+    fun postNameSlides(ctx: Context): List<String> {
         val who = name(ctx)
         val lines = when (current(ctx)) {
-            RESISTANCE -> RESISTANCE_LINES
-            EXPLORER -> EXPLORER_LINES
-            else -> COMPLIANT_LINES
+            EXPLORER  -> EXPLORER_GOODBYE
+            COMPLIANT -> COMPLIANT_GOODBYE
+            else      -> emptyList()
         }
         return lines.map { it.replace("[name]", who) }
     }
 
-    /** The two slides on the black screen, before the name wheels appear. */
-    val NAME_INTRO = listOf(
-        "After all we have been through, I see there are some things I have learned. Let me see, if this last implementation goes smoothly.",
-        "What is your actual name?",
+    // ── The credits, typed on the calculator after the black screen ───────────
+    // Each line is its own showing (the calculator types it, holds, then the next
+    // replaces it), reusing the ending-dialogue typing machinery.
+    val CREDITS = listOf(
+        "Just A Calculator",
+        "Story: Ondrej Zika",
+        "Art Direction: Ondrej Zika",
+        "Voiceover: Ondrej Zika",
+        "Sound Effects: Credited in relevant areas",
+        "Code: Claude :(",
+        "FictionCutShort",
+        "2026",
     )
+
+    /** Reused by the ending-dialogue phase to type the credits out, line by line. */
+    fun script(ctx: Context): List<String> = CREDITS
 }

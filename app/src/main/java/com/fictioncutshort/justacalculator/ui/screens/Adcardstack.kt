@@ -432,27 +432,18 @@ fun AdCardStack(
                     )
                     AdCardPhase.INTRO -> {
                         val introCtx = LocalContext.current
-                        // vo001 over the radio bed, then vo002 right after; the radio
-                        // plays out its full length under both. Only once vo002 finishes
-                        // do we drop into the city (its aerial-flicker intro), so 003 can
-                        // fire when the camera starts moving.
+                        // vo001 then vo002, clean — no radio-static bed underneath (it
+                        // was distracting over the voice). Only once vo002 finishes do we
+                        // drop into the city (its aerial intro), so 003 can fire when the
+                        // camera starts moving.
                         LaunchedEffect(Unit) {
-                            com.fictioncutshort.justacalculator.logic.VoiceoverManager.init(introCtx)
-                            com.fictioncutshort.justacalculator.logic.VoiceoverManager.playWithRadio(
-                                voRes = R.raw.vo001,
-                                radioRes = R.raw.radio,
-                                radioVolume = 0.55f,
-                                onVoComplete = {
-                                    com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(
-                                        resId = R.raw.vo002,
-                                        cctv = false,
-                                        onComplete = {
-                                            com.fictioncutshort.justacalculator.logic.VoiceoverManager.stopRadio()
-                                            phase = AdCardPhase.CITY
-                                        }
-                                    )
+                            val vm = com.fictioncutshort.justacalculator.logic.VoiceoverManager
+                            vm.init(introCtx)
+                            vm.play(R.raw.vo001, cctv = false) {
+                                vm.play(R.raw.vo002, cctv = false) {
+                                    phase = AdCardPhase.CITY
                                 }
-                            )
+                            }
                         }
                         Box(modifier = Modifier.fillMaxSize().background(Color.Black))
                     }

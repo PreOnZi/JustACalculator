@@ -91,6 +91,7 @@ import kotlin.random.Random
 
 private const val TOTAL_CHECKPOINTS  = 3
 private const val NEW_PER_ROUND      = 3     // brand-new dests generated every round
+private const val ROAD_CANDIDATES    = 8     // on-road options fetched per round to choose/pad from
 private const val MAX_OPTIONS        = 5     // new + carried-over options shown at once, capped
 private const val MIN_SEPARATION_M   = 45.0  // no two shown dests may sit closer than this
 private const val MAX_SKIPS          = 2     // may skip 2 of 3 points and still complete
@@ -249,26 +250,38 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
         if (currentDests.isNotEmpty() || completed) return@LaunchedEffect
         val loc = userLoc ?: return@LaunchedEffect
         val carry = carryDests
-        // Every round produces NEW_PER_ROUND brand-new places (never re-served
-        // carry-overs), spread by bearing AND kept at least MIN_SEPARATION_M apart
-        // so two picks never land on top of each other.
-        val fresh = withContext(Dispatchers.IO) {
-            pickWalkableDestinations(loc, visited, carry, NEW_PER_ROUND)
-        }.toMutableList()
-        // Overpass can return fewer (sparse streets, small area / first fix), so
-        // pad with blind projections spread around the compass — still separated
-        // from each other, from visited, and from carry.
-        var guard = 0
-        while (fresh.size < NEW_PER_ROUND && guard < 24) {
-            val bearing = (fresh.size * (360.0 / NEW_PER_ROUND) + Random.nextDouble() * 50.0) % 360.0
-            val dist = TARGET_DIST_MIN_M + Random.nextDouble() * (TARGET_DIST_MAX_M - TARGET_DIST_MIN_M)
-            val cand = loc.destinationPoint(dist, bearing)
-            if (visited.none { it.distanceToAsDouble(cand) < VISITED_BUFFER_M } &&
-                fresh.none { it.distanceToAsDouble(cand) < MIN_SEPARATION_M } &&
-                carry.none { it.distanceToAsDouble(cand) < MIN_SEPARATION_M }) {
-                fresh.add(cand)
+        // As many real ON-ROAD candidates as the area offers, spread around us.
+        val roadPts = withContext(Dispatchers.IO) {
+            pickWalkableDestinations(loc, visited, ROAD_CANDIDATES)
+        }
+        fun nearCarry(p: GeoPoint) = carry.any { it.distanceToAsDouble(p) < MIN_SEPARATION_M }
+        // Prefer brand-new road points (ones that aren't a carry-over) for the round.
+        val fresh = mutableListOf<GeoPoint>()
+        for (p in roadPts) {
+            if (fresh.size >= NEW_PER_ROUND) break
+            if (nearCarry(p)) continue
+            if (fresh.any { it.distanceToAsDouble(p) < MIN_SEPARATION_M }) continue
+            fresh.add(p)
+        }
+        // Short on fresh ones? Top up from the remaining ROAD points (even near a
+        // carry-over) BEFORE ever inventing an off-road target.
+        if (fresh.size < NEW_PER_ROUND) for (p in roadPts) {
+            if (fresh.size >= NEW_PER_ROUND) break
+            if (fresh.any { it.distanceToAsDouble(p) < MIN_SEPARATION_M }) continue
+            fresh.add(p)
+        }
+        // Absolute last resort — the area returned NO roads at all (no streets in
+        // range): a couple of blind projections so the round isn't empty.
+        if (roadPts.isEmpty()) {
+            var guard = 0
+            while (fresh.size < NEW_PER_ROUND && guard < 24) {
+                val bearing = (fresh.size * (360.0 / NEW_PER_ROUND) + Random.nextDouble() * 50.0) % 360.0
+                val dist = TARGET_DIST_MIN_M + Random.nextDouble() * (TARGET_DIST_MAX_M - TARGET_DIST_MIN_M)
+                val cand = loc.destinationPoint(dist, bearing)
+                if (visited.none { it.distanceToAsDouble(cand) < VISITED_BUFFER_M } &&
+                    fresh.none { it.distanceToAsDouble(cand) < MIN_SEPARATION_M }) fresh.add(cand)
+                guard++
             }
-            guard++
         }
         // Carried-over unused points stay on offer as EXTRA choices, but only
         // those still in the walking band, clear of visited, and not sitting on
@@ -381,7 +394,6 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
             currentDests.isEmpty()    -> "Picking spots near you..."
             completed                 -> "Thank you for indulging me."
             arrivedAt != null         -> "Hold there a moment..."
-            !hasDeparted              -> "Move at least 20m from where you started."
             else                      -> {
                 val n = (checkpointIdx + 1).coerceAtMost(TOTAL_CHECKPOINTS)
                 "Tap one. Walk there. ($n/$TOTAL_CHECKPOINTS)"
@@ -1018,18 +1030,16 @@ private fun fetchWalkingRoute(from: GeoPoint, to: GeoPoint): List<GeoPoint>? {
 }
 
 /**
- * Pick up to [n] brand-new OSM road-vertices 80–120 m from [user], spread out by
- * bearing and never closer than MIN_SEPARATION_M to each other. Pedestrian-
- * friendly highway types are preferred; residential / unclassified / service
- * used as fallback (covers US-style suburbs without footway tagging). Candidates
- * within VISITED_BUFFER_M of any [visited], or within MIN_SEPARATION_M of any
- * [carryOver] the caller will re-offer, are excluded so picks are genuinely new.
- * May return fewer than [n]; the caller tops up with blind projections.
+ * Pick up to [n] OSM road-vertices 80–120 m from [user], spread out by bearing.
+ * Pedestrian-friendly highway types are preferred; residential / unclassified /
+ * service used as fallback (covers US-style suburbs without footway tagging).
+ * Only [visited] vertices are excluded — every other in-band road/path point is a
+ * candidate, so the caller has as many ON-ROAD options as the area offers. May
+ * return fewer than [n] only when the area genuinely has fewer streets nearby.
  */
 private fun pickWalkableDestinations(
     user: GeoPoint,
     visited: List<GeoPoint>,
-    carryOver: List<GeoPoint>,
     n: Int
 ): List<GeoPoint> {
     val pedTypes = setOf("footway", "pedestrian", "path", "cycleway", "living_street")
@@ -1082,40 +1092,42 @@ private fun pickWalkableDestinations(
 
     fun nearVisited(p: GeoPoint) =
         visited.any { v -> v.distanceToAsDouble(p) < VISITED_BUFFER_M }
-    // Fresh picks must also stay clear of the carry-overs the caller re-offers,
-    // so a round never shows the "same" place as both a new and a carried point.
-    fun nearCarry(p: GeoPoint) =
-        carryOver.any { c -> c.distanceToAsDouble(p) < MIN_SEPARATION_M }
 
-    val pedPool = pedestrian.distinctBy(::geoKey).filterNot { nearVisited(it) || nearCarry(it) }
-    val roadPool = road.distinctBy(::geoKey).filterNot { nearVisited(it) || nearCarry(it) }
-
-    // Prefer pedestrian-friendly ways; top up with roads if there aren't enough.
+    // Keep EVERY walkable road/path vertex in the band (only visited ones drop out).
+    // Freshness vs. the carry-overs is the caller's job — here we just want as many
+    // real ON-ROAD options as the area actually has, so the round never has to fall
+    // back to off-road projections.
+    val pedPool = pedestrian.distinctBy(::geoKey).filterNot(::nearVisited)
+    val roadPool = road.distinctBy(::geoKey).filterNot(::nearVisited)
+    // Prefer pedestrian-friendly ways when there are plenty; otherwise use them all.
     val pool = if (pedPool.size >= n) pedPool else (pedPool + roadPool).distinctBy(::geoKey)
     if (pool.isEmpty()) return emptyList()
     return spreadDistinct(pool, user, n, MIN_SEPARATION_M)
 }
 
 /**
- * Farthest-first sampling from [user]: starts with a random pick, then
- * iteratively adds the candidate whose minimum angular separation from the
- * already-picked points is greatest — but never one closer than [minSepM] to a
- * pick, so the result is both spread across the compass AND never two markers on
- * top of each other. May return fewer than [n] if nothing is far enough apart;
- * the caller pads with blind projections.
+ * Farthest-first sampling from [user]: starts with a random pick, then iteratively
+ * adds the candidate whose minimum angular separation from the already-picked
+ * points is greatest, spreading them across the compass. It first tries to keep
+ * every pick at least [minSepM] apart; if it can't reach [n] that way it RELAXES
+ * the separation in halves and keeps filling — so it returns as many real
+ * ROAD/path points as the area has, rather than stopping short and letting the
+ * caller invent off-road targets. Only returns fewer than [n] if the pool itself
+ * has fewer points.
  */
 private fun spreadDistinct(pool: List<GeoPoint>, user: GeoPoint, n: Int, minSepM: Double): List<GeoPoint> {
     if (pool.isEmpty()) return emptyList()
     val picked = mutableListOf(pool[Random.nextInt(pool.size)])
-    while (picked.size < n) {
+    var sep = minSepM
+    while (picked.size < n && sep >= 4.0) {
         var best: GeoPoint? = null
         var bestScore = -1.0
         for (c in pool) {
-            if (picked.any { it.distanceToAsDouble(c) < minSepM }) continue
+            if (picked.any { it.distanceToAsDouble(c) < sep }) continue   // also skips already-picked (dist 0)
             val score = picked.minOf { p -> angularSep(user, c, p) }
             if (score > bestScore) { bestScore = score; best = c }
         }
-        best?.let { picked.add(it) } ?: break
+        if (best != null) picked.add(best) else sep *= 0.5   // nothing far enough apart — loosen and retry
     }
     return picked
 }

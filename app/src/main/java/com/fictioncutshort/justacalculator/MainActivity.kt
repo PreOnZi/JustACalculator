@@ -145,6 +145,9 @@ class MainActivity : ComponentActivity() {
                         .easterEggGrayscale(com.fictioncutshort.justacalculator.logic.EasterEggTheme.grayscale)
                 ) {
                     CalculatorScreen()
+                    // Global, dismissible "your volume is low" banner — the whole
+                    // experience is narrated, so a muted device silently loses the story.
+                    com.fictioncutshort.justacalculator.ui.components.LowVolumeWarning()
                 }
             }
         }
@@ -1126,8 +1129,11 @@ fun CalculatorScreen() {
     }
     val displayText = displayExpression.ifEmpty { "0" }
 
+    // After the story ends the clear key wears the name the calculator gave the
+    // player: "C" becomes "RAD" (it still clears — normalised back in the grids).
+    val clearKey = if (current.storyComplete) "RAD" else "C"
     val buttonLayout = listOf(
-        listOf("C", "( )", "%", "/"),
+        listOf(clearKey, "( )", "%", "/"),
         listOf("7", "8", "9", "*"),
         listOf("4", "5", "6", "-"),
         listOf("1", "2", "3", "+"),
@@ -1185,7 +1191,18 @@ fun CalculatorScreen() {
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(80.dp))
+                Spacer(modifier = Modifier.height(22.dp))
+
+                Text(
+                    text = "While effort was put into adapting the calculator for horizontal screens, it has been developed with vertical view-first in mind.",
+                    fontSize = 12.sp,
+                    fontFamily = CalculatorDisplayFont,
+                    color = Color(0xFF2D2D2D),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+
+                Spacer(modifier = Modifier.height(46.dp))
 
                 // Terms and Conditions Button
                 Button(
@@ -1278,6 +1295,7 @@ fun CalculatorScreen() {
                                         "This app does not collect, store, or transmit any personal data. \n\n" +
                                         "That is our promise.\n\n" +
                                         "Because to really take advantage of the calculator... Do what it tells you!\n\n" +
+                                        "Generative AI: Generative AI, mainly Claude AI, has been used for development of the calculator. However, its use was strictly code-based. Claude was not used to consult art direction, the story or to build the majority of visual artifacts. 3D models have been built from scratch in Blender, the story has been developed based only on human ideas & discussions, and the same goes for art direction.\n\n" +
                                         "For more comprehensive privacy policy please follow the link below:",
                                 fontSize = 14.sp,
                                 color = Color(0xFF2D2D2D),
@@ -2016,7 +2034,12 @@ fun CalculatorScreen() {
     }
 
     if (endingPhase == com.fictioncutshort.justacalculator.logic.EndingStore.Phase.NAME) {
-        com.fictioncutshort.justacalculator.ui.screens.EndingBlackScreen(onDone = {})
+        com.fictioncutshort.justacalculator.ui.screens.EndingBlackScreen(onDone = {
+            // Goodbyes are done. Back on the calculator to type the credits.
+            com.fictioncutshort.justacalculator.logic.EndingStore.line = 0
+            com.fictioncutshort.justacalculator.logic.EndingStore.phase =
+                com.fictioncutshort.justacalculator.logic.EndingStore.Phase.DIALOGUE
+        })
     }
 
     // Debug menu overlay - at the outermost level to cover everything.
@@ -2224,8 +2247,3 @@ fun CalculatorScreen() {
 
 
 
-@ComposePreview(showBackground = true)
-@Composable
-fun DefaultPreview() {
-    MaterialTheme { CalculatorScreen() }
-}

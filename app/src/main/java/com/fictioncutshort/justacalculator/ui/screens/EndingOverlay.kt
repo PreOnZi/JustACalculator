@@ -44,11 +44,26 @@ import kotlinx.coroutines.delay
 @Composable
 fun EndingBlackScreen(onDone: () -> Unit) {
     val context = LocalContext.current
-    // 0,1 = the two slides; 2 = the name wheels.
-    var slide by remember { mutableIntStateOf(0) }
+    val asksName = remember { EndingStore.asksForName(EndingStore.current(context)) }
+    val pre = remember { EndingStore.preNameSlides(context) }
+    // Post slides are computed AFTER the name is entered (they contain it).
+    var post by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    // "pre" text slides → (name wheels) → "post" text slides → done.
+    var stage by remember { mutableStateOf("pre") }
+    var idx by remember { mutableIntStateOf(0) }
     var fade by remember { mutableStateOf(0f) }
 
-    LaunchedEffect(slide) {
+    // Advance out of a text slide; routes to name entry / post slides / done.
+    fun nextTextSlide(list: List<String>) {
+        if (idx + 1 < list.size) { idx++; return }
+        when (stage) {
+            "pre" -> if (asksName) { stage = "name" } else onDone()
+            else  -> onDone()   // "post"
+        }
+    }
+
+    LaunchedEffect(stage, idx) {
         fade = 0f
         repeat(20) { fade = (it + 1) / 20f; delay(28) }
     }
@@ -59,15 +74,27 @@ fun EndingBlackScreen(onDone: () -> Unit) {
             .background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
-        when (slide) {
-            0, 1 -> Box(
+        if (stage == "name") {
+            EndingNameEntry(
+                prompt = "What is your actual name?",
+                onConfirm = { name ->
+                    EndingStore.setName(context, name)
+                    post = EndingStore.postNameSlides(context)
+                    idx = 0
+                    if (post.isEmpty()) onDone() else stage = "post"
+                }
+            )
+        } else {
+            val list = if (stage == "post") post else pre
+            val text = list.getOrElse(idx) { "" }
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     // Tap anywhere to go on — there is no calculator to press yet.
                     .clickable(
                         indication = null,
                         interactionSource = remember { MutableInteractionSource() }
-                    ) { slide++ },
+                    ) { nextTextSlide(list) },
                 contentAlignment = Alignment.Center
             ) {
                 Column(
@@ -77,7 +104,7 @@ fun EndingBlackScreen(onDone: () -> Unit) {
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = EndingStore.NAME_INTRO[slide],
+                        text = text,
                         color = Color(0xFFE8E4DA).copy(alpha = fade),
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Normal,
@@ -94,16 +121,6 @@ fun EndingBlackScreen(onDone: () -> Unit) {
                     )
                 }
             }
-
-            else -> EndingNameEntry(
-                prompt = EndingStore.NAME_INTRO[1],
-                onConfirm = { name ->
-                    EndingStore.setName(context, name)
-                    EndingStore.line = 0
-                    EndingStore.phase = EndingStore.Phase.DIALOGUE
-                    onDone()
-                }
-            )
         }
     }
 }

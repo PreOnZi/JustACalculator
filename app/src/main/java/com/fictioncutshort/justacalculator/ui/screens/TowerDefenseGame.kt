@@ -565,16 +565,20 @@ private fun TDLevelScreen(
     }
 
     // ── Layout ────────────────────────────────────────────────────────────────
-    // Cumulative fill — never resets between waves or levels
-    val brainFill = (enemiesReached.toFloat() / 20f).coerceIn(0f, 1f)
+    // The brain "health bar" tracks THIS level's damage against its own fail
+    // threshold (def.lives), so the bar reads FULL exactly when the level is lost
+    // (lives == 0) — not a fixed /20 that saturates early on the 15- and 25-life
+    // levels and leaves the bar looking full while the game plays on.
+    val damageFrac = ((def.lives - lives).toFloat() / def.lives.coerceAtLeast(1)).coerceIn(0f, 1f)
+    val brainFill = damageFrac
     val isLandscape = LocalConfiguration.current.orientation ==
             android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
-    // Brain image progresses with damage taken, same across all levels
+    // Brain image steps with the same per-level damage fraction (thirds).
     val brainImg = when {
-        enemiesReached < 3  -> brain1Img
-        enemiesReached < 8  -> brain2Img
-        else                -> brain3Img
+        damageFrac < 0.34f -> brain1Img
+        damageFrac < 0.67f -> brain2Img
+        else               -> brain3Img
     }
 
     val hudLabel = when (phase) {
@@ -838,7 +842,7 @@ private fun BoxScope.TDPhaseOverlays(
         TDPhase.LOST -> Box(Modifier.fillMaxSize().background(Color(0xCCBB0000)), Alignment.Center) {
             val msg = if (levelNum == 3)
                 "So much information\nand so little bandwidth.\nTime for a brain chip\nimplant... Probably."
-            else "Defeated\nRetrying…"
+            else "It's way too early\nfor a breakdown.\nThink of the children!\nLet's go again."
             Text(msg, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
         }
         else -> {}

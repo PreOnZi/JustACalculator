@@ -282,7 +282,15 @@ fun Door4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {}) {
     var tunnelReady    by remember { mutableStateOf(false) }
     var showNudge      by remember { mutableStateOf(false) }
     // Per-piece mute flag (videos): set true once the user taps "Mute and leave".
-    val muted = remember { mutableStateListOf<Boolean>().apply { repeat(SCREEN_COUNT) { add(false) } } }
+    // Per-piece hard mute. On a RESTORE (app closed and reopened mid-Building-4) the
+    // videos the player already saw and confirmed replay to fill the walls — but they
+    // must come back SILENT, since there's no open panel / mute button for them any
+    // more. So every already-read piece (index < the restored "found" count) starts
+    // muted; a fresh entry (found=0) starts all unmuted, as before.
+    val muted = remember {
+        val alreadyRead = com.fictioncutshort.justacalculator.logic.BuildingProgress.getInt(context, 4, "found", 0)
+        mutableStateListOf<Boolean>().apply { repeat(SCREEN_COUNT) { add(it < alreadyRead) } }
+    }
     // MediaPlayers and reverb effects, one per video piece. Built lazily once
     // the renderer's SurfaceTextures exist (see DisposableEffect below).
     val mediaPlayers = remember { arrayOfNulls<MediaPlayer>(SCREEN_COUNT) }
@@ -1024,6 +1032,8 @@ private class Door4Renderer(private val context: Context) : GLSurfaceView.Render
     private var xMarkAspect = 2f   // bmW / bmH for the "[X]" bitmap; set in onSurfaceCreated
     private var texLeftWall = 0    // "Your perception."     fallback text on the left tunnel wall
     private var texRightWall = 0   // "Who perceives you?"   fallback text on the right tunnel wall
+    private var texExit = 0        // green "EXIT" on the tunnel's end wall
+    private var exitSign: FloatBuffer? = null
     private var wallLeftText: FloatBuffer? = null
     private var wallRightText: FloatBuffer? = null
 
@@ -1039,6 +1049,7 @@ private class Door4Renderer(private val context: Context) : GLSurfaceView.Render
     private var roomLines: FloatBuffer? = null; private var roomLineCount = 0
     // Opaque dark surfaces
     private var wallFill: FloatBuffer? = null; private var wallFillCount = 0
+    private var floorCeil: FloatBuffer? = null; private var floorCeilCount = 0   // black floor + ceiling
     private var doorLeaf: FloatBuffer? = null; private var doorLeafCount = 0
     private var tunnelFill: FloatBuffer? = null; private var tunnelFillCount = 0
     private var tunnelLines: FloatBuffer? = null; private var tunnelLineCount = 0
@@ -1067,9 +1078,9 @@ private class Door4Renderer(private val context: Context) : GLSurfaceView.Render
     )
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        // Floor & ceiling (the void behind the geometry): dark grey rather than pure
-        // black, so the room is navigable instead of a black-on-black guessing game.
-        GLES20.glClearColor(0.09f, 0.09f, 0.10f, 1f)
+        // The void behind the geometry is BLACK, to match the black floor/ceiling
+        // (walls are grey, drawn as their own surfaces so the room stays navigable).
+        GLES20.glClearColor(0.0f, 0.0f, 0.0f, 1f)
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         GLES20.glDepthFunc(GLES20.GL_LEQUAL)
         GLES20.glDisable(GLES20.GL_CULL_FACE)
@@ -1196,16 +1207,17 @@ private class Door4Renderer(private val context: Context) : GLSurfaceView.Render
         // unavailable — e.g. the player denied the camera permission).
         texLeftWall = makeCenteredTextTexture("Your perception.", 1024, 512)
         texRightWall = makeCenteredTextTexture("Who perceives you?", 1024, 512)
+        texExit = makeCenteredTextTexture("EXIT", 512, 256, 0xFF3BE07A.toInt())
 
         buildScene()
     }
 
     // Render a single line of monospace text centered in a transparent bitmap
     // and upload it as a GL_TEXTURE_2D. Returns the texture id (0 on failure).
-    private fun makeCenteredTextTexture(text: String, bmW: Int, bmH: Int): Int {
+    private fun makeCenteredTextTexture(text: String, bmW: Int, bmH: Int, argb: Int = 0xFFFFFFFF.toInt()): Int {
         return try {
             val paint = Paint().apply {
-                color = 0xFFFFFFFF.toInt()
+                color = argb
                 isAntiAlias = true
                 typeface = Typeface.MONOSPACE
                 textSize = bmH * 0.42f
@@ -1255,8 +1267,8 @@ private class Door4Renderer(private val context: Context) : GLSurfaceView.Render
         Matrix.multiplyMM(mvp, 0, proj, 0, view, 0)
         GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
 
-        // Opaque dark surfaces first
-        // Walls a touch lighter than the floor/ceiling void so they read as surfaces.
+        // Opaque dark surfaces first. Walls are grey; floor + ceiling are black.
+        floorCeil?.let { drawBuf(it, GLES20.GL_TRIANGLES, floorCeilCount, 0.0f, 0.0f, 0.0f, 1f) }
         wallFill?.let { drawBuf(it, GLES20.GL_TRIANGLES, wallFillCount, 0.17f, 0.17f, 0.19f, 1f) }
         if (doorOpen < 0.5f) {
             doorLeaf?.let { drawBuf(it, GLES20.GL_TRIANGLES, doorLeafCount, 0.03f, 0.03f, 0.05f, 1f) }
@@ -1411,6 +1423,18 @@ private class Door4Renderer(private val context: Context) : GLSurfaceView.Render
                 if (!rightLive && texRightWall != 0) wallRightText?.let { drawWallTex2D(it, texRightWall) }
                 GLES20.glDisable(GLES20.GL_BLEND)
             }
+
+            // EXIT sign on the end wall — always shown once the tunnel is open.
+            if (texExit != 0) {
+                GLES20.glUseProgram(progT2)
+                GLES20.glUniformMatrix4fv(uMVPT2, 1, false, mvp, 0)
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                GLES20.glUniform1i(uSamplerT2, 0)
+                GLES20.glEnable(GLES20.GL_BLEND)
+                GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+                exitSign?.let { drawWallTex2D(it, texExit) }
+                GLES20.glDisable(GLES20.GL_BLEND)
+            }
         }
     }
 
@@ -1493,13 +1517,22 @@ private class Door4Renderer(private val context: Context) : GLSurfaceView.Render
         q(p(-R, 0f, R), p(R, 0f, R), p(R, H, R), p(-R, H, R))
         q(p(-R, 0f, -R), p(-R, 0f, R), p(-R, H, R), p(-R, H, -R))
         q(p(R, 0f, -R), p(R, 0f, R), p(R, H, R), p(R, H, -R))
-        q(p(-R, 0f, -R), p(R, 0f, -R), p(R, 0f, R), p(-R, 0f, R))   // floor
-        q(p(-R, H, -R), p(R, H, -R), p(R, H, R), p(-R, H, R))       // ceiling
-        // Interior maze slabs
+        // Interior maze slabs — walls, so grey with the rest.
         for (s in DOOR4_SLABS) box(v, s[0], s[1], s[2], s[3], H)
 
         wallFillCount = v.size / 3
         wallFill = v.toFloatArray().toFB2()
+
+        // Floor + ceiling kept separate so they draw BLACK (walls stay grey).
+        val fc = ArrayList<Float>()
+        fun qfc(a: FloatArray, b: FloatArray, c: FloatArray, d: FloatArray) {
+            fc.addAll(listOf(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]))
+            fc.addAll(listOf(a[0], a[1], a[2], c[0], c[1], c[2], d[0], d[1], d[2]))
+        }
+        qfc(p(-R, 0f, -R), p(R, 0f, -R), p(R, 0f, R), p(-R, 0f, R))   // floor
+        qfc(p(-R, H, -R), p(R, H, -R), p(R, H, R), p(-R, H, R))       // ceiling
+        floorCeilCount = fc.size / 3
+        floorCeil = fc.toFloatArray().toFB2()
 
         val leaf = ArrayList<Float>()
         leaf.addAll(listOf(dL, 0f, -R, dR, 0f, -R, dR, H, -R))
@@ -1566,11 +1599,15 @@ private class Door4Renderer(private val context: Context) : GLSurfaceView.Render
             // from +X looking −X, so their right vector resolves to −Z = −lat.
             // That means world-BL (smaller lat) lands on the player's bottom-right,
             // so the bitmap's right edge (u=1) must map to world-BL to read upright.
-            // Mirror logic for nrm=−1 walls. (Without this, all pieces show
-            // horizontally mirrored.) Videos share the same UVs and have their
-            // remaining V-flip corrected via TEX_FLIP_V in the OES draw call.
-            val uL = if (s.nrm < 0) 0f else 1f
-            val uR = if (s.nrm < 0) 1f else 0f
+            // Mirror logic. (Without this, pieces show horizontally mirrored.) Videos
+            // share the same UVs and have their remaining V-flip corrected via
+            // TEX_FLIP_V in the OES draw call. NOTE: an axis=1 wall (screen facing ±z,
+            // e.g. news6) has the OPPOSITE viewer handedness to an axis=0 wall, so its
+            // horizontal mirror flips the other way — without this the last video and
+            // its "[open]" glyph read left-right reversed.
+            val mirror = if (s.axis == 1) s.nrm >= 0f else s.nrm < 0f
+            val uL = if (mirror) 0f else 1f
+            val uR = if (mirror) 1f else 0f
             val texFill = floatArrayOf(
                 bl[0], bl[1], bl[2], uL, 1f,
                 br[0], br[1], br[2], uR, 1f,
@@ -1706,6 +1743,24 @@ private class Door4Renderer(private val context: Context) : GLSurfaceView.Render
         q(p(xL, 0f, zFar), p(xR, 0f, zFar), p(xR, H, zFar), p(xL, H, zFar))
         tunnelFillCount = tf.size / 3
         tunnelFill = tf.toFloatArray().toFB2()
+
+        // "EXIT" sign on the tunnel's END wall, facing the approaching player, so
+        // there's a clear way out of Building 4. Player looks −z here, right = +x,
+        // so u=1 sits on +x (upright text). Just in front of the end wall.
+        run {
+            val ez = zFar + 8f
+            val ew = (xR - xL) * 0.34f
+            val ey = H * 0.55f
+            val eh = ew * 0.42f
+            exitSign = floatArrayOf(
+                DOOR_X - ew, ey - eh, ez, 0f, 1f,
+                DOOR_X + ew, ey - eh, ez, 1f, 1f,
+                DOOR_X + ew, ey + eh, ez, 1f, 0f,
+                DOOR_X - ew, ey - eh, ez, 0f, 1f,
+                DOOR_X + ew, ey + eh, ez, 1f, 0f,
+                DOOR_X - ew, ey + eh, ez, 0f, 0f
+            ).toFB2()
+        }
     }
 
     private fun buildProg(vs: String, fs: String): Int {

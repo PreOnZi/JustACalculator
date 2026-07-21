@@ -30,21 +30,21 @@ import kotlin.math.roundToInt
 import kotlin.random.Random
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Building 9 — Flappy-style skeleton.
+// Building 9 — Flappy-style round, timed to its narration.
 //
-// Tap to flap; steer the dot through gaps in the scrolling barriers. Skeleton
-// only — placeholder shapes/colours, no assets or narrative yet. Clearing
-// WIN_SCORE gaps calls onComplete() so it can slot into the building progression
-// (the "line that connects them all"); the back arrow calls onExit().
+// Tap to flap; steer the dot through gaps in the scrolling barriers, dying and
+// retrying freely. The round has no score target — it runs for exactly as long
+// as [voRes] plays. When the voiceover ends the game freezes and a single
+// "Time to go" button appears; pressing it calls onComplete() (which flies the
+// city over the now-finished bridge). The back arrow calls onExit().
 // ─────────────────────────────────────────────────────────────────────────────
-
-private const val WIN_SCORE = 5
 
 private data class Barrier(val x: Float, val gapY: Float, val passed: Boolean = false)
 
 @Composable
 fun FlappyBirdGame(
     modifier: Modifier = Modifier,
+    voRes: Int? = null,
     onComplete: () -> Unit = {},
     onExit: () -> Unit = {},
 ) {
@@ -71,20 +71,41 @@ fun FlappyBirdGame(
         var vel by remember { mutableStateOf(0f) }
         var running by remember { mutableStateOf(false) }
         var dead by remember { mutableStateOf(false) }
-        var won by remember { mutableStateOf(false) }
         var score by remember { mutableIntStateOf(0) }
         var barriers by remember { mutableStateOf(listOf<Barrier>()) }
+        // The round ends when the narration ends — not on any score.
+        var voDone by remember { mutableStateOf(false) }
+
+        LaunchedEffect(Unit) {
+            val vm = com.fictioncutshort.justacalculator.logic.VoiceoverManager
+            if (voRes != null) {
+                vm.play(voRes, cctv = false)
+                // Wait for the clip to actually begin (up to ~2.5 s), then run the
+                // round until it ends. If it never starts (load failure), fall back
+                // to a fixed length so the round can't end instantly OR run forever.
+                var waited = 0
+                while (!vm.isBusy() && waited < 2500) { delay(50); waited += 50 }
+                if (vm.isBusy()) {
+                    while (vm.isBusy()) delay(150)
+                } else {
+                    delay(20_000L)
+                }
+            } else {
+                delay(20_000L)
+            }
+            voDone = true
+        }
 
         fun reset() {
             birdY = h * 0.4f; vel = 0f; score = 0
-            dead = false; won = false
+            dead = false
             barriers = listOf(Barrier(w + barrierW, randomGapY(h, gapH)))
             running = true
         }
 
         fun flap() {
+            if (voDone) return   // round's over — the "Time to go" button takes over
             when {
-                won -> return
                 dead -> reset()
                 !running -> { running = true; vel = flapV }
                 else -> vel = flapV
@@ -92,9 +113,9 @@ fun FlappyBirdGame(
         }
 
         // Physics / scroll loop.
-        LaunchedEffect(running, dead, won, w, h) {
-            if (!running || dead || won || w <= 0f || h <= 0f) return@LaunchedEffect
-            while (running && !dead && !won) {
+        LaunchedEffect(running, dead, voDone, w, h) {
+            if (!running || dead || voDone || w <= 0f || h <= 0f) return@LaunchedEffect
+            while (running && !dead && !voDone) {
                 delay(16)
                 vel += gravity
                 birdY += vel
@@ -107,7 +128,7 @@ fun FlappyBirdGame(
                 }
                 moved.removeAll { it.x + barrierW < 0f }
 
-                // Scoring — count a barrier once it passes the bird.
+                // Scoring — count a barrier once it passes the bird (display only).
                 var gained = 0
                 val scored = moved.map { b ->
                     if (!b.passed && b.x + barrierW < birdX) { gained++; b.copy(passed = true) } else b
@@ -124,10 +145,7 @@ fun FlappyBirdGame(
                 }
 
                 barriers = scored
-                when {
-                    hit -> dead = true
-                    score >= WIN_SCORE -> { won = true; onComplete() }
-                }
+                if (hit) dead = true
             }
         }
 
@@ -173,16 +191,12 @@ fun FlappyBirdGame(
             fontFamily = FontFamily.Monospace,
             modifier = Modifier.align(Alignment.TopCenter).padding(top = 40.dp))
 
-        // Back / exit
-        Text("‹", color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold,
-            modifier = Modifier.align(Alignment.TopStart).padding(16.dp)
-                .background(Color.Black.copy(alpha = 0.35f), androidx.compose.foundation.shape.CircleShape)
-                .clickable { onExit() }
-                .padding(horizontal = 16.dp, vertical = 2.dp))
+        // No exit — the only way out of Building 9 is to hear the voiceover through
+        // to the end, at which point the "Time to go" button appears.
 
-        // Start / game-over prompts
+        // Start / game-over prompts (suppressed once the round is over).
         val prompt = when {
-            won -> "Cleared!"
+            voDone -> null
             dead -> "Game over — tap to retry"
             !running -> "Tap to start"
             else -> null
@@ -197,6 +211,19 @@ fun FlappyBirdGame(
                     ) { flap() }
                     .background(Color.Black.copy(alpha = 0.4f), androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
                     .padding(horizontal = 20.dp, vertical = 12.dp))
+        }
+
+        // Narration finished → the round is done. One button out.
+        if (voDone) {
+            Text("Time to go", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.align(Alignment.Center)
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { onComplete() }
+                    .background(Color(0xE6000000), androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                    .padding(horizontal = 28.dp, vertical = 16.dp))
         }
     }
 }

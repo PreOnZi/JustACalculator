@@ -562,6 +562,17 @@ fun CalculatorCityView(
     var doorPromptDigit  by remember { mutableStateOf<Int?>(null) }   // "Enter X?" dialog
     var riddleDigit      by remember { mutableStateOf<Int?>(null) }   // riddle dialog
     var riddleInput      by remember { mutableStateOf("") }
+
+    // While a city voiceover is still sounding the player may wait by a door but
+    // can't go in — the "YES" to enter is greyed until it finishes. Polled because
+    // VoiceoverManager isn't observable.
+    var voBusy by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            voBusy = com.fictioncutshort.justacalculator.logic.VoiceoverManager.isBusy()
+            delay(150)
+        }
+    }
     var entryProgress    by remember { mutableIntStateOf(run {
         val saved  = cityPrefs.getInt("entry_progress", 0)
         // If building 1 was completed before entry_progress existed, treat as at least 1
@@ -824,8 +835,14 @@ fun CalculatorCityView(
         // Past this point the collapse is committed, and they are standing in it.
         endStarted = true
 
-        // vo038 — the ending narration. It starts now (15 s after they stepped in) and
-        // the collapse runs for its whole length, so the world goes fully black exactly
+        // Don't talk over the rating reply (vo035/036/037) still finishing from the
+        // slider. Wait until the narration queue has fully drained; vo038 — and the
+        // collapse timed to it below — simply start later, so the dip to black lands
+        // on vo038's end exactly as before, just shifted.
+        while (com.fictioncutshort.justacalculator.logic.VoiceoverManager.isBusy()) delay(100)
+
+        // vo038 — the ending narration. It starts once the reply is done and the
+        // collapse runs for its whole length, so the world goes fully black exactly
         // as the voiceover ends.
         val vo: MediaPlayer? = MediaPlayer.create(context, R.raw.vo038)
         val voMs = vo?.duration?.toLong() ?: ENDING_VO_PLACEHOLDER_MS
@@ -861,14 +878,13 @@ fun CalculatorCityView(
         renderer.collapse = 1f
         try { vo?.stop(); vo?.release() } catch (_: Throwable) {}
 
-        // Out of the city. The rest happens on the calculator.
+        // Out of the city. Every ending now says its whole goodbye on the black
+        // screen (NAME phase); the calculator only comes back afterwards, to type
+        // the credits (DIALOGUE phase, set from the black screen's onDone).
         delay(700)
         com.fictioncutshort.justacalculator.logic.EndingStore.line = 0
         com.fictioncutshort.justacalculator.logic.EndingStore.phase =
-            if (com.fictioncutshort.justacalculator.logic.EndingStore.asksForName(ending))
-                com.fictioncutshort.justacalculator.logic.EndingStore.Phase.NAME
-            else
-                com.fictioncutshort.justacalculator.logic.EndingStore.Phase.DIALOGUE
+            com.fictioncutshort.justacalculator.logic.EndingStore.Phase.NAME
     }
 
     // ── Door-open + walk-through sequence ─────────────────────────────────────
@@ -979,16 +995,7 @@ fun CalculatorCityView(
                 // vo031 — entering building 8.
                 com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo031, cctv = false)
             }
-            9 -> {
-                showBuilding9Flappy = true
-                // vo033/034 during the flappy game, keyed to the finger answer given
-                // at the door (1-2 fingers → vo033, 3+ → vo034).
-                if (building9Fingers in 1..2) {
-                    com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo033, cctv = false)
-                } else if (building9Fingers >= 3) {
-                    com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo034, cctv = false)
-                }
-            }
+            9 -> showBuilding9Flappy = true   // the flappy round owns its narration (vo033/034)
             else -> {
                 entryProgress++
                 prefs.edit().putInt("entry_progress", entryProgress).apply()
@@ -1068,14 +1075,18 @@ fun CalculatorCityView(
                     listOf(R.raw.vo007, R.raw.vo008))
             2 -> com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo028)
             3 -> {
-                // Building 3 done: the world settles again (glitch off) as night falls.
+                // Building 3 done: the world settles again — voiceover AND visuals
+                // stop glitching as night falls.
                 com.fictioncutshort.justacalculator.logic.VoiceoverManager.glitchMode = false
+                renderer.glitchStutter = false
                 com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo019)
             }
             4 -> {
-                // After building 4 the world feels "off": glitch on. vo018 plays clean,
+                // After building 4 the world feels "off": the voiceover stutters AND the
+                // frame-rate hitches raggedly until Building 3 is done. vo018 plays clean,
                 // 5 s after landing.
                 com.fictioncutshort.justacalculator.logic.VoiceoverManager.glitchMode = true
+                renderer.glitchStutter = true
                 delay(5000)
                 com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(
                     R.raw.vo018, glitch = false)
@@ -1085,6 +1096,15 @@ fun CalculatorCityView(
             8 -> com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(R.raw.vo032)
         }
         if (landCueBuilding != 0) landCueBuilding = 0
+    }
+
+    // Resume the post-Building-4 glitch (voiceover stutter + ragged frame-rate) on a
+    // mid-window relaunch: it's on whenever Building 4 is done but Building 3 isn't.
+    LaunchedEffect(Unit) {
+        if (prefs.getBoolean("completed_4", false) && !prefs.getBoolean("completed_3", false)) {
+            com.fictioncutshort.justacalculator.logic.VoiceoverManager.glitchMode = true
+            renderer.glitchStutter = true
+        }
     }
 
     // Building 6 landing cue (vo027), decoupled onto its own latch so the long
@@ -1154,7 +1174,13 @@ fun CalculatorCityView(
     // additional settle).
     LaunchedEffect(Unit) {
         if (!introDone) {
-            delay(500)
+            // Hold the top-down AERIAL view for a clear beat before anything moves.
+            // intro.value is 0 here, so the camera is pinned to the aerial pose; this
+            // pause also covers the first-frame model load (mutebutton/stickmen/debris)
+            // so the aerial reads as a real establishing shot, not a black flash before
+            // the descent. Descent + phase-2 timing is unchanged (measured from here).
+            applyFootprint(0)          // spread-out aerial footprint under the hold
+            delay(1600)
             coroutineScope {
                 // Single linear timeline so the forward motion in phase 2
                 // has constant velocity (no easing-bezier deceleration).
@@ -1879,7 +1905,10 @@ fun CalculatorCityView(
                 }
                 // Bridge arch: the eye rises up the ramp, stays level across the
                 // middle, and comes back down — following the bridge over the lava.
-                val bridgeRise = if (!isLandscape && bridgePieces >= 9 && pZ < LAVA_FRONT_Z) {
+                // Applies to a PARTIAL bridge too: the built planks are the south
+                // (rising) part of the same arch, and the player can only walk as far
+                // as they've built, so the same profile naturally rises with them.
+                val bridgeRise = if (!isLandscape && bridgePieces >= 1 && pZ < LAVA_FRONT_Z) {
                     val lavaN = LAVA_FRONT_Z - 360f
                     val t = ((LAVA_FRONT_Z - pZ) / (LAVA_FRONT_Z - lavaN)).coerceIn(0f, 1f)  // 0 south → 1 north
                     val prof = when {
@@ -2187,6 +2216,7 @@ fun CalculatorCityView(
             doorPromptDigit?.let { digit ->
                 DoorPromptDialog(
                     digit = digit,
+                    canEnter = !voBusy,
                     onYes = {
                         doorPromptDigit = null
                         riddleInput = ""
@@ -2547,7 +2577,12 @@ fun CalculatorCityView(
 
         // ── Building 9 — flappy-style skeleton ────────────────────────────────
         if (showBuilding9Flappy) {
+            // The round runs for exactly as long as its narration (vo033 for a
+            // 1-2 finger answer, vo034 for 3+); when the voiceover ends the game
+            // freezes and offers "Time to go".
+            val b9Vo = if (building9Fingers >= 3) R.raw.vo034 else R.raw.vo033
             FlappyBirdGame(
+                voRes = b9Vo,
                 onComplete = {
                     showBuilding9Flappy = false
                     entryProgress++
@@ -2555,11 +2590,18 @@ fun CalculatorCityView(
                     prefs.edit().putBoolean("building_done_9", true).apply()
                     prefs.edit().putBoolean("completed_9", true).apply()
                     com.fictioncutshort.justacalculator.logic.BuildingProgress.clear(context, 9)
+                    // Building 9 lays the final plank — the bridge is now whole.
+                    bridgePieces = (bridgePieces + 1).coerceAtMost(9)
+                    renderer.bridgePieces = bridgePieces
+                    prefs.edit().putInt("bridge_pieces", bridgePieces).apply()
                     renderer.needsRebuild = true
                     doorCooldownDigit = 9
                     pX = if (isLandscape) PLAYER_START_X_L else PLAYER_START_X
                     pZ = if (isLandscape) PLAYER_START_Z_L else PLAYER_START_Z
                     camYaw = 0f
+                    // Fly-over that reveals the finished bridge, then back to the city.
+                    lastCompletedBuilding = 9
+                    forceAerial = true
                 },
                 onExit = {
                     showBuilding9Flappy = false
@@ -2685,7 +2727,7 @@ fun CityJoystick(
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun DoorPromptDialog(digit: Int, onYes: () -> Unit, onNo: () -> Unit) {
+private fun DoorPromptDialog(digit: Int, canEnter: Boolean, onYes: () -> Unit, onNo: () -> Unit) {
     val label = if (digit == RAD_DIGIT) "MUTE" else digit.toString()
     Box(
         modifier = Modifier
@@ -2711,10 +2753,20 @@ private fun DoorPromptDialog(digit: Int, onYes: () -> Unit, onNo: () -> Unit) {
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace
             )
+            if (!canEnter) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    "…let the voice finish first…",
+                    color = Color(0xFFFFCC44),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    textAlign = TextAlign.Center
+                )
+            }
             Spacer(modifier = Modifier.height(24.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                CityDialogButton("[ YES ]", Color(0xFFFF6600), onYes)
-                CityDialogButton("[ NO  ]", Color(0xFF2A2A2A), onNo)
+                CityDialogButton("[ YES ]", Color(0xFFFF6600), enabled = canEnter, onClick = onYes)
+                CityDialogButton("[ NO  ]", Color(0xFF2A2A2A), onClick = onNo)
             }
         }
     }
@@ -2756,22 +2808,22 @@ private fun OrderBlockedDialog(digit: Int, required: Int, onDismiss: () -> Unit)
                 textAlign = TextAlign.Center
             )
             Spacer(modifier = Modifier.height(24.dp))
-            CityDialogButton("[ OK ]", Color(0xFF2A2A2A), onDismiss)
+            CityDialogButton("[ OK ]", Color(0xFF2A2A2A), onClick = onDismiss)
         }
     }
 }
 
 @Composable
-private fun CityDialogButton(label: String, bg: Color, onClick: () -> Unit) {
+private fun CityDialogButton(label: String, bg: Color, enabled: Boolean = true, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .background(bg, shape = RoundedCornerShape(3.dp))
-            .border(1.dp, Color(0xFF444444), shape = RoundedCornerShape(3.dp))
-            .clickable(onClick = onClick)
+            .background(if (enabled) bg else Color(0xFF1A1A1A), shape = RoundedCornerShape(3.dp))
+            .border(1.dp, if (enabled) Color(0xFF444444) else Color(0xFF333333), shape = RoundedCornerShape(3.dp))
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 28.dp, vertical = 12.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(label, color = Color(0xFFEEEEEE), fontSize = 15.sp,
+        Text(label, color = if (enabled) Color(0xFFEEEEEE) else Color(0xFF666666), fontSize = 15.sp,
             fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
     }
 }

@@ -29,6 +29,11 @@ class JustACalculatorApp : Application(), ImageLoaderFactory {
         android.util.Log.d("JustACalc", "🟢 Application.onCreate — initializing CalculatorActions")
         CalculatorActions.init(applicationContext)
         EasterEggTheme.init(applicationContext)
+        // Guarantee the narration player has a context before ANY screen plays a
+        // cue — otherwise the first cue on a session that skipped the intro/TD
+        // (e.g. a debug jump straight to a building) silently no-ops and its
+        // onComplete fires instantly (Building 9 "Time to go" with no voiceover).
+        com.fictioncutshort.justacalculator.logic.VoiceoverManager.init(applicationContext)
     }
 
     override fun newImageLoader(): ImageLoader {

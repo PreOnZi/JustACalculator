@@ -35,21 +35,22 @@ object VoiceoverManager {
 
     private var voPlayer: MediaPlayer? = null
     private var radioPlayer: MediaPlayer? = null
-    private var buzzPlayer: MediaPlayer? = null
     private var eq: Equalizer? = null
     private var stutterRunnable: Runnable? = null
 
-    /** True while walking the city streets: voiceover is muffled like a CCTV feed. */
+    // Cues never cut each other — a play() while one is sounding queues behind it
+    // and starts when the current clip ends, so narration can't overlap.
+    private data class Pending(
+        val resId: Int, val cctv: Boolean, val glitch: Boolean,
+        val volume: Float, val onComplete: (() -> Unit)?
+    )
+    private val queue = ArrayDeque<Pending>()
+
+    /** Legacy flag (kept so callers still compile); the CCTV muffle it drove is gone. */
     @Volatile var cctvMode: Boolean = false
 
     /** True after building 4 / before building 3 is finished: playback stutters. */
     @Volatile var glitchMode: Boolean = false
-
-    /** CCTV muffle attenuation (0..1) applied on top of any per-call volume. */
-    private const val CCTV_VOLUME = 0.55f
-
-    /** Volume of the electrical buzz bed that rides under every voiceover. */
-    private const val BUZZ_VOLUME = 0.2f
 
     fun init(context: Context) {
         appContext = context.applicationContext
@@ -72,26 +73,40 @@ object VoiceoverManager {
         volume: Float = 1f,
         onComplete: (() -> Unit)? = null
     ) {
-        val ctx = appContext ?: run { onComplete?.invoke(); return }
-        stopVoice()
-        val mp = MediaPlayer.create(ctx, resId) ?: run { onComplete?.invoke(); return }
+        if (appContext == null) { onComplete?.invoke(); return }
+        // Never cut the clip that's currently sounding — queue behind it. Routing
+        // (cctv/glitch/volume) is captured now, at call time.
+        queue.addLast(Pending(resId, cctv, glitch, volume, onComplete))
+        pump()
+    }
+
+    /** Start the next queued clip, if nothing is currently playing. */
+    private fun pump() {
+        val ctx = appContext ?: return
+        if (voPlayer != null) return   // a clip is still sounding; its completion pumps the next
+        val next = queue.removeFirstOrNull() ?: return
+        val mp = MediaPlayer.create(ctx, next.resId) ?: run {
+            next.onComplete?.invoke()
+            pump()
+            return
+        }
         voPlayer = mp
 
-        val vol = if (cctv) volume * CCTV_VOLUME else volume
-        mp.setVolume(vol, vol)
-        if (cctv) attachCctvMuffle(mp.audioSessionId)
+        // The "coming from the buildings' CCTV cameras" muffle is disabled: every
+        // cue plays clean and at a consistent volume for the whole game. (The cctv
+        // flag on callers is ignored now.)
+        mp.setVolume(next.volume, next.volume)
 
         mp.setOnCompletionListener {
             clearStutter()
             releaseEq()
-            stopBuzz()
             it.release()
             if (voPlayer === it) voPlayer = null
-            onComplete?.invoke()   // a chained clip (playSequence) restarts the buzz
+            next.onComplete?.invoke()
+            pump()   // play whatever queued up while this clip was sounding
         }
         mp.start()
-        startBuzz()
-        if (glitch) startStutter(mp)
+        if (next.glitch) startStutter(mp)
     }
 
     /**
@@ -141,6 +156,13 @@ object VoiceoverManager {
     /** True while a voiceover clip is actively playing (used to sequence cues across screens). */
     fun isPlaying(): Boolean = runCatching { voPlayer?.isPlaying == true }.getOrDefault(false)
 
+    /**
+     * True while a clip is playing OR one is still queued behind it. An action that
+     * must not talk over the narration (e.g. the ending collapse) waits on this so
+     * it only begins once the whole queue has drained.
+     */
+    fun isBusy(): Boolean = voPlayer != null || queue.isNotEmpty()
+
     /** Fade-free stop of just the radio bed (call once the intro's vo002 ends). */
     fun stopRadio() {
         radioPlayer?.let { runCatching { it.stop() }; runCatching { it.release() } }
@@ -150,7 +172,6 @@ object VoiceoverManager {
     private fun stopVoice() {
         clearStutter()
         releaseEq()
-        stopBuzz()
         voPlayer?.let {
             it.setOnCompletionListener(null)
             runCatching { it.stop() }
@@ -159,49 +180,15 @@ object VoiceoverManager {
         voPlayer = null
     }
 
-    // The electrical buzz bed under the narration — a single looping clip started
-    // whenever a voiceover plays and stopped when it ends (a chained sequence just
-    // restarts it, so the bed is continuous under back-to-back clips).
-    private fun startBuzz() {
-        val ctx = appContext ?: return
-        if (buzzPlayer != null) return
-        buzzPlayer = MediaPlayer.create(ctx, R.raw.buzz)?.apply {
-            isLooping = true
-            setVolume(BUZZ_VOLUME, BUZZ_VOLUME)
-            runCatching { start() }
-        }
-    }
-
-    private fun stopBuzz() {
-        buzzPlayer?.let { runCatching { it.stop() }; runCatching { it.release() } }
-        buzzPlayer = null
-    }
-
-    /** Stop everything (voiceover + radio). Safe to call on teardown. */
+    /** Stop everything (voiceover + radio) and discard anything queued. */
     fun stopAll() {
+        queue.clear()
         stopVoice()
         stopRadio()
     }
 
-    // ── CCTV muffle ────────────────────────────────────────────────────────
-    // A cheap "coming out of a camera speaker" tone: pull the top EQ bands down
-    // so highs are rolled off. Equalizer isn't guaranteed on every device, so
-    // this is best-effort and silently no-ops on failure.
-    private fun attachCctvMuffle(sessionId: Int) {
-        releaseEq()
-        runCatching {
-            val e = Equalizer(0, sessionId)
-            e.enabled = true
-            val bands = e.numberOfBands.toInt()
-            val minLevel = e.bandLevelRange[0]
-            for (b in 0 until bands) {
-                // Roll off the upper half of the spectrum for the muffled feel.
-                if (b >= bands / 2) e.setBandLevel(b.toShort(), (minLevel / 2).toShort())
-            }
-            eq = e
-        }
-    }
-
+    // The "CCTV camera speaker" muffle was removed — every cue now plays clean and
+    // at a consistent volume. releaseEq is kept as a harmless no-op (eq stays null).
     private fun releaseEq() {
         eq?.let { runCatching { it.release() } }
         eq = null

@@ -312,8 +312,11 @@ fun Building7VanityRoom(modifier: Modifier = Modifier, onComplete: () -> Unit = 
         }
     }
 
-    // Latest detection + the frame that produced it (kept for capture/body draw).
-    var face by remember { mutableStateOf<Face?>(null) }
+    // Latest detections + the frame that produced them (kept for capture/body draw).
+    // ALL faces in view get decorated; the largest is the "primary" used by the
+    // single-subject body mode.
+    var faces by remember { mutableStateOf<List<Face>>(emptyList()) }
+    val primaryFace = faces.firstOrNull()
     var srcW by remember { mutableIntStateOf(0) }
     var srcH by remember { mutableIntStateOf(0) }
     val latestFrame = remember { mutableStateOf<Bitmap?>(null) }
@@ -387,8 +390,12 @@ fun Building7VanityRoom(modifier: Modifier = Modifier, onComplete: () -> Unit = 
         )
     }
 
-    // Bind the front camera + analysis once permission is granted.
-    LaunchedEffect(hasCameraPermission) {
+    // Bind the front camera + analysis once permission is granted. Re-keyed on
+    // device orientation so rotating to landscape rebinds with the correct display
+    // rotation — otherwise the analyzer keeps a stale portrait rotationDegrees and
+    // ML Kit sees every face sideways (no tracking in horizontal mode).
+    val deviceOrientation = androidx.compose.ui.platform.LocalConfiguration.current.orientation
+    LaunchedEffect(hasCameraPermission, deviceOrientation) {
         if (!hasCameraPermission) return@LaunchedEffect
         val providerFuture = ProcessCameraProvider.getInstance(context)
         providerFuture.addListener({
@@ -410,8 +417,13 @@ fun Building7VanityRoom(modifier: Modifier = Modifier, onComplete: () -> Unit = 
                     val uw = if (rot == 90 || rot == 270) raw.height else raw.width
                     val uh = if (rot == 90 || rot == 270) raw.width else raw.height
                     detector.process(input)
-                        .addOnSuccessListener { faces ->
-                            face = faces.maxByOrNull { it.boundingBox.width() * it.boundingBox.height() }
+                        .addOnSuccessListener { detected ->
+                            // Every face in view gets props; keep them largest-first so
+                            // the primary (body-mode / hint) is the nearest person. Cap
+                            // the count to keep the per-frame overlay work bounded.
+                            faces = detected
+                                .sortedByDescending { it.boundingBox.width() * it.boundingBox.height() }
+                                .take(8)
                             srcW = uw; srcH = uh
                             latestFrame.value?.let { if (it != raw) it.recycle() }
                             latestFrame.value = raw
@@ -467,11 +479,11 @@ fun Building7VanityRoom(modifier: Modifier = Modifier, onComplete: () -> Unit = 
     LaunchedEffect(dupeFlash) { if (dupeFlash) { delay(1800); dupeFlash = false } }
 
     // Active anchored stickers for this frame (skipped entirely in body mode).
-    val placements: List<Placement> = remember(face, srcW, srcH, selected.toMap(), bodyMode.value) {
+    val placements: List<Placement> = remember(faces, srcW, srcH, selected.toMap(), bodyMode.value) {
         if (bodyMode.value) return@remember emptyList()
-        val f = face ?: return@remember emptyList()
-        if (srcW == 0 || srcH == 0) return@remember emptyList()
-        buildPlacements(f, srcW, srcH, selected, stickersBySlot)
+        if (srcW == 0 || srcH == 0 || faces.isEmpty()) return@remember emptyList()
+        // Props for EVERY face in view, not just the nearest.
+        faces.flatMap { buildPlacements(it, srcW, srcH, selected, stickersBySlot) }
     }
 
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
@@ -482,7 +494,7 @@ fun Building7VanityRoom(modifier: Modifier = Modifier, onComplete: () -> Unit = 
             if (bodyMode.value && bodyImage != null) {
                 // BODY — character art with the live camera poured into its face.
                 Canvas(modifier = Modifier.fillMaxSize()) {
-                    drawBodyComposite(this, bodyImage, backgroundImage, bodyFrame, face, srcW, srcH, look)
+                    drawBodyComposite(this, bodyImage, backgroundImage, bodyFrame, primaryFace, srcW, srcH, look)
                 }
             } else {
                 // Live sticker overlay — map mirrored-image placements to view
@@ -510,7 +522,7 @@ fun Building7VanityRoom(modifier: Modifier = Modifier, onComplete: () -> Unit = 
                 }
             }
 
-            if (face == null) {
+            if (primaryFace == null) {
                 Text(
                     if (bodyMode.value) "Line your face up with the cut-out"
                     else "Point the front camera at your face",
@@ -669,7 +681,7 @@ fun Building7VanityRoom(modifier: Modifier = Modifier, onComplete: () -> Unit = 
                             val frame = latestFrame.value
                             val ok = if (bodyMode.value && bodyImage != null) {
                                 if (frame != null && srcW > 0)
-                                    captureBodyAndSave(context, frame, latestRotation, face, bodyImage, backgroundImage, look)
+                                    captureBodyAndSave(context, frame, latestRotation, primaryFace, bodyImage, backgroundImage, look)
                                 else false
                             } else {
                                 if (frame != null && srcW > 0)

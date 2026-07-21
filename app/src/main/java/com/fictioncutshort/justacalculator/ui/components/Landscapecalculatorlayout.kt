@@ -192,7 +192,8 @@ fun LandscapeCalculatorContent(
                     radButtonsConverted = current.radButtonsConverted,
                     rantMode = current.rantMode,
                     onButtonClick = { symbol ->
-                        CalculatorActions.handleInput(state, symbol)
+                        // "RAD" is the post-story relabel of the clear key — same action.
+                        CalculatorActions.handleInput(state, if (symbol == "RAD") "C" else symbol)
                     }
                 )
             }

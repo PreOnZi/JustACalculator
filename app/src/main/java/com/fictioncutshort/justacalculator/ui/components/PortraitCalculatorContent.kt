@@ -15,6 +15,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -76,6 +80,16 @@ fun PortraitCalculatorContent(
                 awaitingChoice = current.awaitingChoice,
                 textColor = textColor,
                 dimensions = dimensions,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(top = 8.dp, end = 50.dp)
+            )
+        }
+
+        // After the credits have typed out, the message area becomes a button that
+        // takes the player to the app's Play Store rating page.
+        if (current.storyComplete) {
+            EndingRateButton(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(top = 8.dp, end = 50.dp)
@@ -153,7 +167,8 @@ fun PortraitCalculatorContent(
                     radButtonsConverted = current.radButtonsConverted,
                     rantMode = current.rantMode,
                     onButtonClick = { symbol ->
-                        CalculatorActions.handleInput(state, symbol)
+                        // "RAD" is the post-story relabel of the clear key — same action.
+                        CalculatorActions.handleInput(state, if (symbol == "RAD") "C" else symbol)
                     }
                 )
             }
@@ -349,6 +364,42 @@ private fun FloatingDisplay(
             color = Color(0xFF0A0A0A),
             textAlign = TextAlign.End,
             maxLines = 1,
+            fontFamily = CalculatorDisplayFont
+        )
+    }
+}
+// After the credits, the calculator's message area becomes a link to the app's
+// Play Store rating page (falls back to the https URL if the market app is absent).
+@androidx.compose.runtime.Composable
+fun EndingRateButton(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    Box(
+        modifier = modifier
+            .background(Color(0xFF1E1E1E), RoundedCornerShape(8.dp))
+            .border(1.dp, Color(0xFFE88617), RoundedCornerShape(8.dp))
+            .clickable {
+                val pkg = context.packageName
+                val market = android.content.Intent(
+                    android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse("market://details?id=$pkg")
+                )
+                val ok = runCatching { context.startActivity(market) }.isSuccess
+                if (!ok) runCatching {
+                    context.startActivity(
+                        android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://play.google.com/store/apps/details?id=$pkg")
+                        )
+                    )
+                }
+            }
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+    ) {
+        Text(
+            text = "Rate the game ★",
+            color = Color(0xFFE88617),
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
             fontFamily = CalculatorDisplayFont
         )
     }

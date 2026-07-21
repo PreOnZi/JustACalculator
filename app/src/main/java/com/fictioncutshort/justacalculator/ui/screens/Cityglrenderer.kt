@@ -612,6 +612,9 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     private var sw = 1; private var sh = 1
 
     private var lastFrameMs = 0L
+    // Post-Building-4 glitch: while true, the render thread randomly hitches so the
+    // world stammers along with the glitched voiceover. Cleared once Building 3 is done.
+    @Volatile var glitchStutter = false
     override fun onDrawFrame(gl: GL10?) {
         // Frame-rate cap (~33 fps). The scene rendered continuously at full device
         // frame-rate, which ran the GPU hot and drained the battery; pacing the GL
@@ -620,6 +623,11 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         val since = nowMs - lastFrameMs
         if (lastFrameMs != 0L && since in 0 until 30L) {
             try { Thread.sleep(30L - since) } catch (_: InterruptedException) {}
+        }
+        // Post-Building-4 glitch: some frames hitch for a random beat, dropping the
+        // effective frame-rate raggedly so the world stutters with the voiceover.
+        if (glitchStutter && kotlin.random.Random.nextFloat() < 0.30f) {
+            try { Thread.sleep((45L + kotlin.random.Random.nextInt(160)).toLong()) } catch (_: InterruptedException) {}
         }
         lastFrameMs = android.os.SystemClock.uptimeMillis()
         if (needsRebuild) { needsRebuild = false; buildScene() }
@@ -2493,66 +2501,172 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             val shellR = (wdt * 0.5f) * 0.94f
             val shellY = (mxY - mnY) * 0.45f
             radDoorTopY = (mxY - mnY) * RAD_DOOR_TOP_FRAC * scl
+            // The button's interior props — everything that isn't the drum wall/lid,
+            // the floor/carpet, or the monitor glass — come slowly LOOSE and float
+            // gently around the player when the city outside collapses (COLLAPSE_FLOAT).
+            // Multi-part items (a whiteboard's board + frame + legs) have to move as ONE;
+            // the OBJ names are generic (Cube.001…), so parts are grouped SPATIALLY —
+            // objects whose boxes overlap fly as a single unit. Assignment is by 3D box
+            // (not just X/Z) so the floor under a prop stays put instead of lifting too.
+            val drumH = (mxY - mnY)
+            fun isDrum(ob: ObjBounds) =
+                ob.name.startsWith("Cylinder") && (ob.maxY - ob.minY) > drumH * 0.45f
+            fun isFloor(ob: ObjBounds): Boolean =
+                (ob.minY - mnY) < drumH * 0.06f &&                          // sits on the floor
+                (ob.maxY - ob.minY) < drumH * 0.05f &&                      // barely any height
+                maxOf(ob.maxX - ob.minX, ob.maxZ - ob.minZ) > wdt * 0.30f   // and wide
+            // Objects eligible to float (drum + floor/carpet excluded → they stay put).
+            val furnObjs = muteButtonBounds.filter { !isDrum(it) && !isFloor(it) }
+            // Union-find: objects whose boxes overlap merge into one floating unit.
+            val uf = IntArray(furnObjs.size) { it }
+            fun find(i: Int): Int { var x = i; while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x] }; return x }
+            val mgn = wdt * 0.01f
+            for (i in furnObjs.indices) for (j in i + 1 until furnObjs.size) {
+                val a = furnObjs[i]; val b = furnObjs[j]
+                if (a.minX - mgn <= b.maxX && a.maxX + mgn >= b.minX &&
+                    a.minY - mgn <= b.maxY && a.maxY + mgn >= b.minY &&
+                    a.minZ - mgn <= b.maxZ && a.maxZ + mgn >= b.minZ) uf[find(i)] = find(j)
+            }
+            // The floating unit a point belongs to (-1 = none → stays fixed).
+            fun clusterOf(cX: Float, cY: Float, cZ: Float): Int {
+                var best = -1; var bestArea = Float.MAX_VALUE
+                for ((idx, ob) in furnObjs.withIndex()) {
+                    if (cX in ob.minX..ob.maxX && cY in ob.minY..ob.maxY && cZ in ob.minZ..ob.maxZ) {
+                        val area = (ob.maxX - ob.minX) * (ob.maxZ - ob.minZ)
+                        if (area < bestArea) { bestArea = area; best = idx }
+                    }
+                }
+                return if (best >= 0) find(best) else -1
+            }
+
+            class FurnBatch(val r: Float, val g: Float, val b: Float) { val v = ArrayList<Float>() }
+            class TexBatch(val texId: Int) { val v = ArrayList<Float>(); val uv = ArrayList<Float>() }
+            class Piece { val flat = ArrayList<FurnBatch>(); val tex = LinkedHashMap<Int, TexBatch>() }
+            val pieces = LinkedHashMap<Int, Piece>()
+            fun pieceOf(cid: Int) = pieces.getOrPut(cid) { Piece() }
+            val fixedTex = LinkedHashMap<Int, TexBatch>()   // image planes that don't float
+
+            fun modelToWorld(src: List<Float>): FloatArray {
+                val out = FloatArray(src.size)
+                var j = 0
+                while (j < src.size) {
+                    out[j]     = (src[j]     - cxL) * scl + bx
+                    out[j + 1] = (src[j + 1] - mnY) * scl + baseY
+                    out[j + 2] = (src[j + 2] - czL) * scl + bz
+                    j += 3
+                }
+                return out
+            }
+
             for (g in mute) {
-                // A textured group (the whiteboards' image planes) goes in whole. It
-                // is interior by definition — nothing on the drum's wall carries an
-                // image — and the shell/inner split below reorders triangles, which
-                // would tear its UVs away from the vertices they belong to.
+                // A textured group (the whiteboards' image planes). Split per-triangle
+                // into the unit its frame is in — UVs kept in lockstep with their verts,
+                // so nothing tears — so board + frame float together.
                 val texName = g.texture
                 if (texName != null && g.uvs.isNotEmpty()) {
-                    val out = FloatArray(g.verts.size)
-                    var j = 0
-                    while (j + 2 < out.size) {
-                        out[j]     = (g.verts[j]     - cxL) * scl + bx
-                        out[j + 1] = (g.verts[j + 1] - mnY) * scl + baseY
-                        out[j + 2] = (g.verts[j + 2] - czL) * scl + bz
-                        j += 3
-                    }
                     val texId = modelTexture(texName)
                     if (texId != 0) {
-                        meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3,
-                            1f, 1f, 1f, 1f, fog, tex = texId, uv = g.uvs.toFB()))
+                        var k = 0; var u = 0
+                        while (k + 8 < g.verts.size && u + 5 < g.uvs.size) {
+                            var cX = 0f; var cY = 0f; var cZ = 0f
+                            for (v in 0 until 3) {
+                                cX += g.verts[k + v*3]; cY += g.verts[k + v*3 + 1]; cZ += g.verts[k + v*3 + 2]
+                            }
+                            cX /= 3f; cY /= 3f; cZ /= 3f
+                            val cid = clusterOf(cX, cY, cZ)
+                            val tb = if (cid >= 0) pieceOf(cid).tex.getOrPut(texId) { TexBatch(texId) }
+                                     else fixedTex.getOrPut(texId) { TexBatch(texId) }
+                            for (v in 0 until 9) tb.v.add(g.verts[k + v])
+                            for (v in 0 until 6) tb.uv.add(g.uvs[u + v])
+                            k += 9; u += 6
+                        }
                         continue
                     }
                     // No image on disk — fall through and draw it flat, as before.
                 }
-                val shell = ArrayList<Float>()
-                val inner = ArrayList<Float>()
+                // Colours arrive gamma-corrected from ObjLoader. The exception is the
+                // monitors' panels: painted blue in the model, but a screen only has a
+                // colour when something's on it — the live feed is drawn over them, so
+                // the glass goes near-black. The monitors stay FIXED (with their feed).
+                val isScreen = g.materialName == SCREEN_MTL
+                val r  = if (isScreen) 0.03f  else g.r
+                val gg = if (isScreen) 0.035f else g.g
+                val b  = if (isScreen) 0.04f  else g.b
+
+                val shell = ArrayList<Float>()       // drum wall/lid — see-through, fixed
+                val fixedInner = ArrayList<Float>()  // monitors, floor, strays — fixed
                 var k = 0
                 while (k + 8 < g.verts.size) {
-                    // Classify by triangle centroid in the model's own coordinates.
                     var cX = 0f; var cY = 0f; var cZ = 0f
                     for (v in 0 until 3) {
                         cX += g.verts[k + v*3]; cY += g.verts[k + v*3 + 1]; cZ += g.verts[k + v*3 + 2]
                     }
                     cX /= 3f; cY /= 3f; cZ /= 3f
                     val rLoc = hypot(cX - cxL, cZ - czL)
-                    val dst = if (rLoc > shellR || (cY - mnY) > shellY) shell else inner
-                    for (v in 0 until 9) dst.add(g.verts[k + v])
+                    val cid = if (isScreen) -1 else clusterOf(cX, cY, cZ)
+                    when {
+                        rLoc > shellR || (cY - mnY) > shellY -> for (v in 0 until 9) shell.add(g.verts[k + v])
+                        cid < 0 -> for (v in 0 until 9) fixedInner.add(g.verts[k + v])
+                        else -> {
+                            val bucket = pieceOf(cid).flat
+                            val last = bucket.lastOrNull()
+                            val batch = if (last != null && last.r == r && last.g == gg && last.b == b) last
+                                        else FurnBatch(r, gg, b).also { bucket.add(it) }
+                            for (v in 0 until 9) batch.v.add(g.verts[k + v])
+                        }
+                    }
                     k += 9
                 }
-                // Colours arrive gamma-corrected from ObjLoader; the lighting does
-                // the rest of the work now. The exception is the monitors' panels:
-                // they're painted blue in the model, but a screen only has a colour
-                // when something is on it — the live feed is drawn over them (see
-                // buildCctvScreens), so the glass underneath goes near-black.
-                val isScreen = g.materialName == SCREEN_MTL
-                val r  = if (isScreen) 0.03f  else g.r
-                val gg = if (isScreen) 0.035f else g.g
-                val b  = if (isScreen) 0.04f  else g.b
-                for (isShell in listOf(true, false)) {
-                    val src = if (isShell) shell else inner
-                    if (src.isEmpty()) continue
-                    val out = FloatArray(src.size)
-                    var j = 0
-                    while (j < src.size) {
-                        out[j]     = (src[j]     - cxL) * scl + bx
-                        out[j + 1] = (src[j + 1] - mnY) * scl + baseY
-                        out[j + 2] = (src[j + 2] - czL) * scl + bz
-                        j += 3
+                if (shell.isNotEmpty()) {
+                    val out = modelToWorld(shell)
+                    meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3, r, gg, b, 1f, fog, radShell = true))
+                }
+                if (fixedInner.isNotEmpty()) {
+                    val out = modelToWorld(fixedInner)
+                    meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3, r, gg, b, 1f, fog, radShell = false))
+                }
+            }
+            // Interior image planes not tied to any floating unit are drawn fixed.
+            for (tb in fixedTex.values) {
+                if (tb.v.isEmpty()) continue
+                val out = modelToWorld(tb.v)
+                meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3, 1f, 1f, 1f, 1f, fog,
+                    tex = tb.texId, uv = tb.uv.toFloatArray().toFB()))
+            }
+
+            // Combined model-space box per floating unit → world centre + rotation pivot.
+            val pieceAABB = HashMap<Int, FloatArray>()
+            for (i in furnObjs.indices) {
+                val root = find(i); val ob = furnObjs[i]
+                val a = pieceAABB.getOrPut(root) {
+                    floatArrayOf(Float.MAX_VALUE, -Float.MAX_VALUE, Float.MAX_VALUE,
+                                 -Float.MAX_VALUE, Float.MAX_VALUE, -Float.MAX_VALUE)
+                }
+                if (ob.minX < a[0]) a[0] = ob.minX; if (ob.maxX > a[1]) a[1] = ob.maxX
+                if (ob.minY < a[2]) a[2] = ob.minY; if (ob.maxY > a[3]) a[3] = ob.maxY
+                if (ob.minZ < a[4]) a[4] = ob.minZ; if (ob.maxZ > a[5]) a[5] = ob.maxZ
+            }
+
+            // Emit each unit as its own COLLAPSE_FLOAT group — it lifts and turns as
+            // one, slowly, about its own centre.
+            for ((cid, piece) in pieces) {
+                val a = pieceAABB[cid]
+                val ocx = if (a != null) ((a[0] + a[1]) * 0.5f - cxL) * scl + bx else bx
+                val ocz = if (a != null) ((a[4] + a[5]) * 0.5f - czL) * scl + bz else bz
+                val pivY = if (a != null) ((a[2] + a[3]) * 0.5f - mnY) * scl + baseY else topY * 0.15f
+                val ohx = (if (a != null) (a[1] - a[0]) * 0.5f * scl else r0 * 0.3f).coerceAtLeast(4f)
+                val ohz = (if (a != null) (a[5] - a[4]) * 0.5f * scl else r0 * 0.3f).coerceAtLeast(4f)
+                collapsible(ocx, ocz, ohx, ohz, COLLAPSE_FLOAT, pivY) {
+                    for (batch in piece.flat) {
+                        val out = modelToWorld(batch.v)
+                        meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3,
+                            batch.r, batch.g, batch.b, 1f, fog, radShell = false))
                     }
-                    meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size/3, r, gg, b, 1f, fog,
-                        radShell = isShell))
+                    for (tb in piece.tex.values) {
+                        val out = modelToWorld(tb.v)
+                        meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3,
+                            1f, 1f, 1f, 1f, fog, tex = tb.texId, uv = tb.uv.toFloatArray().toFB()))
+                    }
                 }
             }
 
@@ -3620,7 +3734,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     // lava beside it, and read as thrown rather than tipped.
     private inline fun collapsible(
         cx: Float, cz: Float, hx: Float = BW, hz: Float = BD,
-        kind: Float = COLLAPSE_FALLS, add: () -> Unit,
+        kind: Float = COLLAPSE_FALLS, pivotY: Float = 0f, add: () -> Unit,
     ) {
         val first = meshes.size
         add()
@@ -3633,18 +3747,27 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         // order is the point. The stickmen cannot: they go up, and the screen starts
         // fading to black at 0.72, so one that waited until 0.6 to leave the ground
         // would still be standing there when the lights went out. They go early.
-        val startAt = if (kind == COLLAPSE_SWEPT) 0.03f + r0 * 0.17f else 0.05f + r0 * 0.55f
+        // The mute-button furniture (FLOAT) also comes loose early, but then moves
+        // slowly for the whole rest of the collapse.
+        val startAt = when (kind) {
+            COLLAPSE_SWEPT -> 0.03f + r0 * 0.17f
+            COLLAPSE_FLOAT -> 0.02f + r0 * 0.12f
+            else           -> 0.05f + r0 * 0.55f
+        }
         collapseGroups.add(floatArrayOf(
             first.toFloat(), (meshes.size - 1).toFloat(), cx, cz,
-            startAt, r1, hx, hz, kind
+            startAt, r1, hx, hz, kind, pivotY
         ))
     }
 
     // What the collapse does to a thing: the city's buildings and the bridge come
     // DOWN, and the stickmen standing around watching it all go get picked up and
-    // thrown into the sky. They were never really part of the city anyway.
+    // thrown into the sky. They were never really part of the city anyway. The
+    // FLOAT things (the mute button's contents) instead come gently loose and drift
+    // around the player — a slow untethering, not a blast.
     private val COLLAPSE_FALLS = 0f
     private val COLLAPSE_SWEPT = 1f
+    private val COLLAPSE_FLOAT = 2f
 
     /**
      * Where this building is, mid-collapse — the whole rigid transform:
@@ -3682,6 +3805,28 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         }
         // Its own fall, over the remaining time.
         val p = ((t - startAt) / (1f - startAt).coerceAtLeast(0.001f)).coerceIn(0f, 1f)
+
+        if (g[8] == COLLAPSE_FLOAT) {
+            // A slow untethering: the room's contents lift a LITTLE off their shelves
+            // and drift and turn gently around the player — kept near body height, so
+            // they stay in view rather than shooting up out of sight. They never leave
+            // (no return false): they are still floating when the screen goes black.
+            val e = p * p * (3f - 2f * p)                        // smoothstep — eases in slowly
+            val ph = seed * 6.2831853f
+            val pivotY = if (g.size > 9) g[9] else 0f
+            out[1] = e * 46f + sin(t * 0.8f + ph) * (7f * e)     // small lift + slow bob
+            val driftR = e * 26f
+            out[0] = cos(ph + t * 0.45f) * driftR                // gentle circular drift
+            out[2] = sin(ph + t * 0.45f) * driftR
+            // Slow tumble about the item's OWN centre — a little over a half turn total.
+            val axx = sin(ph * 1.7f); val axy = 0.5f; val axz = -cos(ph * 1.7f)
+            val al = kotlin.math.sqrt(axx * axx + axy * axy + axz * axz).coerceAtLeast(1e-3f)
+            out[3] = axx / al; out[4] = axy / al; out[5] = axz / al
+            out[6] = e * 1.1f + t * 0.12f
+            out[7] = cx; out[8] = pivotY; out[9] = cz
+            return true
+        }
+
         if (p >= 1f) return false                      // gone
         val shake = (1f - p) * 6f
 
