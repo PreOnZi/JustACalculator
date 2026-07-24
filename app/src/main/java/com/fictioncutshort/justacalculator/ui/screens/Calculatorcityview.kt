@@ -19,6 +19,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -64,24 +65,24 @@ private const val WIND_VOL = 0.26f
 private const val STEPS_VOL = 0.6f
 
 // Collision matches the renderer's GROUND footprint (player only navigates at ground level).
-private const val BW_V = 60f    // matches renderer BW_GROUND
-private const val BD_V = 50f    // matches renderer BD_GROUND
+private const val BW_V = 120f    // matches renderer BW_GROUND
+private const val BD_V = 100f    // matches renderer BD_GROUND
 
 // City grid pitch — MUST match Cityglrenderer.kt's CELL field. Drives every
 // hardcoded coordinate in this file (building footprints, lamp posts, door
 // trigger points, player start, lava and wall boundaries, camera framing).
-private const val CELL_V = 260f
+private const val CELL_V = 380f
 
 // Portrait column / row centres (mirror renderer C1..C4 / RA..RE).
-private val PC1 = -CELL_V * 1.5f   // -420
-private val PC2 = -CELL_V * 0.5f   // -140
-private val PC3 =  CELL_V * 0.5f   //  140
-private val PC4 =  CELL_V * 1.5f   //  420
-private val PRA = -CELL_V * 2f     // -560
-private val PRB = -CELL_V * 1f     // -280
+private val PC1 = -CELL_V * 1.5f
+private val PC2 = -CELL_V * 0.5f
+private val PC3 =  CELL_V * 0.5f
+private val PC4 =  CELL_V * 1.5f
+private val PRA = -CELL_V * 2f
+private val PRB = -CELL_V * 1f
 private val PRC =  0f
-private val PRD =  CELL_V * 1f     //  280
-private val PRE =  CELL_V * 2f     //  560
+private val PRD =  CELL_V * 1f
+private val PRE =  CELL_V * 2f
 
 // Landscape column / row centres (mirror buildSceneLandscape lC1..lC4 / lRA..lRE).
 private val LSC1 = CELL_V * 1f     //  280
@@ -103,7 +104,11 @@ private val LSRE =  CELL_V * 2f
 // player starts a bit east of the street centre (street is roughly -330 to
 // -190 at CELL=260, centre at -260; we start at -200, about 60 units east of
 // centre). Far cheaper than the swerve.
-private val PLAYER_START_X = -210f                      // matches PORTRAIT_LAND_X
+// Land on the CENTRAL north-south street (x=0). It's the only street whose centre
+// doesn't move as the grid spreads from the compact aerial layout to the full
+// ground layout (columns sit at ±0.5·cell / ±1.5·cell, so only the gap centred on
+// 0 is morph-invariant) — essential now that CELL grows 200→380 during the fly-in.
+private val PLAYER_START_X = 0f                         // matches PORTRAIT_LAND_X (central street)
 // Centre of the row between PRC (north wall at Z=64) and PRD (south wall at
 // Z=196), giving the player ~66 units of clearance on each side. Previously
 // PRC + CELL_V * 0.75 = 195 — that's ONE UNIT north of PRD's wall, so any
@@ -127,6 +132,18 @@ private const val DEFAULT_CAM_PITCH = 28f
 private const val CAM_DIST         = 165f
 private const val CAM_H_BASE       = 8f
 private const val CAM_EYE_H        = 55f   // first-person eye height (above ground)
+private const val PROJ_R           = 6f    // gun projectile radius (world units)
+// Damaged-ruin wall collision: only the building's OUTER SHELL blocks the player
+// (interior ramp rails/steps are filtered out in the renderer so they can never
+// pinch you on a ramp). A wall blocks only when it stands at foot/body level — it
+// must rise more than WALL_STEP_OVER above the floor (so low steps are walked
+// over) AND its base must sit below floor + WALL_DUCK_FRAC×height (so you pass
+// UNDER any overhead lintel/arch even when headroom is tight).
+private const val WALL_COLLIDE_R   = 10f   // world units from a wall segment
+private const val WALL_STEP_OVER   = 20f   // walls shorter than this (a step) don't block
+private const val WALL_DUCK_FRAC   = 0.26f // overhead clearance, × building height
+private const val GUN_KILL_SHOTS   = 10    // hits needed to kill the monster for good
+private const val MAX_BULLETS      = 5     // live rounds kept; firing more retires the oldest
 // Portrait intro landing pose (end of phase 1 descent, start of phase 2
 // forward motion):
 //   X = -200  In the col-1 / col-2 street at every cellStage:
@@ -141,14 +158,16 @@ private const val CAM_EYE_H        = 55f   // first-person eye height (above gro
 //   Y = 117   Standard cinematic landing height.
 //   Z = 480   Just south of the city, so phase 2's forward motion has the
 //             camera drift north through the col-1 / col-2 street.
-private const val PORTRAIT_LAND_X = -210f
-private const val PORTRAIT_LAND_Z = 480f
+private const val PORTRAIT_LAND_X = 0f     // central street (morph-invariant); see PLAYER_START_X
+private const val PORTRAIT_LAND_Z = 700f   // just south of the widened city, glide north from here
 // Sidewalk wraps the digit buildings — match the renderer's mainbuilding scale
 // so the camera bump zone follows the actual sidewalk geometry. The model's
-// outer XZ is ±5.74; the building proper is ±4.078/±3.063, so the sidewalk
-// outer in world units is (footprint × 5.74 / model-body-half).
-private val SIDEWALK_X_HALF = BW_V * (5.74f / 4.078f)   // ≈ 84.5
-private val SIDEWALK_Z_HALF = BD_V * (5.74f / 3.063f)   // ≈ 93.7
+// outer XZ is ±5.74; the building proper is ±4.078/±3.063. The renderer now
+// COMPRESSES the skirt beyond the body by SIDEWALK_SKIRT_SCALE (so a wide BW
+// doesn't inflate the pavement into the road) — match that here.
+private const val SIDEWALK_SKIRT_SCALE = 0.3f   // MUST match renderer
+private val SIDEWALK_X_HALF = BW_V * (4.078f + (5.74f - 4.078f) * SIDEWALK_SKIRT_SCALE) / 4.078f
+private val SIDEWALK_Z_HALF = BD_V * (3.063f + (5.74f - 3.063f) * SIDEWALK_SKIRT_SCALE) / 3.063f
 // Vertical step the camera takes when the player crosses onto a sidewalk.
 // Tuned to roughly the visual thickness of the sidewalk after the renderer's
 // MAIN_BUILDING_HEIGHT_SCALE × buildingHeightScale=2 scaling.
@@ -176,6 +195,20 @@ private val BLDG_FP: List<FloatArray> = run {
     for (cz in rows) out.add(floatArrayOf(PC4, cz))
     out.toList()
 }
+// The intact, enterable digit buildings (1..9) — the solid 3×3 middle grid.
+// Bullets bounce off THESE; the damaged ruins (function/damaged rows, operator
+// column) are hollow shells with broken windows, so rounds pass through them.
+private val DIGIT_FP: List<FloatArray> = run {
+    val out = mutableListOf<FloatArray>()
+    for (cx in listOf(PC1, PC2, PC3)) for (cz in listOf(PRB, PRC, PRD)) out.add(floatArrayOf(cx, cz))
+    out.toList()
+}
+private val DIGIT_FP_L: List<FloatArray> = run {
+    val out = mutableListOf<FloatArray>()
+    for (cx in listOf(LSC1, LSC2, LSC3)) for (cz in listOf(LSRB, LSRC, LSRD)) out.add(floatArrayOf(cx, cz))
+    out.toList()
+}
+
 // Debris collision zones [cx, cz, half-width-x, half-depth-z]. First 4 are the
 // operator-column gaps (between rows); last one is the wide south rubble field.
 private val DEBRIS_FP: List<FloatArray> = listOf(
@@ -518,6 +551,9 @@ fun CalculatorCityView(
     // First-person eye height — bumped up when the player crosses onto a
     // sidewalk, smoothly ramped back down once they step onto the road.
     var eyeY by remember { mutableStateOf(CAM_EYE_H.toFloat()) }
+    // Height of the surface the player is standing on inside the "C" gun room, so
+    // they walk UP its ramp rather than through it. 0 outside / on the ground floor.
+    var cRoomFloorY by remember { mutableStateOf(0f) }
 
     // 0..3: drives the renderer's cellStage. Each intro cut increments it,
     // spreading the grid one third of the way from CELL=200 (compact calc-
@@ -632,6 +668,29 @@ fun CalculatorCityView(
     // Fingers the player answered they'd sacrifice at building 9's door riddle —
     // read when the flappy game launches to pick vo033 (1-2) vs vo034 (3+).
     var building9Fingers by remember { mutableIntStateOf(-1) }
+    // ── The hidden gun (west wall of the "C" ruin) ────────────────────────────
+    // Grab it → aim with the joystick, FIRE round white projectiles. Ten hits kill
+    // the monster for good and, because finding + using it is pure exploration,
+    // qualify the player for the EXPLORER ending (see EndingStore.markExplorer).
+    var gunGrabbed    by remember { mutableStateOf(cityPrefs.getBoolean("gun_grabbed", false)) }
+    // Drawn (in hand) vs holstered. Starts holstered on a fresh load; drawing it
+    // arms the reticle + FIRE + the first-person viewmodel.
+    var gunHeld       by remember { mutableStateOf(false) }
+    var monsterKilled by remember { mutableStateOf(cityPrefs.getBoolean("monster_killed", false)) }
+    var monsterHits   by remember { mutableIntStateOf(cityPrefs.getInt("monster_hits", 0)) }
+    var showGunGrabPrompt by remember { mutableStateOf(false) }
+    // "LEAVE" suppresses the prompt until the player steps away and comes back.
+    var gunPromptDismissed by remember { mutableStateOf(false) }
+    // FIRE taps queued from the button; drained by the game loop (cross-thread).
+    val pendingShots  = remember { java.util.concurrent.atomic.AtomicInteger(0) }
+    // Live projectiles: [x, y, z, vx, vy, vz, life]. Mutated only by the loop.
+    val gunProjectiles = remember { java.util.ArrayList<FloatArray>() }
+    LaunchedEffect(gunGrabbed) { renderer.gunGrabbed = gunGrabbed }
+    LaunchedEffect(gunGrabbed, gunHeld) { renderer.gunHeld = gunGrabbed && gunHeld }
+    LaunchedEffect(monsterKilled) {
+        if (monsterKilled) { renderer.monsterActive = false; renderer.monsterClones = emptyList() }
+    }
+
     var tankGameCompleted by remember { mutableStateOf(prefs.getBoolean("td_b3_done", false)) }
     var bridgePieces     by remember { mutableIntStateOf(prefs.getInt("bridge_pieces", if (prefs.getBoolean("td_b1_done", false)) 1 else 0)) }
     // Crossing the finished bridge is one-way — once the player reaches the far
@@ -1180,7 +1239,15 @@ fun CalculatorCityView(
             // so the aerial reads as a real establishing shot, not a black flash before
             // the descent. Descent + phase-2 timing is unchanged (measured from here).
             applyFootprint(0)          // spread-out aerial footprint under the hold
-            delay(1600)
+            // Long aerial establishing shot: hover above the city for ~10 s before
+            // anything moves, bring the narration in while still airborne, then hold
+            // ANOTHER ~10 s over the city before the camera descends into it.
+            delay(10_000)
+            com.fictioncutshort.justacalculator.logic.VoiceoverManager.init(context)
+            com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(
+                R.raw.vo003, cctv = false
+            )
+            delay(10_000)
             coroutineScope {
                 // Single linear timeline so the forward motion in phase 2
                 // has constant velocity (no easing-bezier deceleration).
@@ -1194,13 +1261,8 @@ fun CalculatorCityView(
                 // even though the cellStage / footprint changes are stepped.
                 launch {
                     delay(3000)
-                    // Aerial view has stabilised and the camera now carries forward
-                    // (phase 2). vo003 comes in over the already-running wind, played
-                    // flat — the player isn't walking the streets yet, so no CCTV routing.
-                    com.fictioncutshort.justacalculator.logic.VoiceoverManager.init(context)
-                    com.fictioncutshort.justacalculator.logic.VoiceoverManager.play(
-                        R.raw.vo003, cctv = false
-                    )
+                    // The camera now carries forward into the city (phase 2). The vo003
+                    // narration already began over the long aerial hold above.
                     val phase2Frames = 188            // 3 s at 16 ms / frame
                     var level = 0
                     applyFootprint(0)
@@ -1391,7 +1453,38 @@ fun CalculatorCityView(
 
                 // Collision — slightly wider margin for first-person
                 fun blocked(tx: Float, tz: Float): Boolean {
-                    val bfp = if (isLandscape) BLDG_FP_L else BLDG_FP
+                    // Damaged ruins now block against their WALLS (not their whole
+                    // footprint): you walk in through the mesh's doorway and up the
+                    // ramp, but can't pass through solid walls. A wall segment only
+                    // blocks when its height range overlaps the player's body band,
+                    // so doorway lintels (above the band) stay walk-through. Only the
+                    // ruin whose footprint AABB contains the point can block us.
+                    val ruins = renderer.damagedInteriors
+                    for (ri in ruins.indices) {
+                        val d = ruins[ri]
+                        if (tx < d.minX - WALL_COLLIDE_R || tx > d.maxX + WALL_COLLIDE_R ||
+                            tz < d.minZ - WALL_COLLIDE_R || tz > d.maxZ + WALL_COLLIDE_R) continue
+                        val stepTop  = cRoomFloorY + WALL_STEP_OVER      // taller than this → a wall, not a step
+                        val duckBase = cRoomFloorY + WALL_DUCK_FRAC * d.h // base above this → an overhead you pass under
+                        val w = d.walls
+                        val r2 = WALL_COLLIDE_R * WALL_COLLIDE_R
+                        var j = 0
+                        while (j + 5 < w.size) {
+                            val yBot = w[j + 4]; val yTop = w[j + 5]
+                            if (yTop > stepTop && yBot < duckBase) {   // a real wall at body level
+                                val ax = w[j]; val az = w[j + 1]; val bx = w[j + 2]; val bz = w[j + 3]
+                                val ex = bx - ax; val ez = bz - az
+                                val len2 = ex * ex + ez * ez
+                                var t = if (len2 > 1e-4f) ((tx - ax) * ex + (tz - az) * ez) / len2 else 0f
+                                t = t.coerceIn(0f, 1f)
+                                val cxp = ax + ex * t; val czp = az + ez * t
+                                val ddx = tx - cxp; val ddz = tz - czp
+                                if (ddx * ddx + ddz * ddz < r2) return true
+                            }
+                            j += 6
+                        }
+                    }
+                    val bfp = if (isLandscape) DIGIT_FP_L else DIGIT_FP
                     val dfp = if (isLandscape) DEBRIS_FP_L else DEBRIS_FP
                     val lfp = if (isLandscape) LAMP_FP_L else LAMP_FP
                     for (fp in bfp) {
@@ -1537,6 +1630,14 @@ fun CalculatorCityView(
                         showBuilding5Map || showBuilding6Game || showBuilding7Filter ||
                         showBuilding8Casino || showBuilding9Flappy || showCityLottery ||
                         showDebugGate || showDebugMenu
+                    // Shot dead with the gun → gone for good, no roaming ever again.
+                    if (monsterKilled) {
+                        renderer.monsterActive = false
+                        renderer.monsterClones = emptyList()
+                        mState = MS_ROAM; monsterLock = false; freezeMs = 0L
+                        beepPlayer.value?.let { try { it.setVolume(0f, 0f) } catch (_: Throwable) {} }
+                        return@run
+                    }
                     // Bridge sentinel: after the crossing the monster stops hunting and
                     // plants itself mid-deck, facing the far bank — the way back is shut.
                     if (crossedBridge) {
@@ -1836,6 +1937,196 @@ fun CalculatorCityView(
                     }
                 }
 
+                // ── Hidden gun: proximity-to-grab + projectile physics ────────
+                run {
+                    val gw = renderer.gunWorld
+                    // Prompt to grab only when the player is right up at the wall gun
+                    // AND actually looking at it — not merely somewhere in the area.
+                    if (!gunGrabbed && !overlayOpen && doorPromptDigit == null &&
+                        riddleDigit == null && orderBlockedDigit == null && doorOpeningDigit == null) {
+                        val toGx = gw[0] - pX; val toGz = gw[2] - pZ
+                        val d2 = toGx * toGx + toGz * toGz
+                        val cr = Math.toRadians(camYaw.toDouble())
+                        val fx = sin(cr).toFloat(); val fz = -cos(cr).toFloat()
+                        val d = sqrt(d2).coerceAtLeast(0.001f)
+                        val facing = (fx * toGx + fz * toGz) / d > 0.60f   // within ~53° of centre
+                        // The gun sits on the top platform, so you must have CLIMBED to
+                        // its level — being underneath it on the ground floor doesn't count.
+                        val atLevel = abs(cRoomFloorY - (gw[1] - 14f)) < 45f
+                        val atGun = d2 < 60f * 60f && facing && atLevel
+                        if (d2 > 80f * 80f) gunPromptDismissed = false     // re-arm after walking off
+                        showGunGrabPrompt = atGun && !gunPromptDismissed
+                    } else if (gunGrabbed && showGunGrabPrompt) {
+                        showGunGrabPrompt = false
+                    }
+
+                    // Spawn queued FIRE taps from the muzzle along the view heading,
+                    // with a slight upward arc so rounds fall, bounce and roll.
+                    if (gunGrabbed && gunHeld && !overlayOpen) {
+                        val shots = pendingShots.getAndSet(0)
+                        if (shots > 0) {
+                            val cr = Math.toRadians(camYaw.toDouble())
+                            val fx = sin(cr).toFloat(); val fz = -cos(cr).toFloat()
+                            repeat(shots.coerceAtMost(MAX_BULLETS)) {
+                                // [x,y,z, vx,vy,vz, unused, spinDeg] — spawn well ahead
+                                // of the muzzle so the round doesn't fill the view at birth.
+                                gunProjectiles.add(floatArrayOf(
+                                    pX + fx * 42f, eyeY - 6f, pZ + fz * 42f,
+                                    fx * 22f, 5f, fz * 22f, 0f, 0f))
+                            }
+                            // Count-based lifetime: only the newest MAX_BULLETS survive,
+                            // so rounds rest on the ground until pushed out by later shots.
+                            while (gunProjectiles.size > MAX_BULLETS) gunProjectiles.removeAt(0)
+                        }
+                    } else {
+                        pendingShots.set(0)
+                    }
+
+                    // Advance live rounds.
+                    if (gunProjectiles.isNotEmpty()) {
+                        // Height of the ground under a point: 0 on the road, one curb
+                        // step up on the sidewalk ring around any building.
+                        val bfp = if (isLandscape) BLDG_FP_L else BLDG_FP
+                        val solidFp = if (isLandscape) DIGIT_FP_L else DIGIT_FP
+                        val ruins = renderer.damagedInteriors
+                        fun triHt(x: Float, z: Float, t: FloatArray): Float? {
+                            val x0 = t[0]; val z0 = t[2]; val x1 = t[3]; val z1 = t[5]; val x2 = t[6]; val z2 = t[8]
+                            val den = (z1 - z2) * (x0 - x2) + (x2 - x1) * (z0 - z2)
+                            if (abs(den) < 1e-4f) return null
+                            val a = ((z1 - z2) * (x - x2) + (x2 - x1) * (z - z2)) / den
+                            val b = ((z2 - z0) * (x - x2) + (x0 - x2) * (z - z2)) / den
+                            val c = 1f - a - b
+                            if (a < -0.02f || b < -0.02f || c < -0.02f) return null
+                            return a * t[1] + b * t[4] + c * t[7]
+                        }
+                        // Highest ruin floor/ramp surface at (x,z) at or below `below` —
+                        // so rounds rest on ramps and interior floors, not just the road.
+                        fun ruinFloorAt(x: Float, z: Float, below: Float): Float {
+                            var best = Float.NaN
+                            for (ri in ruins.indices) {
+                                val d = ruins[ri]
+                                if (x < d.minX || x > d.maxX || z < d.minZ || z > d.maxZ) continue
+                                for (t in d.floors) {
+                                    val y = triHt(x, z, t) ?: continue
+                                    if (y <= below + PROJ_R + 4f && (best.isNaN() || y > best)) best = y
+                                }
+                            }
+                            return best
+                        }
+                        fun groundHeightAt(x: Float, z: Float): Float {
+                            for (fp in bfp) {
+                                if (abs(x - fp[0]) < SIDEWALK_X_HALF && abs(z - fp[1]) < SIDEWALK_Z_HALF)
+                                    return SIDEWALK_BUMP
+                            }
+                            return 0f
+                        }
+                        // Rounds bounce off the solid digit buildings AND off the ruins'
+                        // walls now (height-aware, so they fly through window/door gaps).
+                        fun solidWall(x: Float, z: Float, py: Float): Boolean {
+                            for (fp in solidFp) {
+                                if (x > fp[0] - BW_V && x < fp[0] + BW_V &&
+                                    z > fp[1] - BD_V && z < fp[1] + BD_V) return true
+                            }
+                            for (ri in ruins.indices) {
+                                val d = ruins[ri]
+                                if (x < d.minX - PROJ_R || x > d.maxX + PROJ_R ||
+                                    z < d.minZ - PROJ_R || z > d.maxZ + PROJ_R) continue
+                                val w = d.walls
+                                var j = 0
+                                while (j + 5 < w.size) {
+                                    if (py > w[j + 4] - PROJ_R && py < w[j + 5] + PROJ_R) {
+                                        val ax = w[j]; val az = w[j + 1]; val bx = w[j + 2]; val bz = w[j + 3]
+                                        val ex = bx - ax; val ez = bz - az
+                                        val len2 = ex * ex + ez * ez
+                                        var t = if (len2 > 1e-4f) ((x - ax) * ex + (z - az) * ez) / len2 else 0f
+                                        t = t.coerceIn(0f, 1f)
+                                        val dxp = x - (ax + ex * t); val dzp = z - (az + ez * t)
+                                        if (dxp * dxp + dzp * dzp < PROJ_R * PROJ_R) return true
+                                    }
+                                    j += 6
+                                }
+                            }
+                            return false
+                        }
+                        var killedNow = false
+                        val pit = gunProjectiles.iterator()
+                        while (pit.hasNext()) {
+                            val p = pit.next()
+                            val py = p[1]
+                            val gHere = groundHeightAt(p[0], p[2])
+                            // Skip wall/curb collisions right at the muzzle so a round
+                            // fired next to a wall clears the barrel instead of rebounding
+                            // into the player's face.
+                            val nearMuzzle = (p[0] - pX) * (p[0] - pX) +
+                                             (p[2] - pZ) * (p[2] - pZ) < 60f * 60f
+                            // Horizontal step, axis-separated so it bounces off solid
+                            // building walls and off sidewalk curbs (a step it can't climb).
+                            var nx = p[0] + p[3]
+                            var nz = p[2] + p[5]
+                            if (!nearMuzzle) {
+                                val curbX = groundHeightAt(nx, p[2])
+                                if (solidWall(nx, p[2], py) || (curbX > gHere && py < curbX + PROJ_R)) {
+                                    p[3] = -p[3] * 0.5f; nx = p[0]
+                                }
+                                val curbZ = groundHeightAt(p[0], nz)
+                                if (solidWall(p[0], nz, py) || (curbZ > gHere && py < curbZ + PROJ_R)) {
+                                    p[5] = -p[5] * 0.5f; nz = p[2]
+                                }
+                            }
+                            p[0] = nx; p[2] = nz
+                            // Vertical: gravity, then bounce/roll — but ONLY where there
+                            // is ground. Rounds fired out over the lava (or past the city
+                            // edge) keep falling and drop out of play, instead of bouncing
+                            // off the player's invisible movement bounds.
+                            val overGround = p[0] in xBoundsMin..xBoundsMax &&
+                                             p[2] in zBoundsMin..zBoundsMax
+                            p[4] -= 0.85f
+                            p[1] += p[4]
+                            val ruinF = ruinFloorAt(p[0], p[2], p[1])
+                            val floorHere = maxOf(groundHeightAt(p[0], p[2]),
+                                                  if (ruinF.isNaN()) 0f else ruinF)
+                            val restFloor = floorHere + PROJ_R
+                            if (overGround && p[1] <= restFloor) {
+                                p[1] = restFloor
+                                if (p[4] < 0f) p[4] = -p[4] * 0.45f
+                                if (p[4] < 1.4f) p[4] = 0f
+                                p[3] *= 0.982f; p[5] *= 0.982f    // rolling friction
+                            }
+                            p[7] += (abs(p[3]) + abs(p[5])) * 2.2f    // tumble ∝ speed
+                            var consumed = false
+                            if (renderer.monsterActive && !monsterKilled) {
+                                val ddx = p[0] - renderer.monsterX; val ddz = p[2] - renderer.monsterZ
+                                val hitR = renderer.monsterScale * 3.4f
+                                if (ddx * ddx + ddz * ddz < hitR * hitR && p[1] < renderer.monsterScale * 8.5f) {
+                                    consumed = true
+                                    monsterHits += 1
+                                    cityPrefs.edit().putInt("monster_hits", monsterHits).apply()
+                                    buzz(60L)
+                                    if (monsterHits >= GUN_KILL_SHOTS) killedNow = true
+                                }
+                            }
+                            // No time-based expiry: rounds persist (count-capped above).
+                            // Only remove on a monster hit or when they fall into the lava.
+                            if (consumed || p[1] < -80f) pit.remove()
+                        }
+                        renderer.projectiles =
+                            gunProjectiles.map { floatArrayOf(it[0], it[1], it[2], PROJ_R, it[7]) }
+
+                        if (killedNow && !monsterKilled) {
+                            monsterKilled = true
+                            cityPrefs.edit().putBoolean("monster_killed", true).apply()
+                            renderer.monsterActive = false
+                            renderer.monsterClones = emptyList()
+                            monsterLock = false
+                            // Exploration reward: this run now takes the EXPLORER ending.
+                            com.fictioncutshort.justacalculator.logic.EndingStore.markExplorer(context)
+                            buzz(500L)
+                        }
+                    } else if (renderer.projectiles.isNotEmpty()) {
+                        renderer.projectiles = emptyList()
+                    }
+                }
+
                 // ── Door proximity detection ──────────────────────────────────
                 // Doors go inert while the monster is hunting — no hiding indoors.
                 if (mState == MS_ROAM &&
@@ -1918,7 +2209,74 @@ fun CalculatorCityView(
                     }
                     BRIDGE_PEAK_RISE * prof
                 } else 0f
-                val eyeTarget = (if (onSidewalk) CAM_EYE_H + SIDEWALK_BUMP else CAM_EYE_H) + bridgeRise
+                // Walk UP a damaged ruin's interior ramp: find the ruin we're standing
+                // in and follow its walkable up-faces nearest the current level, so the
+                // player climbs connected ramps/floors instead of passing through. Every
+                // ruin does this now, not just the "C" gun room.
+                val ruinsF = renderer.damagedInteriors
+                var floors: List<FloatArray> = emptyList()
+                for (ri in ruinsF.indices) {
+                    val d = ruinsF[ri]
+                    if (pX >= d.minX && pX <= d.maxX && pZ >= d.minZ && pZ <= d.maxZ) { floors = d.floors; break }
+                }
+                val eyeTarget: Float
+                if (floors.isNotEmpty()) {
+                    fun triH(px: Float, pz: Float, t: FloatArray): Float? {
+                        val x0 = t[0]; val z0 = t[2]; val x1 = t[3]; val z1 = t[5]; val x2 = t[6]; val z2 = t[8]
+                        val den = (z1 - z2) * (x0 - x2) + (x2 - x1) * (z0 - z2)
+                        if (abs(den) < 1e-4f) return null
+                        val a = ((z1 - z2) * (px - x2) + (x2 - x1) * (pz - z2)) / den
+                        val b = ((z2 - z0) * (px - x2) + (x0 - x2) * (pz - z2)) / den
+                        val c = 1f - a - b
+                        if (a < -0.02f || b < -0.02f || c < -0.02f) return null
+                        return a * t[1] + b * t[4] + c * t[7]
+                    }
+                    // Highest walkable surface within one step of our current level at
+                    // (px,pz) — prefer the HIGHEST so the flat top platform wins over the
+                    // ramp lip at the very top (no more sinking into the floor there).
+                    fun highestStep(px: Float, pz: Float): Float {
+                        var b = Float.NaN
+                        for (t in floors) {
+                            val y = triH(px, pz, t) ?: continue
+                            // Accept a generous step so steeper ramp sections (where the
+                            // surface climbs faster than a footstep) are still followed
+                            // instead of being left behind → the player falling through.
+                            if (abs(y - cRoomFloorY) < 30f && (b.isNaN() || y > b)) b = y
+                        }
+                        return b
+                    }
+                    var best = highestStep(pX, pZ)
+                    if (best.isNaN()) {
+                        // Bridge seams AND holes in the ruin floor: sample a ring around
+                        // us and take the highest surface. Wider/denser than before so
+                        // gaps in the mesh (e.g. the far side of the top floor) don't
+                        // read as empty space.
+                        for (o in 0 until 8) {
+                            val ang = o * (PI.toFloat() / 4f)
+                            val r = 14f
+                            val y = highestStep(pX + r * cos(ang), pZ + r * sin(ang))
+                            if (!y.isNaN() && (best.isNaN() || y > best)) best = y
+                        }
+                    }
+                    if (best.isNaN()) {
+                        // Still nothing underfoot — a hole or a spot the model just
+                        // doesn't cover. HOLD the current height rather than dropping:
+                        // the ruins are sealed shells, so there's nowhere legitimate to
+                        // fall to, and dropping was sinking the player through the floor
+                        // and trapping them under the ramp.
+                        best = cRoomFloorY
+                    }
+                    // Never sink fast. Clamp downward change per frame so a hole or a
+                    // gap in the ruin floor GLIDES past (the player re-acquires the
+                    // floor on the far side and rises again) instead of dropping them
+                    // through it. Climbing back up stays instant so ramps feel snappy.
+                    if (best < cRoomFloorY - 6f) best = cRoomFloorY - 6f
+                    cRoomFloorY = best
+                    eyeTarget = best + CAM_EYE_H
+                } else {
+                    cRoomFloorY = 0f
+                    eyeTarget = (if (onSidewalk) CAM_EYE_H + SIDEWALK_BUMP else CAM_EYE_H) + bridgeRise
+                }
                 eyeY += (eyeTarget - eyeY) * 0.20f
 
                 // Landing position (end of intro, start of the 0.5 s settle).
@@ -2135,6 +2493,106 @@ fun CalculatorCityView(
                     }
                 }
             )
+        }
+
+        // ── Gun: draw/holster toggle, aiming reticle + FIRE (once grabbed) ────
+        if (gunGrabbed && introDone && !overlayOpen && !forceAerial && doorOpeningDigit == null) {
+            // Put-away / take-out toggle — always available while you carry the gun.
+            val toggleMod = if (isLandscape)
+                Modifier.align(Alignment.CenterStart).padding(start = 24.dp, top = 150.dp)
+            else Modifier.align(Alignment.BottomEnd).padding(end = 34.dp, bottom = 150.dp)
+            Box(
+                modifier = toggleMod
+                    .background(Color(0xCC22252B), RoundedCornerShape(10.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { gunHeld = !gunHeld }
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(if (gunHeld) "PUT AWAY" else "TAKE OUT",
+                    color = Color.White, fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+            }
+        }
+
+        // Reticle + FIRE only while the gun is actually drawn.
+        if (gunGrabbed && gunHeld && introDone && !overlayOpen && !forceAerial && doorOpeningDigit == null) {
+            // Centre crosshair — you aim by turning with the joystick.
+            Canvas(modifier = Modifier.align(Alignment.Center).size(48.dp)) {
+                val c = size.minDimension / 2f
+                val col = Color.White.copy(alpha = 0.85f)
+                drawCircle(col, radius = c * 0.16f, center = Offset(c, c), style = Stroke(width = 2.5f))
+                val len = c * 0.72f; val gap = c * 0.30f
+                drawLine(col, Offset(c, c - len), Offset(c, c - gap), strokeWidth = 3f)
+                drawLine(col, Offset(c, c + gap), Offset(c, c + len), strokeWidth = 3f)
+                drawLine(col, Offset(c - len, c), Offset(c - gap, c), strokeWidth = 3f)
+                drawLine(col, Offset(c + gap, c), Offset(c + len, c), strokeWidth = 3f)
+            }
+
+            // FIRE — opposite the joystick so both thumbs reach.
+            val fireMod = if (isLandscape)
+                Modifier.align(Alignment.CenterStart).padding(start = 24.dp)
+            else Modifier.align(Alignment.BottomEnd).padding(end = 28.dp, bottom = 48.dp)
+            Box(
+                modifier = fireMod
+                    .size(86.dp)
+                    .background(Color(0xCCCC2A2A), CircleShape)
+                    .border(2.dp, Color.White.copy(alpha = 0.7f), CircleShape)
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { pendingShots.incrementAndGet() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("FIRE", color = Color.White, fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace, fontSize = 16.sp)
+            }
+
+            // Damage counter — only once the monster has actually taken a hit.
+            if (!monsterKilled && monsterHits > 0) {
+                Text(
+                    "$monsterHits / $GUN_KILL_SHOTS",
+                    color = Color.White, fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace, fontSize = 15.sp,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 54.dp)
+                        .background(Color.Black.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+            }
+        }
+
+        // ── "Grab the gun?" prompt ────────────────────────────────────────────
+        if (showGunGrabPrompt && !gunGrabbed && !overlayOpen) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color(0xF01A1A1A), RoundedCornerShape(12.dp))
+                    .border(1.dp, Color(0xFFFF6600), RoundedCornerShape(12.dp))
+                    .padding(20.dp)
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("There's a gun here.", color = Color.White, fontSize = 18.sp,
+                        fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(14.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        CityDialogButton("[ GRAB ]", Color(0xFFFF6600)) {
+                            gunGrabbed = true
+                            gunHeld = true
+                            cityPrefs.edit().putBoolean("gun_grabbed", true).apply()
+                            showGunGrabPrompt = false
+                        }
+                        CityDialogButton("[ LEAVE ]", Color(0xFF2A2A2A)) {
+                            showGunGrabPrompt = false
+                            gunPromptDismissed = true
+                        }
+                    }
+                }
+            }
         }
 
         // ── Sound credits ────────────────────────────────────────────────────
@@ -2609,6 +3067,11 @@ fun CalculatorCityView(
                 }
             )
         }
+
+        // Low-volume warning lives HERE, not globally — the narrated experience that
+        // needs the volume up only begins in the city, so it must never nag during
+        // the phase-1 calculator story.
+        com.fictioncutshort.justacalculator.ui.components.LowVolumeWarning()
     }
 }
 

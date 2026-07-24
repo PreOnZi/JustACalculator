@@ -145,9 +145,9 @@ class MainActivity : ComponentActivity() {
                         .easterEggGrayscale(com.fictioncutshort.justacalculator.logic.EasterEggTheme.grayscale)
                 ) {
                     CalculatorScreen()
-                    // Global, dismissible "your volume is low" banner — the whole
-                    // experience is narrated, so a muted device silently loses the story.
-                    com.fictioncutshort.justacalculator.ui.components.LowVolumeWarning()
+                    // NOTE: the low-volume warning is NOT global — it lives inside
+                    // CalculatorCityView so it only nags once the narrated city begins,
+                    // never during the phase-1 calculator story.
                 }
             }
         }

@@ -243,6 +243,81 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     // from the mesh (centroid of the bright face materials) so it's correct for
     // whatever orientation the model was authored in.
     @Volatile var monsterFaceYawOffsetDeg = 0f
+
+    // ── Gun prop (hidden on the "C" building's west wall) + its projectiles ────
+    // The wall-mounted gun is drawn (solid) in the main pass until the player
+    // grabs it; the white projectiles it fires are drawn additively in PASS 2 so
+    // they glow through the permanent night. CalculatorCityView owns the physics
+    // and the grab/kill state — the renderer only reflects it.
+    private var gunGroups: List<ObjGroup> = emptyList()
+    private var gunCx = 0f; private var gunCy = 0f; private var gunCz = 0f
+    private var gunFit = 1f                          // auto-fit scale (model → ~GUN_SPAN units)
+    private val GUN_SPAN = 26f                        // world size of the grabbable prop
+    private val GUN_MOUNT_Y = 34f                     // resting height (eye is 55)
+    @Volatile var gunGrabbed = false                 // hides the gun once taken
+    @Volatile var gunHeld = false                    // true → draw the first-person viewmodel
+    // Each projectile: [x, y, z, radius, spinDeg].
+    @Volatile var projectiles: List<FloatArray> = emptyList()
+    // The "C" gun room's walkable up-faces in WORLD space (9 floats per triangle:
+    // x0,y0,z0, x1,y1,z1, x2,y2,z2). CalculatorCityView samples these so the player
+    // can walk UP the interior ramp instead of through it.
+    @Volatile var cRoomFloor: List<FloatArray> = emptyList()
+    // Centre of the highest walkable platform in the "C" room (top of the ramp) —
+    // where the hidden gun sits. Null until the room is baked.
+    @Volatile var cRoomTop: FloatArray? = null
+    // EVERY damaged ruin's walkable floors + blocking walls (world space), so the
+    // player collides with walls and climbs interior ramps in all of them, not just
+    // the "C" gun room. [floors] are up-face triangles (9 floats each, like
+    // cRoomFloor); [walls] are flat XZ segments [x0,z0,x1,z1, ...] from the near-
+    // vertical faces. [min/max X/Z] is the footprint AABB for cheap containment.
+    // Rebuilt each buildScene.
+    class DamagedInterior(
+        @JvmField val minX: Float, @JvmField val maxX: Float,
+        @JvmField val minZ: Float, @JvmField val maxZ: Float,
+        @JvmField val h: Float,                     // world height (scales the door band)
+        @JvmField val floors: List<FloatArray>,
+        @JvmField val walls: FloatArray,            // stride 6: x0,z0,x1,z1,yBot,yTop
+    )
+    private val damagedList = ArrayList<DamagedInterior>()
+    val damagedInteriors: List<DamagedInterior> get() = damagedList
+    // Bullet = smallest Building-6 boulder (ball1), auto-fit + centred like the gun.
+    private var bulletGroups: List<ObjGroup> = emptyList()
+    private var bulletCx = 0f; private var bulletCy = 0f; private var bulletCz = 0f
+    private var bulletFit = 1f
+
+    /** Live world position of the gun — on top of the "C" ruin's interior ramp
+     *  (the highest walkable platform), lifted a little so it rests on the surface.
+     *  Falls back to the west wall until the room is baked. */
+    val gunWorld: FloatArray get() = cRoomTop?.let { floatArrayOf(it[0], it[1] + 14f, it[2]) }
+        ?: floatArrayOf(C1 - (BW + BD) * 0.5f - 6f, GUN_MOUNT_Y, RA)
+    // Orientation of the wall gun: laid on its side against the vertical west face,
+    // barrel running ALONG the wall (not stabbed into it). Tunable Euler degrees.
+    private val WALL_GUN_YAW = 0f
+    private val WALL_GUN_PITCH = 0f
+    private val WALL_GUN_ROLL = 0f
+    // Rotate + scale a gun vertex into world space at [gunWorld].
+    private fun wallGunVerts(g: ObjGroup): FloatArray {
+        val gw = gunWorld
+        val rot = FloatArray(16); Matrix.setIdentityM(rot, 0)
+        Matrix.rotateM(rot, 0, WALL_GUN_YAW, 0f, 1f, 0f)
+        Matrix.rotateM(rot, 0, WALL_GUN_PITCH, 1f, 0f, 0f)
+        Matrix.rotateM(rot, 0, WALL_GUN_ROLL, 0f, 0f, 1f)
+        val src = g.verts
+        val arr = FloatArray(src.size)
+        val v = FloatArray(4); val o = FloatArray(4)
+        var i = 0
+        while (i < src.size) {
+            v[0] = (src[i]     - gunCx) * gunFit
+            v[1] = (src[i + 1] - gunCy) * gunFit
+            v[2] = (src[i + 2] - gunCz) * gunFit
+            v[3] = 1f
+            Matrix.multiplyMV(o, 0, rot, 0, v, 0)
+            arr[i] = o[0] + gw[0]; arr[i + 1] = o[1] + gw[1]; arr[i + 2] = o[2] + gw[2]
+            i += 3
+        }
+        return arr
+    }
+
     // Per-interactive-building (digits 1..9) "completed" flag — drives the
     // window colour to BLACK once the user has cleared that building. Read
     // every frame in the render loop so no scene rebuild is needed when it
@@ -447,16 +522,20 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     // pinned to GROUND — invisible from straight overhead in aerial mode, flush at ground.
     val BW_AERIAL = 85f
     val BD_AERIAL = 72f
-    val BW_GROUND = 60f
-    val BD_GROUND = 50f
+    // Ground footprint widened (60→120 / 50→100) so the damaged-building models
+    // scale near-uniformly instead of squished-thin-and-stretched-tall — which is
+    // what made their interior ramps far too steep. CELL grows to match (260→380)
+    // so the STREET GAPS stay the same and the map just spreads out on landing.
+    val BW_GROUND = 120f
+    val BD_GROUND = 100f
 
     @Volatile var BW    = BW_AERIAL
     @Volatile var BD    = BD_AERIAL
-    @Volatile var CELL  = 260f
+    @Volatile var CELL  = 380f
 
     // Active cell pitch — interpolated by cellStage so each cut spreads the
     // grid one third of the way from the compact calculator-keypad layout
-    // (CELL=200) to the full city (CELL=260). Stage 0 = 200, stage 3 = CELL.
+    // (CELL=200) to the full city (CELL). Stage 0 = 200, stage 3 = CELL.
     private fun activeCell(): Float = 200f + (CELL - 200f) * cellStage / 3f
     private val C1: Float get() = -activeCell() * 1.5f
     private val C2: Float get() = -activeCell() * 0.5f
@@ -594,6 +673,40 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         try { damagedGroupsA  = ObjLoader.load(a, "models/builddamage/buildd1.obj",  "models/builddamage/buildd1.mtl") } catch (_: Throwable) {}
         try { damagedGroupsB  = ObjLoader.load(a, "models/builddamage/buildd2.obj",  "models/builddamage/buildd2.mtl") } catch (_: Throwable) {}
         try { damagedGroupsC  = ObjLoader.load(a, "models/builddamage/buildd3.obj",  "models/builddamage/buildd3.mtl") } catch (_: Throwable) {}
+        try {
+            gunGroups = ObjLoader.load(a, "models/gun.obj", "models/gun.mtl")
+            // Auto-fit: centre on the model's bounds and scale so its longest span
+            // is GUN_SPAN world units, independent of how the .blend was authored.
+            var mnX = Float.MAX_VALUE; var mnY = Float.MAX_VALUE; var mnZ = Float.MAX_VALUE
+            var mxX = -Float.MAX_VALUE; var mxY = -Float.MAX_VALUE; var mxZ = -Float.MAX_VALUE
+            for (g in gunGroups) { var i = 0; while (i < g.verts.size) {
+                val x = g.verts[i]; val y = g.verts[i + 1]; val z = g.verts[i + 2]
+                if (x < mnX) mnX = x; if (x > mxX) mxX = x
+                if (y < mnY) mnY = y; if (y > mxY) mxY = y
+                if (z < mnZ) mnZ = z; if (z > mxZ) mxZ = z; i += 3 } }
+            if (mnX <= mxX) {
+                gunCx = (mnX + mxX) * 0.5f; gunCy = (mnY + mxY) * 0.5f; gunCz = (mnZ + mxZ) * 0.5f
+                val ext = maxOf(mxX - mnX, mxY - mnY, mxZ - mnZ).coerceAtLeast(1e-4f)
+                gunFit = GUN_SPAN / ext
+            }
+        } catch (_: Throwable) {}
+        try {
+            // The gun fires the smallest Building-6 boulder (ball1); centre + fit it
+            // so its diameter matches the projectile's collision radius.
+            bulletGroups = ObjLoader.load(a, "models/stickmancourse/assets/ball1.obj", null)
+            var mnX = Float.MAX_VALUE; var mnY = Float.MAX_VALUE; var mnZ = Float.MAX_VALUE
+            var mxX = -Float.MAX_VALUE; var mxY = -Float.MAX_VALUE; var mxZ = -Float.MAX_VALUE
+            for (g in bulletGroups) { var i = 0; while (i < g.verts.size) {
+                val x = g.verts[i]; val y = g.verts[i + 1]; val z = g.verts[i + 2]
+                if (x < mnX) mnX = x; if (x > mxX) mxX = x
+                if (y < mnY) mnY = y; if (y > mxY) mxY = y
+                if (z < mnZ) mnZ = z; if (z > mxZ) mxZ = z; i += 3 } }
+            if (mnX <= mxX) {
+                bulletCx = (mnX + mxX) * 0.5f; bulletCy = (mnY + mxY) * 0.5f; bulletCz = (mnZ + mxZ) * 0.5f
+                val ext = maxOf(mxX - mnX, mxY - mnY, mxZ - mnZ).coerceAtLeast(1e-4f)
+                bulletFit = 1f / ext          // unit diameter; scaled to 2·radius at draw
+            }
+        } catch (_: Throwable) {}
         try { mainBuildingGroups = ObjLoader.load(a, "models/mainbuilding.obj", "models/mainbuilding.mtl") } catch (_: Throwable) {}
         try { stickmanGroups  = ObjLoader.load(a, "models/stickman.obj",  "models/stickman.mtl") } catch (_: Throwable) {}
         try { stickman2Groups = ObjLoader.load(a, "models/stickman2.obj", "models/stickman2.mtl") } catch (_: Throwable) {}
@@ -829,6 +942,11 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         // it reads as a dark shape in the gloom rather than a self-lit cut-out.
         drawMonster()
 
+        // The wall-mounted gun (solid) sits in the world until grabbed; dimmed by
+        // the night like any other prop, so it rewards actually exploring the lane.
+        drawWallGun()
+        drawBoulderProjectiles(additive = false)   // solid rocks (visible in daylight)
+
         // Dark-blue atmospheric overlay — gets stronger as the player completes
         // buildings. Drawn last with the depth test off so it tints everything.
         if (darknessLevel > 0.001f) {
@@ -950,10 +1068,16 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             drawCameraLights(dkLvl)
             // Illuminate the monster's red/white faces.
             drawMonsterFaces(dkLvl)
+            // A faint glint marks the wall gun; the rolling rounds catch the night too.
+            drawWallGunGlow()
+            drawBoulderProjectiles(additive = true)
             GLES20.glDisable(GLES20.GL_BLEND)
             GLES20.glDepthMask(true)
             GLES20.glDepthFunc(GLES20.GL_LESS)
         }
+
+        // First-person held gun, on top of everything (day or night).
+        drawHeldGun()
     }
 
     // ── Building 8 entrance: a running-RGB light frame around the door ──────────
@@ -1200,6 +1324,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         doorMounts.clear()
         lampLights.clear()
         collapseGroups.clear()
+        damagedList.clear()
         cctv.setMonitors(emptyList())   // re-found from the model in addRadButton
         cctv.feeds = emptyList()
         if (isLandscape) { buildSceneLandscape(); finishScene(); return }
@@ -1555,6 +1680,21 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     private val MB_Y_GROUND    = -4.931460f   // building's first-floor base
     private val MB_Y_TOP       = 10.740813f
     private val MB_SIDEWALK_Y_LIMIT = -5.286f // anything with all-verts ≤ this is sidewalk
+    // The sidewalk skirt (model XZ from the body edge out to ±5.74) scales with the
+    // building footprint, so widening BW inflated the pavement and swallowed the
+    // road. Compress only the part BEYOND the body edge toward the building so the
+    // skirt stays thin regardless of BW. Must match SIDEWALK_*_HALF in the view.
+    private val SIDEWALK_SKIRT_SCALE = 0.3f
+    private fun skirtX(x: Float): Float {
+        val a = kotlin.math.abs(x)
+        return if (a > MB_BODY_HALF_X)
+            (if (x < 0f) -1f else 1f) * (MB_BODY_HALF_X + (a - MB_BODY_HALF_X) * SIDEWALK_SKIRT_SCALE) else x
+    }
+    private fun skirtZ(z: Float): Float {
+        val a = kotlin.math.abs(z)
+        return if (a > MB_BODY_HALF_Z)
+            (if (z < 0f) -1f else 1f) * (MB_BODY_HALF_Z + (a - MB_BODY_HALF_Z) * SIDEWALK_SKIRT_SCALE) else z
+    }
 
     // The mainbuilding model came in noticeably stretched-tall compared to the
     // original chamfered buttons. Scale all model-driven heights by this factor
@@ -1694,9 +1834,19 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 val x1m = src[i + 3]; val y1m = src[i + 4]; val z1m = src[i + 5]
                 val x2m = src[i + 6]; val y2m = src[i + 7]; val z2m = src[i + 8]
 
-                val sx0 = x0m * sX; val sy0 = y0m * sY; val sz0 = z0m * sZ
-                val sx1 = x1m * sX; val sy1 = y1m * sY; val sz1 = z1m * sZ
-                val sx2 = x2m * sX; val sy2 = y2m * sY; val sz2 = z2m * sZ
+                // Detect the pavement first (all verts below the sidewalk cutoff),
+                // then compress its skirt toward the building so a wide BW doesn't
+                // inflate it into the road.
+                val isSidewalk = y0m <= MB_SIDEWALK_Y_LIMIT &&
+                                 y1m <= MB_SIDEWALK_Y_LIMIT &&
+                                 y2m <= MB_SIDEWALK_Y_LIMIT
+                val ax0 = if (isSidewalk) skirtX(x0m) else x0m; val az0 = if (isSidewalk) skirtZ(z0m) else z0m
+                val ax1 = if (isSidewalk) skirtX(x1m) else x1m; val az1 = if (isSidewalk) skirtZ(z1m) else z1m
+                val ax2 = if (isSidewalk) skirtX(x2m) else x2m; val az2 = if (isSidewalk) skirtZ(z2m) else z2m
+
+                val sx0 = ax0 * sX; val sy0 = y0m * sY; val sz0 = az0 * sZ
+                val sx1 = ax1 * sX; val sy1 = y1m * sY; val sz1 = az1 * sZ
+                val sx2 = ax2 * sX; val sy2 = y2m * sY; val sz2 = az2 * sZ
 
                 val x0w =  sx0 * cy + sz0 * sy + cx
                 val z0w = -sx0 * sy + sz0 * cy + cz
@@ -1721,9 +1871,6 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 val diffuse = diffMin + ndotl * diffRange
                 val level = (((diffuse - diffMin) / diffRange) * (nLevels - 1)).toInt().coerceIn(0, nLevels - 1)
 
-                val isSidewalk = y0m <= MB_SIDEWALK_Y_LIMIT &&
-                                 y1m <= MB_SIDEWALK_Y_LIMIT &&
-                                 y2m <= MB_SIDEWALK_Y_LIMIT
                 val b = if (isSidewalk) sidewalkBuckets[level] else buckets[level]
                 b.add(x0w); b.add(y0w); b.add(z0w)
                 b.add(x1w); b.add(y1w); b.add(z1w)
@@ -1886,11 +2033,19 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     private fun addDamagedBuilding(cx: Float, cz: Float, h: Float, label: String) {
         val pal = damagedPalette(label)
         val seed = ((cx * 13.7f + cz * 31.1f).toInt() and 0x7fffffff)
-        val pick = seed % 3
+        // The "C" ruin is the gun room: force a known model + orientation so its
+        // interior ramp lands in a predictable spot, and collect its walkable
+        // up-faces so the player can walk UP the ramp (floor-height follow).
+        val isGunRoom = label == "C"
+        val pick = if (isGunRoom) 0 else seed % 3          // buildd1 = switchback ramp
         // Snap rotation to 0/90/180/270 so neighbouring ruins stay parallel to
         // the calculator grid — keeps the silhouettes axis-aligned (free angles
         // pushed the corners off the cameras and looked messy).
-        val yawDeg = ((seed / 7 % 4) * 90).toFloat()
+        val yawDeg = if (isGunRoom) 180f else ((seed / 7 % 4) * 90).toFloat()
+        // Every ruin now collects its walkable floors + blocking walls + footprint.
+        val floorTris = ArrayList<FloatArray>(64)
+        val wallSegs = ArrayList<Float>(256)
+        var bMinX = 1e9f; var bMaxX = -1e9f; var bMinZ = 1e9f; var bMaxZ = -1e9f
         val (groups, halfW, halfH) = when (pick) {
             0    -> Triple(damagedGroupsA, 4.675f, 4.675f)
             1    -> Triple(damagedGroupsB, 3.134f, 7.080f)
@@ -1946,6 +2101,40 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                     if (nLen > 1e-5f) { nx = nxR / nLen; ny = nyR / nLen; nz = nzR / nLen }
                     else              { nx = 0f; ny = 1f; nz = 0f }
 
+                    // Footprint AABB (world) for cheap "is the player inside" tests.
+                    if (x0 < bMinX) bMinX = x0; if (x0 > bMaxX) bMaxX = x0
+                    if (x1 < bMinX) bMinX = x1; if (x1 > bMaxX) bMaxX = x1
+                    if (x2 < bMinX) bMinX = x2; if (x2 > bMaxX) bMaxX = x2
+                    if (z0 < bMinZ) bMinZ = z0; if (z0 > bMaxZ) bMaxZ = z0
+                    if (z1 < bMinZ) bMinZ = z1; if (z1 > bMaxZ) bMaxZ = z1
+                    if (z2 < bMinZ) bMinZ = z2; if (z2 > bMaxZ) bMaxZ = z2
+
+                    // Up-faces (ramps + floors) → walkable; near-vertical faces → walls
+                    // the player collides with. Steep near-vertical faces become a
+                    // blocking XZ segment (the longest projected edge = the wall's
+                    // footprint line); openings in the mesh stay walk-through.
+                    if (ny > 0.30f) {
+                        floorTris.add(floatArrayOf(x0, y0, z0, x1, y1, z1, x2, y2, z2))
+                    } else if (ny > -0.30f) {
+                        val vTop = maxOf(y0, y1, y2); val vBot = minOf(y0, y1, y2)
+                        // Low gates so FINELY-TESSELLATED walls are captured too: some
+                        // ruin meshes build their walls from many small triangles, and
+                        // strict size gates dropped nearly all of them → the shell had
+                        // holes you (and bullets) walked through.
+                        if (vTop - vBot > 0.03f * h) {
+                            val d01 = (x1-x0)*(x1-x0) + (z1-z0)*(z1-z0)
+                            val d12 = (x2-x1)*(x2-x1) + (z2-z1)*(z2-z1)
+                            val d20 = (x0-x2)*(x0-x2) + (z0-z2)*(z0-z2)
+                            var ax=x0; var az=z0; var bx=x1; var bz=z1; var best=d01
+                            if (d12 > best) { best=d12; ax=x1; az=z1; bx=x2; bz=z2 }
+                            if (d20 > best) { best=d20; ax=x2; az=z2; bx=x0; bz=z0 }
+                            if (best > 4f) {                     // edge longer than 2 world units
+                                wallSegs.add(ax); wallSegs.add(az); wallSegs.add(bx); wallSegs.add(bz)
+                                wallSegs.add(vBot); wallSegs.add(vTop)   // height range → duck under doorway lintels
+                            }
+                        }
+                    }
+
                     val ndotl = kotlin.math.abs(nx * lx + ny * ly2 + nz * lz)
                     val diffuse = diffMin + ndotl * diffRange
                     val level = (((diffuse - diffMin) / diffRange) * (nLevels - 1)).toInt().coerceIn(0, nLevels - 1)
@@ -1970,6 +2159,53 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                         1f, 0f
                     ))
                 }
+            }
+            // Register this ruin's floors + walls. Keep only the OUTER-SHELL walls:
+            // any wall segment whose midpoint is near the footprint edge, at any
+            // height, so the shell blocks the player/bullets from leaving at every
+            // floor while the doorway (a gap in the shell) stays walk-through. Central
+            // interior walls are dropped so ramp rails can't pinch the player.
+            val fpW = maxOf(bMaxX - bMinX, bMaxZ - bMinZ)
+            val perimMargin = 0.18f * fpW
+            val kept = ArrayList<Float>(wallSegs.size)
+            var wj = 0
+            while (wj + 5 < wallSegs.size) {
+                val mx = (wallSegs[wj] + wallSegs[wj + 2]) * 0.5f
+                val mz = (wallSegs[wj + 1] + wallSegs[wj + 3]) * 0.5f
+                if (mx < bMinX + perimMargin || mx > bMaxX - perimMargin ||
+                    mz < bMinZ + perimMargin || mz > bMaxZ - perimMargin) {
+                    for (k in 0 until 6) kept.add(wallSegs[wj + k])
+                }
+                wj += 6
+            }
+            damagedList.add(DamagedInterior(
+                bMinX, bMaxX, bMinZ, bMaxZ, h,
+                floorTris,
+                FloatArray(kept.size).also { for (k in kept.indices) it[k] = kept[k] }
+            ))
+            if (isGunRoom) {
+                cRoomFloor = floorTris
+                // The gun sits on the top INTERIOR floor — the surface the player
+                // reaches at the head of the ramp — NOT the building's closed roof.
+                // buildd1 carries a full-footprint roof lid at its very top (~halfH
+                // above centre); the old code averaged the topmost up-faces and so
+                // stranded the gun up on that lid, hidden from anyone climbing the
+                // ramp. Ignore up-faces in the upper part of the model (the roof
+                // band), then take the highest remaining walkable platform.
+                val roofCutY = liftY + (halfH * 0.5f) * sY
+                var maxY = -1e9f
+                for (t in floorTris) {
+                    val fy = (t[1] + t[4] + t[7]) / 3f
+                    if (fy <= roofCutY) maxY = maxOf(maxY, fy)
+                }
+                var sx = 0f; var sy = 0f; var sz = 0f; var n = 0
+                for (t in floorTris) {
+                    val fy = (t[1] + t[4] + t[7]) / 3f
+                    if (fy <= roofCutY && fy > maxY - 0.12f * h) {
+                        sx += (t[0] + t[3] + t[6]) / 3f; sy += fy; sz += (t[2] + t[5] + t[8]) / 3f; n++
+                    }
+                }
+                cRoomTop = if (n > 0) floatArrayOf(sx / n, sy / n, sz / n) else null
             }
         } else {
             // Chamfered fallback in the row palette if the models don't load.
@@ -2887,11 +3123,15 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     // glow flag.
     private fun addBuildingLamp(cx: Float, cz: Float, effH: Float, door: Int, cornerNW: Boolean) {
         if (lampOffGroups.isEmpty() && lampOnGroups.isEmpty()) return
-        val swXHalf = if (door == 0 || door == 1) BW * (5.74f / 4.078f) else BD * (5.74f / 3.063f)
-        val swZHalf = if (door == 0 || door == 1) BD * (5.74f / 3.063f) else BW * (5.74f / 4.078f)
-        val inset = 8f
-        val px = if (cornerNW) cx - swXHalf + inset else cx + swXHalf - inset
-        val pz = if (cornerNW) cz - swZHalf + inset else cz + swZHalf - inset
+        // Anchor the post directly to the building's own footprint corner (the
+        // wall corner), not the sidewalk edge — that keeps it hard against the
+        // building and never out on the road regardless of footprint size.
+        // bx/bz are the body half-extents in world space; door 2/3 rotate the
+        // model 90° so BW/BD swap which world axis they govern.
+        val bx = if (door == 0 || door == 1) BW else BD
+        val bz = if (door == 0 || door == 1) BD else BW
+        val px = if (cornerNW) cx - bx else cx + bx
+        val pz = if (cornerNW) cz - bz else cz + bz
         val yawDeg = if (cornerNW) 225f else 45f   // arm aims out into the street corner
         val sY = effH / (MB_Y_TOP - MB_Y_BOTTOM)
         val sidewalkTopY = (MB_SIDEWALK_Y_LIMIT - MB_Y_BOTTOM) * sY + 0.5f
@@ -3372,6 +3612,156 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             GLES20.glEnableVertexAttribArray(aPos)
             GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, arr.size / 3)
         }
+    }
+
+    // ── Wall gun + white projectiles ──────────────────────────────────────────
+    private fun drawWallGun() {
+        if (aerialMode || gunGrabbed || gunGroups.isEmpty()) return
+        setLit(1f)
+        GLES20.glUniform1f(uFog, 0f)
+        for (g in gunGroups) {
+            if (g.verts.isEmpty()) continue
+            val arr = wallGunVerts(g)
+            val emptyMat = g.r == 0f && g.g == 0f && g.b == 0f
+            val r  = if (emptyMat) 0.55f else g.r
+            val gg = if (emptyMat) 0.55f else g.g
+            val b  = if (emptyMat) 0.58f else g.b
+            GLES20.glUniform4f(uCol, r, gg, b, 1f)
+            val fb = arr.toFB(); fb.position(0)
+            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
+            GLES20.glEnableVertexAttribArray(aPos)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, g.verts.size / 3)
+        }
+    }
+
+    // A faint steel glint on the wall gun, drawn additively in PASS 2 so it can be
+    // spotted in the permanent night — hidden enough to reward exploring, not so
+    // dark it's impossible to find.
+    private fun drawWallGunGlow() {
+        if (aerialMode || gunGrabbed || gunGroups.isEmpty()) return
+        setLit(0f)
+        GLES20.glUniform1f(uFog, 0f)
+        for (g in gunGroups) {
+            if (g.verts.isEmpty()) continue
+            val arr = wallGunVerts(g)
+            GLES20.glUniform4f(uCol, 0.42f, 0.46f, 0.55f, 0.40f)
+            val fb = arr.toFB(); fb.position(0)
+            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
+            GLES20.glEnableVertexAttribArray(aPos)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, g.verts.size / 3)
+        }
+    }
+
+    // Projectiles are the little Building-6 boulder, tumbling as they fly. Drawn
+    // solid+lit in the main pass (so they read in daylight) and, when [additive],
+    // re-drawn faintly in PASS 2 so they stay visible through the permanent night.
+    private fun drawBoulderProjectiles(additive: Boolean) {
+        val ps = projectiles
+        if (aerialMode || ps.isEmpty() || bulletGroups.isEmpty()) return
+        setLit(if (additive) 0f else 1f)
+        GLES20.glUniform1f(uFog, 0f)
+        for (p in ps) {
+            val cx = p[0]; val cy = p[1]; val cz = p[2]; val r = p[3]
+            val spin = if (p.size > 4) p[4] else 0f
+            val s = bulletFit * (r * 1.6f)                     // model → ~1.6× the hit radius
+            // Tumble about a fixed diagonal axis for a rolling look.
+            val a = Math.toRadians(spin.toDouble()).toFloat()
+            val ca = cos(a); val sa = sin(a)
+            val kx = 0.577f; val ky = 0.577f; val kz = 0.577f  // normalised (1,1,1)
+            for (g in bulletGroups) {
+                val src = g.verts; if (src.isEmpty()) continue
+                val arr = FloatArray(src.size)
+                var i = 0
+                while (i < src.size) {
+                    var vx = (src[i]     - bulletCx) * s
+                    var vy = (src[i + 1] - bulletCy) * s
+                    var vz = (src[i + 2] - bulletCz) * s
+                    // Rodrigues rotation about k = (1,1,1)/√3.
+                    val dot = kx * vx + ky * vy + kz * vz
+                    val crx = ky * vz - kz * vy
+                    val cry = kz * vx - kx * vz
+                    val crz = kx * vy - ky * vx
+                    val rx = vx * ca + crx * sa + kx * dot * (1f - ca)
+                    val ry = vy * ca + cry * sa + ky * dot * (1f - ca)
+                    val rz = vz * ca + crz * sa + kz * dot * (1f - ca)
+                    arr[i] = rx + cx; arr[i + 1] = ry + cy; arr[i + 2] = rz + cz
+                    i += 3
+                }
+                if (additive) GLES20.glUniform4f(uCol, 0.55f, 0.56f, 0.60f, 0.5f)
+                else {
+                    val er = g.r == 0f && g.g == 0f && g.b == 0f
+                    GLES20.glUniform4f(uCol, if (er) 0.62f else g.r, if (er) 0.60f else g.g, if (er) 0.56f else g.b, 1f)
+                }
+                val fb = arr.toFB(); fb.position(0)
+                GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
+                GLES20.glEnableVertexAttribArray(aPos)
+                GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, src.size / 3)
+            }
+        }
+    }
+
+    // First-person viewmodel: the held gun, SCREEN-LOCKED in the lower-right with
+    // its own view-space MVP (independent of camX/camY/camYaw), so it never drifts
+    // with the camera. Aiming is the world rotating behind it; the barrel points
+    // straight down-range at the centre reticle. Drawn last on a cleared depth buffer.
+    // Pose = [x, y, z, scale, yaw, pitch, roll].
+    // IN USE (gunHeld): centred and filling the bottom, looking over the barrel.
+    // yaw is 0 so the barrel points directly ahead (a positive yaw leaned it left).
+    private val VM_USE = floatArrayOf(0.05f, -0.72f, -1.35f, 1.85f, 0f, 10f, -3f)
+    // PUT AWAY (holstered but still carried): held low, off to the right.
+    private val VM_AWAY = floatArrayOf(0.5f, -0.5f, -1.95f, 1.05f, 20f, 6f, -10f)
+    private fun drawHeldGun() {
+        if (aerialMode || !gunGrabbed || gunGroups.isEmpty()) return
+        val v = if (gunHeld) VM_USE else VM_AWAY
+        setLit(0f)                                       // emissive → constant brightness
+        GLES20.glUniform1f(uFog, 0f)
+        GLES20.glUniform1f(uAerial, 1f)
+        // Draw the viewmodel on a FRESH depth buffer: clear depth so the gun sits on
+        // top of the whole world, but keep the depth TEST enabled so it self-occludes
+        // correctly (barrel over its own far side, sights in front of the receiver).
+        // Disabling the depth test entirely painted the gun's back faces over its
+        // front — no self-occlusion — which is why it "fell apart" when drawn.
+        GLES20.glDisable(GLES20.GL_BLEND)
+        GLES20.glEnable(GLES20.GL_DEPTH_TEST)
+        GLES20.glDepthMask(true)
+        GLES20.glDepthFunc(GLES20.GL_LESS)
+        GLES20.glClear(GLES20.GL_DEPTH_BUFFER_BIT)
+        // Dedicated view-space transform — the gun sits at a fixed spot in front of
+        // the (origin) camera, so screen placement is constant every frame.
+        val aspect = if (sh != 0) sw.toFloat() / sh.toFloat() else 1f
+        val proj = FloatArray(16); Matrix.perspectiveM(proj, 0, 45f, aspect, 0.02f, 50f)
+        val model = FloatArray(16); Matrix.setIdentityM(model, 0)
+        Matrix.translateM(model, 0, v[0], v[1], v[2])
+        Matrix.rotateM(model, 0, v[4], 0f, 1f, 0f)
+        Matrix.rotateM(model, 0, v[5], 1f, 0f, 0f)
+        Matrix.rotateM(model, 0, v[6], 0f, 0f, 1f)
+        Matrix.scaleM(model, 0, v[3], v[3], v[3])
+        val mvp = FloatArray(16); Matrix.multiplyMM(mvp, 0, proj, 0, model, 0)
+        GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
+        val norm = gunFit / GUN_SPAN                     // → unit-sized model, centred
+        for (g in gunGroups) {
+            val src = g.verts; if (src.isEmpty()) continue
+            val arr = FloatArray(src.size)
+            var i = 0
+            while (i < src.size) {
+                arr[i]     = (src[i]     - gunCx) * norm
+                arr[i + 1] = (src[i + 1] - gunCy) * norm
+                arr[i + 2] = (src[i + 2] - gunCz) * norm
+                i += 3
+            }
+            // Lift the (dark steel) material so the viewmodel reads day and night.
+            val er = g.r == 0f && g.g == 0f && g.b == 0f
+            val mr = if (er) 0.5f else g.r; val mg = if (er) 0.5f else g.g; val mb = if (er) 0.55f else g.b
+            GLES20.glUniform4f(uCol,
+                (0.34f + mr * 0.6f).coerceAtMost(1f),
+                (0.34f + mg * 0.6f).coerceAtMost(1f),
+                (0.36f + mb * 0.6f).coerceAtMost(1f), 1f)
+            val fb = arr.toFB(); fb.position(0)
+            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
+            GLES20.glEnableVertexAttribArray(aPos)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, src.size / 3)
+        }
+        GLES20.glEnable(GLES20.GL_DEPTH_TEST)
     }
 
     private fun drawCameras() {

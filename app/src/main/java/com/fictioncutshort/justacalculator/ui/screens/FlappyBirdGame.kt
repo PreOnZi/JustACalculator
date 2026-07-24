@@ -1,11 +1,13 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.offset
@@ -18,6 +20,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -41,6 +44,13 @@ import kotlin.random.Random
 
 private data class Barrier(val x: Float, val gapY: Float, val passed: Boolean = false)
 
+// A floating finger to grab as you fly through a gap. Not a currency — the tally
+// lives only in Building 9 (persisted so it accrues across every retry within the
+// round) and never feeds the city's coin/key/etc. stores.
+private data class FloatingFinger(val x: Float, val y: Float)
+
+private const val B9_FINGERS_KEY = "b9_fingers_collected"
+
 @Composable
 fun FlappyBirdGame(
     modifier: Modifier = Modifier,
@@ -50,8 +60,19 @@ fun FlappyBirdGame(
 ) {
     BoxWithConstraints(modifier.fillMaxSize().background(Color(0xFF4EC0CA))) {
         val density = LocalDensity.current
+        val context = LocalContext.current
         val w = with(density) { maxWidth.toPx() }
         val h = with(density) { maxHeight.toPx() }
+
+        // Collectible fingers rendered from the 3D model as a flat sprite.
+        val fingerBmp = rememberModelBitmap("models/finger.obj", "models/finger.mtl",
+            sizePx = 128, tilt = -8f, turn = 18f, fitSpan = 1.85f)
+        // Cumulative tally, persisted in the city store so it survives every retry
+        // (and app kill) but stays trapped in Building 9 — see [B9_FINGERS_KEY].
+        val cityPrefs = remember {
+            context.getSharedPreferences("calc_city", android.content.Context.MODE_PRIVATE)
+        }
+        var fingerTotal by remember { mutableIntStateOf(cityPrefs.getInt(B9_FINGERS_KEY, 0)) }
 
         // Tuning (all relative to the field so it scales to any screen).
         val birdX = w * 0.28f
@@ -73,6 +94,9 @@ fun FlappyBirdGame(
         var dead by remember { mutableStateOf(false) }
         var score by remember { mutableIntStateOf(0) }
         var barriers by remember { mutableStateOf(listOf<Barrier>()) }
+        var fingers by remember { mutableStateOf(listOf<FloatingFinger>()) }
+        val fingerSize = h * 0.075f
+        val fingerR = fingerSize * 0.42f
         // The round ends when the narration ends — not on any score.
         var voDone by remember { mutableStateOf(false) }
 
@@ -99,7 +123,11 @@ fun FlappyBirdGame(
         fun reset() {
             birdY = h * 0.4f; vel = 0f; score = 0
             dead = false
-            barriers = listOf(Barrier(w + barrierW, randomGapY(h, gapH)))
+            val firstGap = randomGapY(h, gapH)
+            barriers = listOf(Barrier(w + barrierW, firstGap))
+            // A finger rides in each gap — fly through to grab it. The tally is
+            // cumulative, so it is NOT reset here (only the in-field fingers are).
+            fingers = listOf(FloatingFinger(w + barrierW + barrierW * 0.5f, firstGap))
             running = true
         }
 
@@ -122,11 +150,27 @@ fun FlappyBirdGame(
 
                 // Scroll, recycle, and spawn barriers.
                 val moved = barriers.map { it.copy(x = it.x - scrollV) }.toMutableList()
+                val movedFingers = fingers.map { it.copy(x = it.x - scrollV) }.toMutableList()
                 val last = moved.maxByOrNull { it.x }
                 if (last == null || last.x < w - spacing) {
-                    moved.add(Barrier(w + barrierW, randomGapY(h, gapH)))
+                    val gy = randomGapY(h, gapH)
+                    moved.add(Barrier(w + barrierW, gy))
+                    movedFingers.add(FloatingFinger(w + barrierW + barrierW * 0.5f, gy))
                 }
                 moved.removeAll { it.x + barrierW < 0f }
+                movedFingers.removeAll { it.x + fingerR < 0f }
+
+                // Collect any finger the bird overlaps (grab-through, not lethal).
+                val grabbed = movedFingers.filter {
+                    val ddx = it.x - birdX; val ddy = it.y - birdY
+                    ddx * ddx + ddy * ddy < (birdR + fingerR) * (birdR + fingerR)
+                }
+                if (grabbed.isNotEmpty()) {
+                    movedFingers.removeAll(grabbed.toSet())
+                    fingerTotal += grabbed.size
+                    cityPrefs.edit().putInt(B9_FINGERS_KEY, fingerTotal).apply()
+                }
+                fingers = movedFingers
 
                 // Scoring — count a barrier once it passes the bird (display only).
                 var gained = 0
@@ -186,10 +230,41 @@ fun FlappyBirdGame(
                 .size(spriteDp),
         )
 
+        // Floating fingers — drawn from the 3D model as flat sprites.
+        if (fingerBmp != null) {
+            val fingerDp = with(density) { fingerSize.toDp() }
+            for (f in fingers) {
+                Image(
+                    bitmap = fingerBmp,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (f.x - fingerSize / 2f).roundToInt(),
+                                (f.y - fingerSize / 2f).roundToInt(),
+                            )
+                        }
+                        .size(fingerDp),
+                )
+            }
+        }
+
         // Score
         Text("$score", color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace,
             modifier = Modifier.align(Alignment.TopCenter).padding(top = 40.dp))
+
+        // Finger tally — cumulative across every attempt in this round.
+        Row(
+            modifier = Modifier.align(Alignment.TopStart).padding(start = 16.dp, top = 40.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (fingerBmp != null) {
+                Image(bitmap = fingerBmp, contentDescription = null, modifier = Modifier.size(34.dp))
+            }
+            Text("×$fingerTotal", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace)
+        }
 
         // No exit — the only way out of Building 9 is to hear the voiceover through
         // to the end, at which point the "Time to go" button appears.
