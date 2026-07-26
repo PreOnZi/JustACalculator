@@ -2038,10 +2038,21 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         // up-faces so the player can walk UP the ramp (floor-height follow).
         val isGunRoom = label == "C"
         val pick = if (isGunRoom) 0 else seed % 3          // buildd1 = switchback ramp
-        // Snap rotation to 0/90/180/270 so neighbouring ruins stay parallel to
-        // the calculator grid — keeps the silhouettes axis-aligned (free angles
-        // pushed the corners off the cameras and looked messy).
-        val yawDeg = if (isGunRoom) 180f else ((seed / 7 % 4) * 90).toFloat()
+        // Every buildd model is a sealed shell with its doorway on ONE local face
+        // (buildd1: -Z, buildd2: +X, buildd3: -X — found by scanning each mesh for
+        // the floor-level gap in its perimeter walls). A free/random yaw used to
+        // spin that doorway round to face a neighbour or a sealed corner, so some
+        // ruins — e.g. the "( )" building — had an "invisible wall" where the door
+        // should be. Instead give each model the fixed yaw that turns its doorway to
+        // face world +Z: the same open, reachable direction the gun room already
+        // uses, so EVERY ruin is enterable no matter which model it draws. Model
+        // variety is preserved (pick still varies per plot); only orientation is
+        // pinned. Yaws snap to 0/90/180/270 so silhouettes stay grid-aligned.
+        val yawDeg = when (pick) {
+            0    -> 180f   // buildd1 doorway local -Z → world +Z
+            1    -> 270f   // buildd2 doorway local +X → world +Z
+            else ->  90f   // buildd3 doorway local -X → world +Z
+        }
         // Every ruin now collects its walkable floors + blocking walls + footprint.
         val floorTris = ArrayList<FloatArray>(64)
         val wallSegs = ArrayList<Float>(256)

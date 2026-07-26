@@ -534,6 +534,13 @@ fun CalculatorCityView(
     var joyX by remember { mutableStateOf(0f) }
     var joyY by remember { mutableStateOf(0f) }
 
+    // "Unstuck" helper: shown to the left of the joystick only when the player is
+    // pushing to walk but hasn't actually moved for a moment (wedged on a wall /
+    // corner / doorway). Tapping it asks the game loop to nudge them to the
+    // nearest open spot.
+    var showUnstuck      by remember { mutableStateOf(false) }
+    var unstuckRequested by remember { mutableStateOf(false) }
+
     // ── The ending ────────────────────────────────────────────────────────────
     // Standing inside the mute button for long enough ends the story. A voiceover
     // plays; thirty seconds in, the city starts coming apart around the player;
@@ -1371,6 +1378,7 @@ fun CalculatorCityView(
             } catch (_: Throwable) {}
         }
         var bridgeDarkOverride = false
+        var stuckFrames = 0        // frames spent pushing to walk while pinned in place
         while (true) {
             delay(16)
             lavaShift = (lavaShift + 0.003f) % 1f
@@ -1537,6 +1545,7 @@ fun CalculatorCityView(
                     } else if (rd2 < RAD_R * RAD_R) return true
                     return false
                 }
+                val preMoveX = pX; val preMoveZ = pZ
                 if (!controlsLocked) {
                     if (!blocked(nx, nz)) { pX = nx; pZ = nz }
                     else {
@@ -1554,6 +1563,43 @@ fun CalculatorCityView(
                             if (!blocked(nx, pZ)) pX = nx
                         }
                     }
+                }
+
+                // "Stuck" detection: the player is pushing to walk (meaningful
+                // forward/back input) but barely moved. After ~0.7s of that,
+                // surface the UNSTUCK button. Any real movement, or letting go of
+                // the stick, clears it.
+                val tryingToWalk = !controlsLocked && abs(jFwd) > 0.28f
+                val movedD2 = (pX - preMoveX) * (pX - preMoveX) + (pZ - preMoveZ) * (pZ - preMoveZ)
+                if (tryingToWalk && movedD2 < 0.6f) stuckFrames++ else stuckFrames = 0
+                val wantUnstuck = stuckFrames > 44
+                if (wantUnstuck != showUnstuck) showUnstuck = wantUnstuck
+
+                // Fulfil an UNSTUCK tap: hop the player to the nearest open spot,
+                // preferring straight back (the way they came), then a widening
+                // ring of cardinal directions.
+                if (unstuckRequested) {
+                    unstuckRequested = false
+                    val ur = Math.toRadians(camYaw.toDouble())
+                    val fX = sin(ur).toFloat();  val fZ = -cos(ur).toFloat()   // forward
+                    val rX = cos(ur).toFloat();  val rZ = sin(ur).toFloat()    // right
+                    val dirs = arrayOf(
+                        floatArrayOf(-fX, -fZ),   // backward first
+                        floatArrayOf(rX, rZ),     // right
+                        floatArrayOf(-rX, -rZ),   // left
+                        floatArrayOf(fX, fZ)      // forward
+                    )
+                    var freed = false
+                    for (step in intArrayOf(45, 90, 150, 230)) {
+                        for (dir in dirs) {
+                            val tx = (pX + dir[0] * step).coerceIn(xBoundsMin, xBoundsMax)
+                            val tz = (pZ + dir[1] * step).coerceIn(zBoundsMin, zBoundsMax)
+                            if (!blocked(tx, tz)) { pX = tx; pZ = tz; freed = true; break }
+                        }
+                        if (freed) break
+                    }
+                    stuckFrames = 0
+                    showUnstuck = false
                 }
 
                 // Bridge rails: while over a built plank keep the player between the
@@ -2493,6 +2539,37 @@ fun CalculatorCityView(
                     }
                 }
             )
+
+            // UNSTUCK — sits to the left of the joystick, only while the game loop
+            // flags the player as wedged (pushing to walk but pinned). Tapping it
+            // nudges them to the nearest open spot.
+            if (showUnstuck) {
+                Box(
+                    modifier = (if (isLandscape)
+                        Modifier.align(Alignment.CenterEnd)
+                            .padding(end = 24.dp)
+                            .offset(x = -(joySize + 72.dp))
+                    else
+                        Modifier.align(Alignment.BottomCenter)
+                            .padding(bottom = 36.dp + joySize / 2 - 22.dp)
+                            .offset(x = -(joySize / 2 + 66.dp)))
+                        .background(Color(0xCC2A2320), RoundedCornerShape(12.dp))
+                        .border(1.5.dp, Color(0xFFE0A24E), RoundedCornerShape(12.dp))
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() }
+                        ) {
+                            unstuckRequested = true
+                            showUnstuck = false
+                        }
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("UNSTUCK",
+                        color = Color(0xFFE0A24E), fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+                }
+            }
         }
 
         // ── Gun: draw/holster toggle, aiming reticle + FIRE (once grabbed) ────

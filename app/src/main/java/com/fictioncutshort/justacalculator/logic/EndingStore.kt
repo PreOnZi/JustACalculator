@@ -207,6 +207,7 @@ object EndingStore {
         "Voiceover: Ondrej Zika",
         "Sound Effects: Credited in relevant areas",
         "Code: Claude :(",
+        "MarytheInfluencer: Anna Zikova (model)",
         "FictionCutShort",
         "2026",
     )
