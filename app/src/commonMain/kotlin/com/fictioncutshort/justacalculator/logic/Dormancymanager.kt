@@ -1,18 +1,9 @@
 package com.fictioncutshort.justacalculator.logic
 
-import android.app.AlarmManager
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.os.Build
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.ContextCompat
-import com.fictioncutshort.justacalculator.MainActivity
-import com.fictioncutshort.justacalculator.R
+import com.fictioncutshort.justacalculator.platform.AppContext
+import com.fictioncutshort.justacalculator.platform.LocalNotifications
+import com.fictioncutshort.justacalculator.platform.nowMillis
+import com.fictioncutshort.justacalculator.platform.openPrefs
 
 /**
  * DormancyManager.kt
@@ -82,9 +73,9 @@ object DormancyManager {
         Triple(10 + index, message, FIRST_NOTIFICATION_MS + RAD_INTERVAL_MS * index)
     }
 
-    fun onRantEnded(context: Context) {
-        val now = System.currentTimeMillis()
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    fun onRantEnded(context: AppContext) {
+        val now = nowMillis()
+        context.openPrefs(PREFS_NAME)
             .edit()
             .putLong(PREF_RANT_END_TIME, now)
             .commit()
@@ -92,13 +83,13 @@ object DormancyManager {
         scheduleAllNotifications(context, now)
     }
 
-    fun getRantEndTime(context: Context): Long {
-        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    fun getRantEndTime(context: AppContext): Long {
+        return context.openPrefs(PREFS_NAME)
             .getLong(PREF_RANT_END_TIME, -1L)
     }
 
-    fun clearDormancy(context: Context) {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    fun clearDormancy(context: AppContext) {
+        context.openPrefs(PREFS_NAME)
             .edit()
             .remove(PREF_RANT_END_TIME)
             .remove(PREF_LAST_NOTIF_AT)
@@ -107,10 +98,10 @@ object DormancyManager {
         cancelAllNotifications(context)
     }
 
-    fun getCurrentPhase(context: Context): DormancyPhase {
+    fun getCurrentPhase(context: AppContext): DormancyPhase {
         val rantEnd = getRantEndTime(context)
         if (rantEnd < 0) return DormancyPhase.None
-        val elapsed = System.currentTimeMillis() - rantEnd
+        val elapsed = nowMillis() - rantEnd
         return when {
             elapsed < STATIC_DELAY_MS -> DormancyPhase.None
             elapsed < FIRST_NOTIFICATION_MS -> DormancyPhase.Static
@@ -133,15 +124,15 @@ object DormancyManager {
      * Fires the notification for a given RAD button number (1-based) immediately.
      * Called by the in-app tick loop so notifications work even when AlarmManager is unreliable.
      */
-    fun fireInAppNotification(context: Context, buttonNumber: Int) {
+    fun fireInAppNotification(context: AppContext, buttonNumber: Int) {
         val entry = NOTIFICATIONS.getOrNull(buttonNumber - 1) ?: return
         val (id, message, _) = entry
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = context.openPrefs(PREFS_NAME)
         if (id <= prefs.getInt(PREF_LAST_NOTIF_ID, 0)) return
         // Claim the slot, so the alarm for this same beat is skipped when the OS
         // eventually gets round to it and the next one doesn't land on top.
         prefs.edit()
-            .putLong(PREF_LAST_NOTIF_AT, System.currentTimeMillis())
+            .putLong(PREF_LAST_NOTIF_AT, nowMillis())
             .putInt(PREF_LAST_NOTIF_ID, id)
             .commit()
         sendDormancyNotification(context, id, message)
@@ -149,7 +140,7 @@ object DormancyManager {
 
     // ── Private helpers ──────────────────────────────────────────────────────
 
-    private fun scheduleAllNotifications(context: Context, rantEndTime: Long) {
+    private fun scheduleAllNotifications(context: AppContext, rantEndTime: Long) {
         for ((id, message, delayMs) in NOTIFICATIONS) {
             scheduleOne(context, id, message, rantEndTime + delayMs)
         }
@@ -168,34 +159,8 @@ object DormancyManager {
      * review). Until then this always takes the inexact branch and the spacing
      * guard in [postSpaced] is what keeps the sequence readable.
      */
-    private fun scheduleOne(context: Context, id: Int, message: String, triggerAt: Long) {
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(context, DormancyNotificationReceiver::class.java).apply {
-            putExtra("notif_id", id)
-            putExtra("message", message)
-        }
-        val pending = PendingIntent.getBroadcast(
-            context, id, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val canBeExact = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            alarmManager.canScheduleExactAlarms()
-        } else true
-        try {
-            if (canBeExact) {
-                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pending)
-            } else {
-                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pending)
-            }
-        } catch (e: Exception) {
-            // SecurityException if the exact-alarm grant was revoked between the
-            // check and the call — the inexact alarm is still better than none.
-            try {
-                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pending)
-            } catch (e2: Exception) {
-                android.util.Log.e("DormancyManager", "Failed to schedule notification $id: ${e2.message}")
-            }
-        }
+    private fun scheduleOne(context: AppContext, id: Int, message: String, triggerAt: Long) {
+        LocalNotifications.scheduleAt(context, id, message, triggerAt)
     }
 
     /**
@@ -205,11 +170,11 @@ object DormancyManager {
      * alarms delivered in a single Doze maintenance window still reaches the user
      * one at a time, in order, the way the escalation was written.
      */
-    fun postSpaced(context: Context, id: Int, message: String) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    fun postSpaced(context: AppContext, id: Int, message: String) {
+        val prefs = context.openPrefs(PREFS_NAME)
         // Already sent — the in-app tick loop beat the alarm to this beat.
         if (id <= prefs.getInt(PREF_LAST_NOTIF_ID, 0)) return
-        val now = System.currentTimeMillis()
+        val now = nowMillis()
         val last = prefs.getLong(PREF_LAST_NOTIF_AT, 0L)
         val earliest = last + MIN_NOTIF_GAP_MS
         if (last > 0L && now < earliest) {
@@ -226,55 +191,16 @@ object DormancyManager {
         sendDormancyNotification(context, id, message)
     }
 
-    private fun cancelAllNotifications(context: Context) {
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        for ((id, _, _) in NOTIFICATIONS) {
-            val intent = Intent(context, DormancyNotificationReceiver::class.java)
-            val pending = PendingIntent.getBroadcast(
-                context, id, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            alarmManager.cancel(pending)
-        }
+    private fun cancelAllNotifications(context: AppContext) {
+        LocalNotifications.cancel(context, NOTIFICATIONS.map { it.first })
     }
 
-    private fun createDormancyChannel(context: Context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Calculator Updates",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply { description = "Messages from your calculator" }
-            (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-                .createNotificationChannel(channel)
-        }
+    private fun createDormancyChannel(context: AppContext) {
+        LocalNotifications.prepare(context)
     }
 
-    fun sendDormancyNotification(context: Context, notifId: Int, message: String) {
-        createDormancyChannel(context)
-        val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            context, notifId, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_name)
-            .setContentTitle("Calculator")
-            .setContentText(message)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setContentIntent(pendingIntent)
-            .setAutoCancel(true)
-            .build()
-
-        val hasPermission = ContextCompat.checkSelfPermission(
-            context, android.Manifest.permission.POST_NOTIFICATIONS
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-
-        if (hasPermission || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            NotificationManagerCompat.from(context).notify(notifId, notification)
-        }
+    fun sendDormancyNotification(context: AppContext, notifId: Int, message: String) {
+        LocalNotifications.postNow(context, notifId, message)
     }
 }
 
@@ -282,12 +208,4 @@ sealed class DormancyPhase {
     object None : DormancyPhase()
     object Static : DormancyPhase()
     data class RadButtons(val count: Int) : DormancyPhase()
-}
-
-class DormancyNotificationReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-        val id = intent.getIntExtra("notif_id", 10)
-        val message = intent.getStringExtra("message") ?: "..."
-        DormancyManager.postSpaced(context, id, message)
-    }
 }

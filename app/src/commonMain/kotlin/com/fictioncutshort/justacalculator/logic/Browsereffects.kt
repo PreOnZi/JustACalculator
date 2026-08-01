@@ -1,6 +1,6 @@
 package com.fictioncutshort.justacalculator.logic
 
-import android.content.Context
+import com.fictioncutshort.justacalculator.platform.AppContext
 import androidx.compose.runtime.MutableState
 import com.fictioncutshort.justacalculator.data.CalculatorState
 import kotlinx.coroutines.delay
@@ -12,8 +12,8 @@ object BrowserEffects {
 
     suspend fun handleBrowserPhases(
         state: MutableState<CalculatorState>,
-        context: Context,
-        createSecretFile: (Context) -> Boolean
+        context: AppContext,
+        createSecretFile: (AppContext) -> Boolean
     ) {
         while (state.value.showDonationPage) { delay(100) }
         // Exit if muted
@@ -393,7 +393,7 @@ Sharp CS-10A - 25KG
         )
     }
 
-    private suspend fun phase56(state: MutableState<CalculatorState>, context: Context, createSecretFile: (Context) -> Boolean) {
+    private suspend fun phase56(state: MutableState<CalculatorState>, context: AppContext, createSecretFile: (AppContext) -> Boolean) {
         // Try to create the file. The user is then nudged toward Downloads —
         // the post-return "Did you find it?" question (step 1120, fired in
         // MainActivity's ON_RESUME) is the safety net regardless of whether

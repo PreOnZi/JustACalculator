@@ -1,10 +1,12 @@
 package com.fictioncutshort.justacalculator.logic
 
+import com.fictioncutshort.justacalculator.platform.hasPermission
+import com.fictioncutshort.justacalculator.platform.AppPermission
+import com.fictioncutshort.justacalculator.platform.AppContext
 import androidx.compose.runtime.MutableState
 import com.fictioncutshort.justacalculator.data.CalculatorState
 import com.fictioncutshort.justacalculator.util.LetterGenerator
 import kotlinx.coroutines.delay
-import android.content.Context
 
 /**
  * AutoProgressEffects - Handles automatic story progression based on messages
@@ -149,7 +151,7 @@ object AutoProgressEffects {
         63 to listOf("I've made my mind.")
     )
 
-    suspend fun handleAutoProgress(state: MutableState<CalculatorState>, context: Context) {
+    suspend fun handleAutoProgress(state: MutableState<CalculatorState>, context: AppContext) {
         while (state.value.showDonationPage || state.value.showAdCards) { delay(100) }
         // Hold the story while the console is still open. Used by the
         // post-banner-ad-disable transition (step 113): the calculator says
@@ -339,7 +341,7 @@ object AutoProgressEffects {
         }
     }
 
-    private suspend fun handleDynamicRantMessages(state: MutableState<CalculatorState>, context: Context) {
+    private suspend fun handleDynamicRantMessages(state: MutableState<CalculatorState>, context: AppContext) {
         val step = state.value.conversationStep
         val message = state.value.message
 
@@ -642,17 +644,10 @@ object AutoProgressEffects {
         }
     }
 
-    private fun hasAnyPhoneDetourPermissionDenied(context: Context): Boolean {
-        val pm = android.content.pm.PackageManager.PERMISSION_GRANTED
-        val mic = androidx.core.content.ContextCompat.checkSelfPermission(
-            context, android.Manifest.permission.RECORD_AUDIO
-        ) == pm
-        val loc = androidx.core.content.ContextCompat.checkSelfPermission(
-            context, android.Manifest.permission.ACCESS_FINE_LOCATION
-        ) == pm
-        val contacts = androidx.core.content.ContextCompat.checkSelfPermission(
-            context, android.Manifest.permission.READ_CONTACTS
-        ) == pm
+    private fun hasAnyPhoneDetourPermissionDenied(context: AppContext): Boolean {
+        val mic = hasPermission(context, AppPermission.MICROPHONE)
+        val loc = hasPermission(context, AppPermission.LOCATION)
+        val contacts = hasPermission(context, AppPermission.CONTACTS)
         return !(mic && loc && contacts)
     }
 }

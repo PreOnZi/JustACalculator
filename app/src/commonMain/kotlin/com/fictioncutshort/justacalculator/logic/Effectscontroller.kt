@@ -1,6 +1,8 @@
 package com.fictioncutshort.justacalculator.logic
 
-import android.content.Context
+import com.fictioncutshort.justacalculator.platform.TypingClicker
+import com.fictioncutshort.justacalculator.platform.nowMillis
+import com.fictioncutshort.justacalculator.platform.AppContext
 import androidx.compose.runtime.MutableState
 import com.fictioncutshort.justacalculator.data.CalculatorState
 import com.fictioncutshort.justacalculator.data.ChaosKey
@@ -9,7 +11,6 @@ import com.fictioncutshort.justacalculator.util.placeLetter
 import com.fictioncutshort.justacalculator.util.vibrate
 import kotlinx.coroutines.delay
 import kotlin.random.Random
-import com.fictioncutshort.justacalculator.logic.TalkAudioHandler
 
 
 /**
@@ -61,8 +62,8 @@ object EffectsController {
 
     suspend fun runTypingAnimation(
         state: MutableState<CalculatorState>,
-        context: Context,
-        audioHandler: TalkAudioHandler? = null
+        context: AppContext,
+        audioHandler: TypingClicker? = null
     ) {
         while (state.value.showDonationPage || state.value.showAdCards) {
             delay(100)
@@ -260,7 +261,7 @@ object EffectsController {
      * negative 354-357) and uses a fixed low intensity + slow cadence so
      * it reads as gravitas rather than the old crisis-style buzzing.
      */
-    suspend fun runRantVibration(state: MutableState<CalculatorState>, context: Context) {
+    suspend fun runRantVibration(state: MutableState<CalculatorState>, context: AppContext) {
         if (!state.value.rantMode) return
         while (state.value.rantMode && !state.value.isMuted) {
             val step = state.value.conversationStep
@@ -349,7 +350,7 @@ object EffectsController {
                     CalculatorActions.persistScrambleTimeoutCount(1)
                 } else {
                     // Second timeout - punishment
-                    val punishmentUntil = System.currentTimeMillis() + 60_000
+                    val punishmentUntil = nowMillis() + 60_000
                     state.value = state.value.copy(
                         scrambleGameActive = true,
                         scramblePhase = 10,
@@ -407,7 +408,7 @@ object EffectsController {
             }
         }
     }
-    suspend fun runVibrationEffect(state: MutableState<CalculatorState>, context: Context) {
+    suspend fun runVibrationEffect(state: MutableState<CalculatorState>, context: AppContext) {
         if (state.value.vibrationIntensity > 0) {
             while (state.value.vibrationIntensity > 0) {
                 vibrate(context, 50, state.value.vibrationIntensity)

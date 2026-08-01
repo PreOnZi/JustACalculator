@@ -17,7 +17,7 @@ import kotlin.times
  * Handles real-time audio capture and playback with effects
  * for the telephone detour sequence.
  */
-class TalkAudioHandler(private val context: Context) {
+class TalkAudioHandler(private val context: Context) : com.fictioncutshort.justacalculator.platform.TypingClicker {
 
     private var audioRecord: AudioRecord? = null
     private var audioTrack: AudioTrack? = null
@@ -288,7 +288,7 @@ class TalkAudioHandler(private val context: Context) {
     /**
      * Play a soft typing click sound
      */
-    fun playTypingClick() {
+    override fun playTypingClick() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val clickTrack = AudioTrack.Builder()
