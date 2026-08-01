@@ -191,13 +191,32 @@ its real implementation lands; nothing at the call site changes.
    |---|---|
    | `gl/Matrix.kt` — the 8 `android.opengl.Matrix` functions | ✅ shared, 11 tests |
    | `gl/GlBuffer.kt` — `java.nio.FloatBuffer` → direct buffer / pinned array | ✅ shared, 7 tests |
-   | `gl/Gl.kt` — the 65 `gl*` calls | ⬜ next |
+   | `gl/Gl.kt` — the 65 `gl*` calls | ⬜ next — **API verified, see below** |
    | `PlatformGLSurface` — `GLSurfaceView` → `GLKView` in `UIKitView` | ⬜ |
    | the 8 renderers themselves | ⬜ |
 
    All 7 files already use the shared `Matrix`. The buffer type exists but the
    renderers still construct `java.nio` buffers directly — swapping those call
    sites is mechanical and comes with the `Gl` wrapper.
+
+   **iOS GL binding facts, verified by compiling against them** (each of these
+   would have made a blind wrapper wrong):
+
+   - The Kotlin/Native package is **`platform.gles3`**, *not*
+     `platform.OpenGLES3` as the klib filename suggests. `platform.gles2` and
+     `platform.glescommon` exist alongside it. `EAGL` and `GLKit` are also
+     available, which is what the surface host will need.
+   - **Constants are `Int`, but functions take `UInt`.** `glClear(GL_COLOR_BUFFER_BIT)`
+     does not compile; it needs `.toUInt()`. Android is `Int` throughout, so the
+     shared `Gl` should expose `Int` (matching the existing call sites) and the
+     iOS actual should do the conversion.
+   - `glCreateShader`/`glCreateProgram` return `UInt`, so program and shader
+     handles need converting at the boundary too.
+   - `glGetUniformLocation` accepts a Kotlin `String` directly — no manual
+     null-termination needed.
+
+   The 64 call signatures are enumerated by grepping
+   `GLES\d*\.(gl[A-Za-z0-9]+)\s*\(` across `ui/screens/`.
 
 
 5. **`android.graphics`** — `Bitmap`/`Canvas`/`Paint` in 13 files. Most uses are
