@@ -1,7 +1,7 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
 import android.content.res.AssetManager
-import android.opengl.Matrix
+import com.fictioncutshort.justacalculator.gl.Matrix
 import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder

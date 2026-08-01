@@ -23,7 +23,7 @@ import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.opengl.GLUtils
-import android.opengl.Matrix
+import com.fictioncutshort.justacalculator.gl.Matrix
 import android.view.Surface
 import com.fictioncutshort.justacalculator.R
 import com.fictioncutshort.justacalculator.ui.components.RequestGamePermissionsOnEntry

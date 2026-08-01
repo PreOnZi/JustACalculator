@@ -3,7 +3,7 @@ package com.fictioncutshort.justacalculator.ui.screens
 import android.content.Context
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
-import android.opengl.Matrix
+import com.fictioncutshort.justacalculator.gl.Matrix
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable

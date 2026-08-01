@@ -11,7 +11,7 @@ import android.graphics.BitmapFactory
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView
 import android.opengl.GLUtils
-import android.opengl.Matrix
+import com.fictioncutshort.justacalculator.gl.Matrix
 import android.provider.ContactsContract
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable

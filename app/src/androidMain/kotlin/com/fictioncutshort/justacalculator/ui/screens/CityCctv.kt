@@ -1,7 +1,7 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
 import android.opengl.GLES20
-import android.opengl.Matrix
+import com.fictioncutshort.justacalculator.gl.Matrix
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer

@@ -179,23 +179,27 @@ its real implementation lands; nothing at the call site changes.
    Coil 3 (`coil3.*`) is multiplatform. Pairs with the asset URI change above.
 3. **Audio** — `MediaPlayer`/`SoundPool` in ~9 files → an `expect` player over
    `AVAudioPlayer`. Covers the 72 `R.raw` voiceover/SFX references.
-4. **OpenGL ES** (~12k lines, 8 files) — **foundation started**: ObjLoader is
-   shared. The remaining surface is bounded and now measured: **59 distinct
-   `gl*` calls** and **65 `FloatBuffer`/`ByteBuffer` uses** across the 8 files.
-   Three seams are needed, in order:
-     1. a buffer abstraction (`java.nio.FloatBuffer` → pinned `FloatArray`),
-     2. a `Gl` object wrapping those 59 calls (GLES20 → OpenGLES via cinterop),
-     3. `PlatformGLSurface` (`GLSurfaceView` → `GLKView`/`CAEAGLLayer` in a
-        `UIKitView`).
-   The shaders themselves are GLSL ES 1.00 and port verbatim.
+4. **OpenGL ES** (~12k lines, 8 files) — **foundation done, renderers pending.**
 
-   Old note follows:
-4. **OpenGL ES — original assessment** (~12k lines, 8 files) — all hand-written **GLES 2.0 with GLSL ES
-   1.00**, which iOS still supports, so the shaders and draw calls port nearly
-   verbatim. What must be replaced: `GLSurfaceView` → `GLKView`/`CAEAGLLayer`
-   hosted in a `UIKitView`, and `java.nio.FloatBuffer` → Kotlin/Native memory.
-   Files: `Cityglrenderer` (4.6k), `Building6Runner` (3.7k), `Door4Room` (1.8k),
-   `Building8Casino`, `CityCctv`, `ModelBitmap`, `GltfSkinnedModel`, `ObjLoader`.
+   Measured surface: **65 distinct `gl*` calls**, **44 `GL_` constants**, **65
+   nio buffer uses**. Note this is *not* all GLES 2.0 — `Building6Runner` uses
+   GLES 3.0 (`glGenVertexArrays`, `glBindBufferBase`, `glUniformBlockBinding`).
+   iOS supports ES 3.0, so it ports, but the seam must cover both. Shaders are
+   GLSL ES 1.00/3.00 and port verbatim.
+
+   | Layer | State |
+   |---|---|
+   | `gl/Matrix.kt` — the 8 `android.opengl.Matrix` functions | ✅ shared, 11 tests |
+   | `gl/GlBuffer.kt` — `java.nio.FloatBuffer` → direct buffer / pinned array | ✅ shared, 7 tests |
+   | `gl/Gl.kt` — the 65 `gl*` calls | ⬜ next |
+   | `PlatformGLSurface` — `GLSurfaceView` → `GLKView` in `UIKitView` | ⬜ |
+   | the 8 renderers themselves | ⬜ |
+
+   All 7 files already use the shared `Matrix`. The buffer type exists but the
+   renderers still construct `java.nio` buffers directly — swapping those call
+   sites is mechanical and comes with the `Gl` wrapper.
+
+
 5. **`android.graphics`** — `Bitmap`/`Canvas`/`Paint` in 13 files. Most uses are
    procedural texture generation and can move to Compose's own `ImageBitmap` +
    `Canvas`, which are multiplatform.
