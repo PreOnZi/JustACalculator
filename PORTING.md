@@ -40,6 +40,11 @@ verifying that shared code is genuinely platform-free.
 > being installed, `pkill -f CoreSimulatorService`. The daemon caches the
 > developer dir it started under and does not honour `DEVELOPER_DIR`.
 
+> **Gotcha:** `by rememberUpdatedState(...)` needs an explicit
+> `import androidx.compose.runtime.getValue`. The error it produces —
+> "Property delegate must have a 'getValue(Nothing?, KProperty0<*>)' method" —
+> does not mention the missing import.
+
 > **Gotcha:** after moving a file between source sets, `rm -rf app/build/kotlin`.
 > The incremental compiler caches source-set membership and reports phantom
 > "Unresolved reference" errors for symbols that are plainly there.
@@ -95,6 +100,8 @@ When porting a file, reach for these rather than inventing a new abstraction.
 | `appPackageSizeBytes` | `applicationInfo.sourceDir` length | `UserFiles.kt` |
 | `installImageLoader` | Coil 2 `ImageLoaderFactory` | `ImageLoading.kt` |
 | `TypingClicker` | the one `TalkAudioHandler` method EffectsController needs | `TypingClicker.kt` |
+| `OnAppLifecycleEvent` | `LifecycleEventObserver` | `Lifecycle.kt` |
+| `rememberPermissionRequest` | `rememberLauncherForActivityResult` | `Lifecycle.kt` |
 
 `Prefs` mirrors the `SharedPreferences` shape *exactly* (same method names, same
 fluent `edit()…commit()`), so ~750 existing call sites moved without edits. The
