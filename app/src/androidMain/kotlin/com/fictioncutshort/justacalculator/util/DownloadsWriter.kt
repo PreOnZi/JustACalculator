@@ -15,64 +15,24 @@ import java.io.File
 /**
  * FileCreation.kt
  *
- * Creates the secret text file in the Downloads folder that contains
- * the console access code. This is part of the story puzzle at step 112.
- *
- * The file is created when the user agrees to "allow the calculator to
- * look around" - it's disguised as a system configuration file.
+ * Android implementation of the user-visible file drop. The story-level
+ * entry point and the file contents live in commonMain.
  */
 
 private const val TAG = "Calculator"
-private const val FILE_NAME = "FCS_JustAC_ConsoleAds.txt"
 
 /**
- * Creates the secret instructions file in the user's Downloads folder.
+ * Writes [content] to the shared Downloads collection as [fileName].
  *
- * The file contains:
- * - Console access code: 353942320485
- * - Admin code: 12340
- * - Navigation instructions for disabling ads
- *
- * @param context Android context
- * @return true if file was created successfully, false otherwise
+ * Tries MediaStore first (API 29+), then the legacy external path, then an
+ * app-external fallback — the story beat needs the file reachable from a file
+ * manager, so it is worth several attempts.
  */
-fun createSecretFile(context: Context): Boolean {
-    val content = """
-╔═══════════════════════════════════════════════════════════════
-Console Advertising Setting for verion 1.0
-
-- Administrator permission required
-- Any issues to be reported directly to the supervising manager
-- Do not disable advertising on consumer-ready versions!
-- All forms of advertising must be enabled once testing is done to maintain stability
-- Please ensure the versions of this manual and of your build correspond
-
-Open console:
-Enter the console code: 353942320485 and confirm (++)
-
-Once in the console, navigate to Administrator settings (2++)
-Enter the administrator code (12340 [must be changed before launch!]) when prompted
-Go to: Connectivity settings (4++)
-Select: 2(++) for Promotion & advertising options
-Select: Disable banner advertising (2++)
-
-
-Navigation:
-- 88++ = Go back
-- 99++ = Exit console
-
-Remember to return everything to default setting once done with testing.
-Any issues to be reported to management (we are aware of the full-screen ad issues and unreliability).
-
-FCS
-FictionCutShort
-╚═══════════════════════════════════════════════════════════════
-    """.trimIndent()
-
+fun writeToDownloads(context: Context, fileName: String, content: String): Boolean {
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        createSecretFileMediaStore(context, content)
+        createSecretFileMediaStore(context, fileName, content)
     } else {
-        createSecretFileLegacy(content)
+        createSecretFileLegacy(fileName, content)
     }
 }
 
@@ -87,12 +47,12 @@ FictionCutShort
  * 5. Fallback to app-private external dir if all MediaStore attempts fail
  */
 @RequiresApi(Build.VERSION_CODES.Q)
-private fun createSecretFileMediaStore(context: Context, content: String): Boolean {
+private fun createSecretFileMediaStore(context: Context, fileName: String, content: String): Boolean {
     // Bail out early if external storage isn't mounted — MediaStore inserts will
     // silently fail or produce unreadable entries on unmounted volumes.
     if (Environment.getExternalStorageState() != Environment.MEDIA_MOUNTED) {
         Log.w(TAG, "External storage not mounted, skipping MediaStore attempt")
-        return createSecretFileFallback(context, content)
+        return createSecretFileFallback(context, fileName, content)
     }
 
     val resolver = context.contentResolver
@@ -103,7 +63,7 @@ private fun createSecretFileMediaStore(context: Context, content: String): Boole
     try {
         val projection = arrayOf(MediaStore.Downloads._ID, MediaStore.Downloads.IS_PENDING)
         val selection = "${MediaStore.Downloads.DISPLAY_NAME} = ?"
-        val selectionArgs = arrayOf(FILE_NAME)
+        val selectionArgs = arrayOf(fileName)
 
         // Include pending files in the query (Android 10+)
         val bundle = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -141,7 +101,7 @@ private fun createSecretFileMediaStore(context: Context, content: String): Boole
 
     // ── Step 2: Insert fresh entry ──────────────────────────────────────────
     val contentValues = ContentValues().apply {
-        put(MediaStore.Downloads.DISPLAY_NAME, FILE_NAME)
+        put(MediaStore.Downloads.DISPLAY_NAME, fileName)
         put(MediaStore.Downloads.MIME_TYPE, "text/plain")
         put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
         put(MediaStore.Downloads.IS_PENDING, 1)
@@ -152,7 +112,7 @@ private fun createSecretFileMediaStore(context: Context, content: String): Boole
 
         if (uri == null) {
             Log.e(TAG, "MediaStore insert returned null URI")
-            return createSecretFileFallback(context, content)
+            return createSecretFileFallback(context, fileName, content)
         }
 
         // Write content
@@ -171,7 +131,7 @@ private fun createSecretFileMediaStore(context: Context, content: String): Boole
             // Clean up the dangling pending entry
             try { resolver.delete(uri, null, null) } catch (_: Exception) {}
             Log.e(TAG, "Failed to write content, trying fallback")
-            return createSecretFileFallback(context, content)
+            return createSecretFileFallback(context, fileName, content)
         }
 
         // Mark as published
@@ -207,7 +167,7 @@ private fun createSecretFileMediaStore(context: Context, content: String): Boole
 
         if (!verified) {
             Log.w(TAG, "MediaStore entry not visible after write — falling back to share intent path")
-            return createSecretFileFallback(context, content)
+            return createSecretFileFallback(context, fileName, content)
         }
 
         Log.d(TAG, "Secret file created and verified via MediaStore: $uri")
@@ -215,7 +175,7 @@ private fun createSecretFileMediaStore(context: Context, content: String): Boole
 
     } catch (e: Exception) {
         Log.e(TAG, "MediaStore creation failed: ${e.message}", e)
-        createSecretFileFallback(context, content)
+        createSecretFileFallback(context, fileName, content)
     }
 }
 
@@ -223,11 +183,11 @@ private fun createSecretFileMediaStore(context: Context, content: String): Boole
  * Android 9 and below: Direct file access (no scoped storage).
  */
 @Suppress("DEPRECATION")
-private fun createSecretFileLegacy(content: String): Boolean {
+private fun createSecretFileLegacy(fileName: String, content: String): Boolean {
     return try {
         val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         if (!downloadsDir.exists()) downloadsDir.mkdirs()
-        val file = File(downloadsDir, FILE_NAME)
+        val file = File(downloadsDir, fileName)
         file.writeText(content, Charsets.UTF_8)
         Log.d(TAG, "Secret file created (legacy) at: ${file.absolutePath}")
         true
@@ -245,12 +205,12 @@ private fun createSecretFileLegacy(content: String): Boolean {
  * inline if file creation returns false. This path shouldn't be reached
  * on normal devices but handles edge cases gracefully.
  */
-private fun createSecretFileFallback(context: Context, content: String): Boolean {
+private fun createSecretFileFallback(context: Context, fileName: String, content: String): Boolean {
     return try {
         val externalDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
             ?: context.filesDir  // absolute last resort: internal storage
         externalDir.mkdirs()
-        val file = File(externalDir, FILE_NAME)
+        val file = File(externalDir, fileName)
         file.writeText(content, Charsets.UTF_8)
         Log.w(TAG, "Secret file saved to app-private dir (won't show in Downloads): ${file.absolutePath}")
         // Return false so the caller can show the inline fallback message instead

@@ -1,5 +1,10 @@
 package com.fictioncutshort.justacalculator.ui.components
 
+import com.fictioncutshort.justacalculator.platform.formatFixed
+import com.fictioncutshort.justacalculator.platform.AppContext
+import com.fictioncutshort.justacalculator.platform.screenMetrics
+import com.fictioncutshort.justacalculator.platform.currentAppContext
+import com.fictioncutshort.justacalculator.platform.appPackageSizeBytes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,13 +26,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import java.io.File
 
 /**
  * ConsoleWindow.kt
@@ -70,7 +72,7 @@ fun ConsoleWindow(
     onOpenContributeLink: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
+    val context = currentAppContext()
 
     // Trigger link opening when on contribute step
     LaunchedEffect(consoleStep) {
@@ -94,10 +96,10 @@ fun ConsoleWindow(
     // Position console in the middle band — fixed height so it never covers buttons.
     // In landscape the keyboard takes a much taller share of the short side, so we
     // shrink the console height + top padding to keep the keyboard reachable.
-    val configuration = LocalConfiguration.current
-    val screenHeight = configuration.screenHeightDp.dp
+    val configuration = screenMetrics()
+    val screenHeight = configuration.heightDp
     val isLandscape =
-        configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        configuration.isLandscape
     val consoleTopPadding = if (isLandscape) {
         (screenHeight * 0.06f).coerceAtLeast(16.dp)
     } else {
@@ -186,7 +188,7 @@ private fun getConsoleMenuContent(
     darkModeEnabled: Boolean,
     totalScreenTimeMs: Long,
     totalCalculations: Int,
-    context: android.content.Context
+    context: AppContext
 ): String {
     return when (consoleStep) {
         0 -> """
@@ -243,9 +245,8 @@ private fun getConsoleMenuContent(
         3 -> {
             // Get actual app size from APK file
             val appSize = try {
-                val appFile = File(context.applicationInfo.sourceDir)
-                val sizeInMB = appFile.length() / (1024.0 * 1024.0)
-                String.format("%.2f MB", sizeInMB)
+                val sizeInMB = appPackageSizeBytes(context) / (1024.0 * 1024.0)
+                formatFixed(sizeInMB, 2) + " MB"
             } catch (_: Exception) {
                 "Unknown"
             }
@@ -254,7 +255,8 @@ private fun getConsoleMenuContent(
             val hours = totalScreenTimeMs / (1000 * 60 * 60)
             val minutes = (totalScreenTimeMs / (1000 * 60)) % 60
             val seconds = (totalScreenTimeMs / 1000) % 60
-            val screenTimeFormatted = String.format("%02d:%02d:%02d", hours, minutes, seconds)
+            val screenTimeFormatted = listOf(hours, minutes, seconds)
+                .joinToString(":") { it.toString().padStart(2, '0') }
 
             """
                 |═══════════════════════════════════

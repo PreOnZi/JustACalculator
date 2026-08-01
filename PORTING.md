@@ -88,6 +88,13 @@ When porting a file, reach for these rather than inventing a new abstraction.
 | `createSoundPlayer(path)` / `Sounds.path(name)` | `MediaPlayer.create(ctx, R.raw.x)`, `SoundPool.load` | `Sound.kt` |
 | `PlatformWebView` | `AndroidView { WebView(…) }` | `WebView.kt` |
 | `PlatformCameraPreview` | `CameraPreview(lifecycleOwner = …)` | `CameraView.kt` |
+| `LocalNotifications` | `AlarmManager` + `NotificationCompat` | `Notifications.kt` |
+| `hasPermission` | `ContextCompat.checkSelfPermission` | `Permissions.kt` |
+| `openExternalUrl` | `Intent(ACTION_VIEW)` | `ExternalLinks.kt` |
+| `writeUserVisibleFile` | `MediaStore` Downloads write | `UserFiles.kt` |
+| `appPackageSizeBytes` | `applicationInfo.sourceDir` length | `UserFiles.kt` |
+| `installImageLoader` | Coil 2 `ImageLoaderFactory` | `ImageLoading.kt` |
+| `TypingClicker` | the one `TalkAudioHandler` method EffectsController needs | `TypingClicker.kt` |
 
 `Prefs` mirrors the `SharedPreferences` shape *exactly* (same method names, same
 fluent `edit()…commit()`), so ~750 existing call sites moved without edits. The
@@ -136,17 +143,34 @@ the GL renderers and audio players load from threads with no coroutine scope.
 
 ## The path to deleting `PortHarness.kt`
 
-`MainActivity.CalculatorScreen` had 19 dependencies in `androidMain`. Six are
-now shared. The rest, grouped by the seam that unblocks them:
+`MainActivity.CalculatorScreen` (2,257 lines, **64 LaunchedEffect/DisposableEffect
+blocks**) is the last big piece. It owns the terms/privacy screen, the timers
+that animate the story, and every overlay. Until it is ported, iOS shows the
+real calculator but no story.
 
-| Blocker | Unblocks |
+Its dependencies — 13 of 18 shared:
+
+| Dependency | State |
 |---|---|
-| trivial (`LocalContext`, time, `nativeCanvas`) | Adcardstack, LetterBlockGame |
-| story logic (`Context` only) | Autoprogresseffects, Browsereffects, Effectscontroller |
-| Coil 2 → 3 | HomeScreenOverlay + 8 more |
-| notifications / files | Dormancymanager, Filecreation |
-| audio capture | TalkAudioHandler |
-| AVFoundation camera | Camerapreview (a labelled placeholder ships today) |
+| AutoProgressEffects | ✅ commonMain |
+| BrowserEffects | ✅ commonMain |
+| DormancyManager | ✅ commonMain |
+| EffectsController | ✅ commonMain |
+| Consolewindow | ✅ commonMain |
+| Browseroverlay | ✅ commonMain |
+| Landscapecalculatorlayout | ✅ commonMain |
+| PausedCalculatorOverlay | ✅ commonMain |
+| PhoneOverlay | ✅ commonMain |
+| PortraitCalculatorContent | ✅ commonMain |
+| ScambleGameOverlay | ✅ commonMain |
+| Filecreation | ✅ commonMain |
+| Calculatorcomponents | ✅ commonMain |
+| Adcardstack | ⬜ `LocalContext` + 25 `R.drawable` webps → composeResources |
+| LetterBlockGame | ⬜ `nativeCanvas` → Compose Canvas |
+| HomeScreenOverlay | ⬜ needs TalkAudioHandler, PhonebookContact, CalcFakeNotification |
+| util/Notifications | ⬜ small — folds into `LocalNotifications` |
+| TalkAudioHandler | ⬜ `AudioRecord`/`AudioTrack` realtime mic echo — hard |
+| Camerapreview | ⬜ CameraX → AVFoundation — hard (placeholder ships today) |
 
 ## Remaining, in dependency order
 

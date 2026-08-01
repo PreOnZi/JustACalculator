@@ -31,6 +31,13 @@
 	     on ProMotion displays, and Compose's own plist sanity check aborts at launch. -->
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<!-- Step 112 drops a file the player must find in a file browser. Both keys
+	     are required: the first exposes Documents to the Files app, the second
+	     lets it be opened in place. Without them the puzzle is unsolvable. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
