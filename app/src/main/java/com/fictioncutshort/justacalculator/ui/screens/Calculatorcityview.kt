@@ -1113,7 +1113,15 @@ fun CalculatorCityView(
     // Hold aerial view for 5 s after a building is completed
     LaunchedEffect(forceAerial) {
         if (forceAerial) {
+            // The whole point of the aerial is that the city reads as the calculator
+            // keypad again, and that takes all THREE of the things the intro's cuts
+            // changed — not just the footprint. cellStage is the grid pitch: leaving
+            // it at 3 gave a spread-out city with fat buildings, which is nothing the
+            // player has seen before. aerialBlend flattens the fake AO the same way
+            // the opening shot does.
             applyFootprint(0)         // restore full aerial buildings for the fly-over
+            cellStageActive = 0       // …and pull the grid back to the compact layout
+            renderer.aerialBlend = 1f // …and drop the ground-level AO gradient
             triggerWhiteFlash()
             // Building 7's post-completion narration rides the aerial fly-over:
             // vo013 comes in over the view, vo014/vo015 follow right after.
@@ -1124,6 +1132,8 @@ fun CalculatorCityView(
             }
             delay(5000)
             applyFootprint(3)         // back to slim ground footprint
+            cellStageActive = 3       // …and the spread-out streets you walk in
+            renderer.aerialBlend = aerialBlend
             triggerWhiteFlash()
             // Hand the landing cue to the decoupled effect BEFORE ending the fly-over:
             // setting forceAerial=false cancels this coroutine at its next suspension.
@@ -3527,14 +3537,14 @@ private fun RiddleDialog(
                 modifier = Modifier.padding(bottom = 16.dp)
             )
 
-            // Input area — the mute button uses a 0..10 slider, not the keypad.
+            // Input area — the mute button uses a 1..10 slider, not the keypad.
             if (digit == RAD_DIGIT) {
                 Text("${Math.round(sliderVal)}  /  10", color = Color(0xFF33FF66), fontSize = 34.sp,
                     fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                 Spacer(Modifier.height(6.dp))
                 androidx.compose.material3.Slider(
                     value = sliderVal, onValueChange = { sliderVal = it },
-                    valueRange = 0f..10f, steps = 9,
+                    valueRange = 1f..10f, steps = 8,
                     colors = androidx.compose.material3.SliderDefaults.colors(
                         thumbColor = Color(0xFF33FF66),
                         activeTrackColor = Color(0xFF33AA55),
@@ -3542,6 +3552,16 @@ private fun RiddleDialog(
                     ),
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp)
                 )
+                // A bare number gives no clue which way is up. Name the ends.
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("1 · worst", color = Color(0xFF33AA55), fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace)
+                    Text("best · 10", color = Color(0xFF33AA55), fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace)
+                }
             } else {
             when (riddle.type) {
                 AnswerType.YWDHMS -> {

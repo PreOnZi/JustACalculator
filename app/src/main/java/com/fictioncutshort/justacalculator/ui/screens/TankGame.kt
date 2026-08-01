@@ -92,7 +92,7 @@ private data class PhoneApp(val name: String, val label: String)
 private val GRID_APPS = listOf(
     PhoneApp("dumbazon",  "Dumbazon"),
     PhoneApp("halflingo",     "Halflingo"),
-    PhoneApp("tetris",  "Tetris"),
+    PhoneApp("tetris",  "fallingBlocks"),
     PhoneApp("innergram",    "Innergram"),
     PhoneApp("tuktak",     "TukTak"),
     PhoneApp("discocord", "Discocord"),
@@ -280,7 +280,7 @@ fun TankGame(onComplete: () -> Unit) {
                 when (pendingNotif) {
                     "tetris" -> NotifBanner(
                         icon = "file:///android_asset/$ICON_DIR_FRESH/tetris.svg",
-                        title = "Tetris",
+                        title = "fallingBlocks",
                         body = "Win Dumbazon giftcards, play for free!",
                         onClick = { tetrisNotif = false; tetrisNotifDone = true; activeApp = "tetris" }
                     )
@@ -1455,19 +1455,48 @@ private fun AppPhone() {
         Spacer(modifier = Modifier.height(8.dp))
     }
 }
+/** Contact display names off the device, or invented ones when there's no access. */
+private val CONTACT_FALLBACK_NAMES = listOf(
+    "Mum", "Dad", "Becky - Manager", "Jamie", "Sam", "Emily", "Alex",
+    "Chris", "Priya", "Liam", "Ava", "Noah", "Olivia", "Ethan",
+    "Sophie", "Marcus", "Hannah", "Tom (Pub Quiz)", "Aunt Karen",
+    "Dr. Patel", "Landlord", "Plumber Steve"
+)
+private fun loadPhoneContactNames(context: Context): List<String> {
+    val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+        context, android.Manifest.permission.READ_CONTACTS
+    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    if (!granted) return CONTACT_FALLBACK_NAMES
+    val out = LinkedHashSet<String>()
+    runCatching {
+        context.contentResolver.query(
+            android.provider.ContactsContract.Contacts.CONTENT_URI,
+            arrayOf(android.provider.ContactsContract.Contacts.DISPLAY_NAME),
+            null, null,
+            android.provider.ContactsContract.Contacts.DISPLAY_NAME + " ASC"
+        )?.use { c ->
+            val col = c.getColumnIndex(android.provider.ContactsContract.Contacts.DISPLAY_NAME)
+            while (c.moveToNext() && out.size < 60) {
+                if (col >= 0) c.getString(col)?.trim()?.let { if (it.isNotEmpty()) out.add(it) }
+            }
+        }
+    }
+    return if (out.isEmpty()) CONTACT_FALLBACK_NAMES else out.toList()
+}
+
 @Composable
 private fun AppContacts(addGiftcards: (Int) -> Unit) {
     // Normal contacts mixed with "AD" entries. Tapping ANY ad contact (including
     // the giftcard-farm ones) pays out some giftcards and replies with a canned
     // "we'll be in touch" line.
     data class CRow(val name: String, val isAd: Boolean)
-    val rows = remember {
-        val plain = listOf(
-            "Mum", "Dad", "Becky - Manager", "Jamie", "Sam", "Emily", "Alex",
-            "Chris", "Priya", "Liam", "Ava", "Noah", "Olivia", "Ethan",
-            "Sophie", "Marcus", "Hannah", "Tom (Pub Quiz)", "Aunt Karen",
-            "Dr. Patel", "Landlord", "Plumber Steve"
-        ).map { CRow(it, isAd = false) }
+    val context = LocalContext.current
+    var rows by remember { mutableStateOf<List<CRow>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        // The player's own people, so the ads sitting between them land. Falls back
+        // to invented names when there's no contacts access (or an empty phonebook).
+        val plain = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { loadPhoneContactNames(context) }
+            .map { CRow(it, isAd = false) }
         val ads = listOf(
             "The Insurance Lawyer", "The Teeth Doctor", "The Best Car Recovery",
             "Cheapest Locksmith In Town", "Cash-For-Phones (24h)",
@@ -1479,7 +1508,7 @@ private fun AppContacts(addGiftcards: (Int) -> Unit) {
             val pos = ((i + 1) * (sorted.size + 1) / (ads.size + 1)).coerceIn(0, sorted.size)
             sorted.add(pos, ad)
         }
-        sorted
+        rows = sorted
     }
     val adMessages = remember {
         listOf(
@@ -1713,7 +1742,7 @@ private fun AppTetris(addGiftcards: (Int) -> Unit, giftcards: Int, onClose: () -
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text("TETRIS", color = Color(0xFFFFCC00), fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+            Text("fallingBlocks", color = Color(0xFFFFCC00), fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     if (gameOver) "GAME OVER" else "Score $score",

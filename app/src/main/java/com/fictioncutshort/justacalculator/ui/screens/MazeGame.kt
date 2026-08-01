@@ -73,7 +73,10 @@ import androidx.compose.ui.draw.clip
 //   ORANGE : dims the scene (spotlight shrinks around player)
 
 private data class MazeLayout(val level: Int) {
-    val roomSize: Int  = 15 + level * 4          // 15, 19, 23, 27 …
+    // Growth per wrong key, capped. This used to be 15 + level*4, unbounded: three
+    // bad guesses and the rooms were 27 across, which is where the maze stopped
+    // being a challenge and started being a chore. Rooms must stay ODD (rCells).
+    val roomSize: Int  = 15 + minOf(level, 3) * 2 // 15, 17, 19, 21, then flat
     val rCells:   Int  = (roomSize - 1) / 2
     val hubW:     Int  = maxOf(11, roomSize - 4)
     val hubH:     Int  = hubW
@@ -420,8 +423,20 @@ private fun placeKeys(world: Array<IntArray>, layout: MazeLayout, seed: Int = 88
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRAP PLACEMENT  (2 red + 2 orange per area; 1 each in hub)
+// TRAP PLACEMENT
+//
+// Red decoys are the expensive ones — taking one rebuilds the whole maze — so
+// they are NOT spread evenly. Region order is N, S, W, E, hub, and the counts
+// below deliberately leave two areas with no wrong key at all: walk into one of
+// those and the key lying there is simply the right one. It used to be 2 per
+// room + 1 in the hub (9 decoys every generation), which meant every single find
+// was a coin flip and the maze grew on most of them.
+//
+// Orange (article) traps are untouched — they're the narrative payload, and
+// there have to be enough slots per generation to reach all 8 articles.
 // ─────────────────────────────────────────────────────────────────────────────
+
+private val RED_TRAPS_PER_REGION = listOf(1, 0, 1, 1, 0)   // N, S, W, E, hub
 
 private fun placeTraps(
     world: Array<IntArray>,
@@ -443,7 +458,7 @@ private fun placeTraps(
         (layout.hubR0  until layout.hubR0  + layout.hubH).flatMap    { r -> (layout.hubC0  until layout.hubC0  + layout.hubW).map  { c -> r to c } },
     )
 
-    for (region in regions) {
+    for ((regionIdx, region) in regions.withIndex()) {
         val candidates = region
             .filter { (r, c) ->
                 r in world.indices && c in world[r].indices
@@ -453,14 +468,17 @@ private fun placeTraps(
             .shuffled(rng)
 
         val half = candidates.size / 2
-        val perType = if (region.size > 100) 2 else 1   // hub gets 1 of each
+        val reds    = RED_TRAPS_PER_REGION.getOrElse(regionIdx) { 1 }
+        val oranges = if (region.size > 100) 2 else 1   // hub gets 1
 
         val redPool    = candidates.take(half)
         val orangePool = candidates.drop(half)
 
-        repeat(perType) { idx ->
+        repeat(reds) { idx ->
             if (idx < redPool.size)
                 traps.add(MazeTrap(id++, redPool[idx].first, redPool[idx].second, TrapType.RED))
+        }
+        repeat(oranges) { idx ->
             // Place orange trap only if we still have unseen articles to assign
             if (idx < orangePool.size && articleIdx < unusedArticles.size)
                 traps.add(MazeTrap(id++, orangePool[idx].first, orangePool[idx].second, TrapType.ORANGE,

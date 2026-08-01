@@ -49,7 +49,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     // The city's cream is already 0.96 albedo, so key + ambient must stay at or
     // under 1.0 or every sunlit face clips to flat white.
     private val SUN_STRENGTH  = 0.62f
-    private val MOON_STRENGTH = 0.30f
+    private val MOON_STRENGTH = 0.40f
 
     // Sky bodies are re-centred on the camera every frame, so they behave like
     // bodies at infinity: never closer, always the same bearing, with the city
@@ -455,7 +455,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 // about the lighting depends on where the player is standing.
                 float ndl = max(dot(N, uKeyDir), 0.0);
                 vec3 key = uKeyCol * ndl;
-                vec3 amb = mix(vec3(0.13, 0.16, 0.26), vec3(0.38, 0.39, 0.43), day);
+                vec3 amb = mix(vec3(0.19, 0.22, 0.33), vec3(0.38, 0.39, 0.43), day);
 
                 // Lamps and the lit windows of unexplored buildings. Each carries
                 // its own radius; a radius of 0 means "off" (branch-free).
@@ -958,7 +958,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             GLES20.glDisable(GLES20.GL_DEPTH_TEST)
             GLES20.glEnable(GLES20.GL_BLEND)
             GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
-            val a = (darknessLevel * 0.88f).coerceIn(0f, 1f)
+            val a = (darknessLevel * 0.70f).coerceIn(0f, 1f)
             GLES20.glUniform4f(uCol, 0.010f, 0.016f, 0.045f, a)
             val quad = floatArrayOf(-1f,-1f,0f,  1f,-1f,0f,  1f,1f,0f,  -1f,1f,0f).toFB()
             quad.position(0)
@@ -1064,6 +1064,8 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 GLES20.glDrawArrays(m.mode, 0, m.cnt)
             }
             setXform(null)
+            // The way in to every building you haven't done yet.
+            drawDoorGlow(dkLvl)
             // Camera red lights — additive, same warm "defy the dark" pass.
             drawCameraLights(dkLvl)
             // Illuminate the monster's red/white faces.
@@ -1167,6 +1169,86 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         }
         GLES20.glDisable(GLES20.GL_BLEND)
         GLES20.glDepthMask(true)
+    }
+
+    // ── Unfinished buildings: a lit frame around the doorway ────────────────────
+    // Once the city is permanently dark, an un-entered door is the only thing the
+    // player is actually looking for, and a near-black panel on a dark wall is not
+    // findable. Called from the additive PASS-2 block (which has already set the
+    // blend/depth/emissive state), so it cuts through the night the way the street
+    // lamps do. Completed buildings get nothing — that's the point of it.
+    private fun drawDoorGlow(dkLvl: Float) {
+        if (aerialMode || doorMounts.isEmpty()) return
+        // Only from real dusk onward, so it doesn't sit on a daylit wall.
+        val lvl = ((dkLvl - 0.2f) / 0.5f).coerceIn(0f, 1f)
+        if (lvl < 0.01f) return
+        // A slow breath, so the eye catches it from down the street.
+        val pulse = 0.82f + 0.18f * sin((System.nanoTime() / 1_000_000L % 2400L) / 2400f * 2f * PI.toFloat())
+        val col = collapse.coerceIn(0f, 1f)
+        val xf = FloatArray(10)
+        val pt = FloatArray(3)
+        val verts = ArrayList<Float>()
+        for (mount in doorMounts) {
+            val digitIdx = mount[8].toInt()
+            if (digitIdx in buildingCompleted.indices && buildingCompleted[digitIdx]) continue
+            if (digitIdx == 7 && b5EntranceGlow) continue   // Building 8 already has its RGB frame
+            var falls = false
+            if (col > 0f) {
+                val g = collapseGroupNear(mount[0], mount[2])
+                if (g != null) {
+                    if (!collapseXform(g, col, xf)) continue
+                    falls = true
+                }
+            }
+            val cx = mount[0]; val dh = mount[1]; val cz = mount[2]
+            val dw = mount[4] * DOOR_HALF_W
+            // Wall-plane basis: n = outward normal, t = width tangent (up is +Y).
+            val nx: Float; val nz: Float; val tx: Float; val tz: Float
+            when (mount[3].toInt()) {
+                0 -> { nx = 0f; nz = 1f; tx = 1f; tz = 0f }
+                1 -> { nx = 0f; nz = -1f; tx = 1f; tz = 0f }
+                2 -> { nx = 1f; nz = 0f; tx = 0f; tz = 1f }
+                else -> { nx = -1f; nz = 0f; tx = 0f; tz = 1f }
+            }
+            val tOut = dw + 0.30f
+            val yBot = 0.15f
+            val yTop = dh + 0.30f
+            val w = 0.42f                       // band half-thickness
+            val px = cx + nx * 0.9f             // sit in front of the wall
+            val pz = cz + nz * 0.9f
+            // One band of the frame, as a rectangle in (across-the-wall, up) space.
+            fun band(s0: Float, y0: Float, s1: Float, y1: Float) {
+                val c = floatArrayOf(
+                    px + tx * s0, y0, pz + tz * s0,
+                    px + tx * s1, y0, pz + tz * s1,
+                    px + tx * s1, y1, pz + tz * s1,
+                    px + tx * s0, y0, pz + tz * s0,
+                    px + tx * s1, y1, pz + tz * s1,
+                    px + tx * s0, y1, pz + tz * s0,
+                )
+                if (falls) {
+                    var k = 0
+                    while (k < c.size) {
+                        applyXform(xf, c[k], c[k + 1], c[k + 2], pt)
+                        c[k] = pt[0]; c[k + 1] = pt[1]; c[k + 2] = pt[2]
+                        k += 3
+                    }
+                }
+                for (v in c) verts.add(v)
+            }
+            band(-tOut - w, yBot, -tOut + w, yTop)      // left upright
+            band(tOut - w, yBot, tOut + w, yTop)        // right upright
+            band(-tOut - w, yTop - w, tOut + w, yTop + w)  // lintel
+        }
+        if (verts.isEmpty()) return
+        val arr = FloatArray(verts.size) { verts[it] }
+        val fb = arr.toFB()
+        GLES20.glUniform1f(uFog, 0f)
+        GLES20.glUniform4f(uCol, 1.0f, 0.74f, 0.32f, 0.62f * lvl * pulse)
+        fb.position(0)
+        GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
+        GLES20.glEnableVertexAttribArray(aPos)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, arr.size / 3)
     }
 
     /** Fully-saturated hue (0..1) → RGB. */

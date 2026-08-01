@@ -103,7 +103,7 @@ fun PhoneTetrisApp(onClose: () -> Unit) {
                 }
                 Spacer(Modifier.weight(1f))
                 Text(
-                    text = "Tetris",
+                    text = "fallingBlocks",
                     color = Color.White,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold,

@@ -75,6 +75,7 @@ object DebugSeed {
         e.remove("b8_lottery_staked")
         e.remove("b8_lottery_settled")
         e.remove("b8_lottery_numbers")
+        e.remove("b8_games_played")
 
         e.apply()
     }

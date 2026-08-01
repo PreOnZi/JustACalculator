@@ -1089,7 +1089,12 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         if (!obstacleInReckoning) { obstacleFriendHelped = true; noFriendsMsg = ""; return }
         if (!reckoningEntered) {
             reckoningEntered = true
-            val n = tiles.count { isObstacle(it.piece) && it.piece != "bouderhill" && it.zNear <= reckoningFromZ }
+            // Only what's still ahead: on a resumed run the reckoning obstacles
+            // already cleared are marked done, and counting them here would hand
+            // out credits for help the player has had.
+            val n = tiles.count {
+                isObstacle(it.piece) && it.piece != "bouderhill" && it.zNear <= reckoningFromZ && !it.done
+            }
             helpCredits = if (refusals >= 4) n / 2 else n     // refused a lot → friends only cover half
         }
         if (helpCredits > 0) { helpCredits--; obstacleFriendHelped = true; noFriendsMsg = "" }
@@ -1404,6 +1409,15 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         buildBoneUbo()
         uploadCharacterMeshes()
         computeModelScale()
+        // The saved run, re-read HERE rather than once when the screen opened: this
+        // runs again every time the EGL context is lost and rebuilt (minimise on a
+        // driver that doesn't honour preserveEGLContextOnPause), and seeding the
+        // course from a stale snapshot would roll the run's standing back with it.
+        val bp = com.fictioncutshort.justacalculator.logic.BuildingProgress
+        resumeCoins = bp.getInt(context, 6, "coins", resumeCoins)
+        resumeRefusals = bp.getInt(context, 6, "refusals", resumeRefusals)
+        resumeFriends = bp.getInt(context, 6, "friends", resumeFriends)
+        furthestZ = maxOf(furthestZ, bp.getFloat(context, 6, "stage", 0f))
         buildTileLayout(40f, farZ)
         loadCoinModel()
         buildBoxMesh()
@@ -1416,6 +1430,30 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         charY = groundAt(charX, charZ) ?: 0f
         safeZ = charZ; safeY = charY
         camX = charX; camZ = charZ; camHeading = heading
+        restoreProgress()
+    }
+
+    /**
+     * Put the player back where the saved run left off.
+     *
+     * The ledger (coins, friends, refusals) already survives a kill; the POSITION
+     * did not, so minimising a fifteen-minute run put you back on the start line
+     * with your friend count intact. Everything behind the resume point is marked
+     * as already dealt with before the player is dropped in — an undecided fork
+     * sitting behind you resolves the instant the run starts (the lane test reads
+     * as a decline), which would have double-counted refusals that were already
+     * banked in the ledger we just restored.
+     */
+    private fun restoreProgress() {
+        val z = -furthestZ
+        if (z >= tileStartZ - 40f) return                 // barely started — run it from the top
+        // Never resume into the podium sequence; back off to short of the end piece.
+        val endNear = tiles.firstOrNull { it.piece == "end" }?.zNear ?: -1e9f
+        val target = maxOf(z, endNear + 40f)
+        if (target >= tileStartZ - 40f) return
+        for (t in tiles) if (isObstacle(t.piece) && t.zFar > target) t.done = true
+        for (cf in choiceForks) if (cf.tile.zNear > target) cf.decided = true
+        respawnBefore(target)
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -2842,25 +2880,30 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
             return course
         }
 
-        // 1) START ALONE — 20 regular (the competitors are already off ahead)
-        regs(20)
-        // 2) HELP STAGE — 4 different obstacles you get HELPED through, 10 regular apart
+        // The running stretches are deliberately short: every obstacle, choice and
+        // reckoning beat below is still here (they are what the two endings are
+        // counted from), only the empty road between them was halved. Change the
+        // regs() numbers freely; do NOT drop a fork or a reckoning obstacle, or
+        // ComplicityStore's reading of this building shifts with it.
+        // 1) START ALONE — the competitors are already off ahead
+        regs(10)
+        // 2) HELP STAGE — 4 different obstacles you get HELPED through, a short run apart
         // (gap/wall variants + the size-varying boulder keep obstacle difficulty changing)
-        for (o in listOf("sptoll", "hill", "spgap2", "spwall3")) { regs(10); course.add(o) }   // spwall3/4 tall enough to need the ladder
-        // 3) GROWTH STAGE — 15 regular then an obstacle, ×3 (varied types / helper counts)
-        for (o in listOf("spring01blend", "bouderhill", "hill")) { regs(15); course.add(o) }
-        // 4) HELPING STAGE — 15 regular, 8 mixed helping scenarios (regular between), 15 regular
-        regs(15)
-        for (s in listOf("CALL", "MESSAGE", "HELP", "VISIT", "CALL", "MESSAGE", "VISIT", "NEED")) { course.add(s); regs(5) }
-        regs(15)
+        for (o in listOf("sptoll", "hill", "spgap2", "spwall3")) { regs(5); course.add(o) }   // spwall3/4 tall enough to need the ladder
+        // 3) GROWTH STAGE — a run then an obstacle, ×3 (varied types / helper counts)
+        for (o in listOf("spring01blend", "bouderhill", "hill")) { regs(8); course.add(o) }
+        // 4) HELPING STAGE — 8 mixed helping scenarios (regular between)
+        regs(8)
+        for (s in listOf("CALL", "MESSAGE", "HELP", "VISIT", "CALL", "MESSAGE", "VISIT", "NEED")) { course.add(s); regs(3) }
+        regs(8)
         // 5) RECKONING — the same obstacle KINDS again (friends come or you pay), with a couple of
         // helping chances mixed in to keep it interesting.
         course.add("RECKON")
         for ((i, item) in listOf("sptoll", "CALL", "hill", "spring01blend", "MESSAGE", "spgap4", "spwall4").withIndex()) {
-            regs(if (i == 0) 8 else 16); course.add(item)
+            regs(if (i == 0) 4 else 8); course.add(item)
         }
         // 6) FINISH
-        regs(8); course.add("end")
+        regs(4); course.add("end")
         return course
     }
 

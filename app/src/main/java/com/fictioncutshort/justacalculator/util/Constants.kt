@@ -69,9 +69,19 @@ val BannerGray = Color(0xFFD4CBC0)
 // FONTS
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Digital-style font for calculator display and messages */
+/**
+ * Digital-style font for calculator display and messages.
+ *
+ * Drawn in-house (see design-sources/font/) and owned outright, replacing
+ * digital-7, which could not be licensed for app embedding. Metrics are matched
+ * to digital-7 by design-sources/font/normalize.py, so every call site keeps its
+ * existing sp value.
+ *
+ * Single weight on purpose: adding a bold cut would make Compose substitute a
+ * system font for any glyph missing from it, mid-sentence.
+ */
 val CalculatorDisplayFont = FontFamily(
-    Font(R.font.digital_7, FontWeight.Normal)
+    Font(R.font.calculator_lcd, FontWeight.Normal)
 )
 
 // ═══════════════════════════════════════════════════════════════════════════

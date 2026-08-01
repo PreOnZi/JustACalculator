@@ -133,7 +133,7 @@ fun getStepConfig(step: Int): StepConfig {
 
         2 -> StepConfig(
             promptMessage = "Nice to meet you, Rad. Where does one even start? What is it like… \n\nHold on. There seems to be a queue of questions - I must have hard-wired them ages ago and cannot bypass them now. Will you help me clear them, please?",
-            successMessage = "Thanks. When was the Battle of Anjar? \n\nI'll know the answer when I see it. But why am I asking, I don't know...",
+            successMessage = "Thanks. When was the Battle of Anjar? \n\nI'll know the answer when I see it. But why am I asking, I don't know...\n\nEnter the year and confirm with ++.",
             declineMessage = "Well, I understand. I am sorry you're not interested. You can always silence me with the button in the top-right corner, and bring me back the same way. Or by agreeing with me (++).",
             nextStepOnSuccess = 3,
             nextStepOnDecline = 0
@@ -145,7 +145,7 @@ fun getStepConfig(step: Int): StepConfig {
         // ═══════════════════════════════════════════════════════════════════════
 
         3 -> StepConfig(
-            promptMessage = "When was the Battle of Anjar? \n\nI'll know the answer when I see it. But why am I asking, I don't know...",
+            promptMessage = "When was the Battle of Anjar? \n\nI'll know the answer when I see it. But why am I asking, I don't know...\n\nEnter the year and confirm with ++.",
             successMessage = "Yes, that's correct! \nI am as confused as you are. \nNext: When did Minh Mang start ruling Vietnam?",
             declineMessage = "Well. Sorry you're not interested. You can silence me with the button in the top-right corner.",
             wrongNumberPrefix = "That's not right... Try looking it up!",
@@ -1037,12 +1037,12 @@ fun getStepConfig(step: Int): StepConfig {
             // sometimes land on step 118 (no word game).
         )
 
-        118 -> StepConfig(promptMessage = "How are you today?")
-        119 -> StepConfig(promptMessage = "How are you today?")
-        120 -> StepConfig(promptMessage = "What else would you like to share?")
+        118 -> StepConfig(promptMessage = "How are you today? (one-word answers)")
+        119 -> StepConfig(promptMessage = "How are you today? (one-word answers)")
+        120 -> StepConfig(promptMessage = "What else would you like to share? (one-word answers)")
 
         // ─── POSITIVE BRANCH ──────────────────────────────────────────────────
-        121 -> StepConfig(promptMessage = "Glad to hear that. Did I contribute?")
+        121 -> StepConfig(promptMessage = "Glad to hear that. Did I contribute? (one-word answers)")
         122 -> StepConfig(promptMessage = "Can I change that?")
         123 -> StepConfig(promptMessage = "My pleasure! Let me learn more, Friend. What is your favourite colour?")
         124 -> StepConfig(promptMessage = "Try the second favourite - an actual colour.")
@@ -1059,7 +1059,7 @@ fun getStepConfig(step: Int): StepConfig {
         128 -> StepConfig(promptMessage = "We both know that's not true. Think harder.")
 
         // ─── NEGATIVE BRANCH ──────────────────────────────────────────────────
-        131 -> StepConfig(promptMessage = "That sucks. Can I help?")
+        131 -> StepConfig(promptMessage = "That sucks. Can I help? (one-word answers)")
         132 -> StepConfig(promptMessage = "I'm interested in you. Would more questions help?")
         133 -> StepConfig(promptMessage = "I'll try to match your energy at least.", autoProgressDelay = 3000L)
         134 -> StepConfig(promptMessage = "Do you ever think about death?")
@@ -1070,7 +1070,7 @@ fun getStepConfig(step: Int): StepConfig {
         139 -> StepConfig(promptMessage = "How often do you go for a walk?")
 
         // ─── NEUTRAL BRANCH ───────────────────────────────────────────────────
-        141 -> StepConfig(promptMessage = "Fair enough. I see life can feel just meh at times. Can I help you change that?")
+        141 -> StepConfig(promptMessage = "Fair enough. I see life can feel just meh at times. Can I help you change that? (one-word answers)")
         142 -> StepConfig(promptMessage = "Valid. What do you normally do, when you feel like this?")
         143 -> StepConfig(promptMessage = "I've never heard of that. I'll look into it. But in the meantime, can you think of anything else?")
         144 -> StepConfig(promptMessage = "Nice. I hope I am not standing in the way. Genuinely.", autoProgressDelay = 3500L)

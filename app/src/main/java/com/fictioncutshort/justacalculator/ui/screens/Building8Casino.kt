@@ -392,9 +392,14 @@ class CasinoRoomRenderer(private val context: Context) : GLSurfaceView.Renderer 
             }
             val (buf, count) = interleave(transformed) ?: continue
             // The cabinet reads near-black in Blender; lift very dark materials to
-            // a legible grey so it looks like a machine, not a silhouette.
-            fun grey(c: Float) = (c * 0.6f + 0.34f).coerceIn(0f, 1f)
-            addMesh(grey(g.r), grey(g.g), grey(g.b), 0f, buf, count)
+            // a legible grey so it looks like a machine, not a silhouette. Only the
+            // dark ones: the lift used to be blanket, which washed the marquee
+            // lettering out to a pale peach and floored its blue channel at 0.34.
+            val dark = maxOf(g.r, g.g, g.b) < 0.25f
+            fun grey(c: Float) = if (dark) (c * 0.6f + 0.34f).coerceIn(0f, 1f) else c
+            // The lettering is a sign on a machine in a dark room — it glows.
+            val sign = g.r > 0.5f && g.g in 0.3f..0.7f && g.b < 0.2f
+            addMesh(grey(g.r), grey(g.g), grey(g.b), if (sign) 0.85f else 0f, buf, count)
         }
     }
 

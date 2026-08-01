@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,12 +34,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
-/** A single contact (label + number). */
-data class PhonebookContact(val name: String, val number: String)
+/** A single contact (label + number). [isAd] rows are the salted-in advertisers. */
+data class PhonebookContact(val name: String, val number: String, val isAd: Boolean = false)
 
 private val FALLBACK_CONTACTS = listOf(
     PhonebookContact("Apple CEO",     "+1 408 555 0100"),
@@ -49,14 +53,32 @@ private val FALLBACK_CONTACTS = listOf(
     PhonebookContact("Cleaning Lady", "+1 555 0199")
 )
 
+/** Advertisers spread evenly through the phonebook — the gag only lands with the
+ *  player's own people either side of them. */
+private val AD_CONTACTS = listOf(
+    PhonebookContact("The Insurance Lawyer",      "+44 20 7946 0100", isAd = true),
+    PhonebookContact("The Teeth Doctor",          "+44 20 7946 0211", isAd = true),
+    PhonebookContact("The Best Car Recovery",     "+44 20 7946 0322", isAd = true),
+    PhonebookContact("Cheapest Locksmith In Town","+44 20 7946 0433", isAd = true),
+    PhonebookContact("Cash-For-Phones (24h)",     "+44 20 7946 0544", isAd = true),
+    PhonebookContact("Solar Panels — FREE quote", "+44 20 7946 0655", isAd = true),
+)
+
+private val AD_REPLIES = listOf(
+    "Thank you for your interest, I will be in touch.",
+    "Your number has been added to the database, thank you!",
+    "We'll contact you shortly!",
+    "We are happy to see you interested, we will contact you soon!"
+)
+
 /**
  * Lists the user's real contacts (READ_CONTACTS permission is already granted
- * earlier in the story). If permission is missing or the contact list is
- * empty, falls back to a static list of well-known names — punchier as a gag
- * than an empty screen.
+ * at step 1077, before this overlay opens) with advertisers salted in between
+ * them. If permission is missing or the device has no contacts, falls back to a
+ * static list of well-known names — punchier as a gag than an empty screen.
  *
- * Tapping a contact opens the keypad app pre-filled with their number via
- * [onContactCall].
+ * Tapping a real contact opens the keypad app pre-filled with their number via
+ * [onContactCall]; tapping an advertiser just harvests your number.
  */
 @Composable
 fun PhonePhonebookApp(
@@ -66,9 +88,11 @@ fun PhonePhonebookApp(
     val context = LocalContext.current
     var contacts by remember { mutableStateOf<List<PhonebookContact>>(emptyList()) }
     var loaded by remember { mutableStateOf(false) }
+    var adReply by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
-        contacts = loadContactsOrFallback(context)
+        // The content-resolver query is disk-backed — never on the frame thread.
+        contacts = withContext(Dispatchers.IO) { withAdsInterleaved(loadContactsOrFallback(context)) }
         loaded = true
     }
 
@@ -114,7 +138,43 @@ fun PhonePhonebookApp(
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     items(contacts) { c ->
-                        ContactRow(contact = c, onClick = { onContactCall(c) })
+                        ContactRow(
+                            contact = c,
+                            onClick = {
+                                if (c.isAd) adReply = AD_REPLIES.random() else onContactCall(c)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        adReply?.let { msg ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xCC000000))
+                    .clickable { adReply = null },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(32.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0xFF1C1C1C))
+                        .padding(22.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(msg, color = Color.White, fontSize = 14.sp, textAlign = TextAlign.Center)
+                    Spacer(Modifier.height(16.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(Color(0xFF3A3A3A))
+                            .clickable { adReply = null }
+                            .padding(horizontal = 24.dp, vertical = 10.dp)
+                    ) {
+                        Text("OK", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -154,9 +214,37 @@ private fun ContactRow(contact: PhonebookContact, onClick: () -> Unit) {
                 fontSize = 13.sp
             )
         }
+        if (contact.isAd) {
+            Text(
+                "AD",
+                color = Color.White.copy(alpha = 0.35f),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
 }
 
+/** Spread the advertisers evenly through [real] so they read as ordinary rows
+ *  you scroll past, not as a block at the end. */
+private fun withAdsInterleaved(real: List<PhonebookContact>): List<PhonebookContact> {
+    val out = real.toMutableList()
+    for ((i, ad) in AD_CONTACTS.withIndex()) {
+        val pos = ((i + 1) * (out.size + 1) / (AD_CONTACTS.size + 1)).coerceIn(0, out.size)
+        out.add(pos, ad)
+    }
+    return out
+}
+
+/**
+ * Real contacts off the device, name-sorted and de-duplicated.
+ *
+ * Two queries, because one is not enough in practice: the Phone table only holds
+ * people who have a number saved, and on a device whose contacts all come from an
+ * account without numbers it comes back empty. When that happens we fall back to
+ * the Contacts table (the same one Building 6 reads, which is why the runner's
+ * helper names work where this screen didn't) and show the entry without a number.
+ */
 private fun loadContactsOrFallback(context: Context): List<PhonebookContact> {
     val granted = ContextCompat.checkSelfPermission(
         context, Manifest.permission.READ_CONTACTS
@@ -164,26 +252,51 @@ private fun loadContactsOrFallback(context: Context): List<PhonebookContact> {
 
     if (!granted) return FALLBACK_CONTACTS
 
-    val out = mutableListOf<PhonebookContact>()
-    val cursor = context.contentResolver.query(
-        ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-        arrayOf(
-            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-            ContactsContract.CommonDataKinds.Phone.NUMBER
-        ),
-        null, null,
-        ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
-    )
-    cursor?.use {
-        val nameCol = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
-        val numCol = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
-        if (nameCol >= 0 && numCol >= 0) {
-            while (it.moveToNext()) {
-                val name = it.getString(nameCol) ?: continue
-                val number = it.getString(numCol) ?: continue
-                out += PhonebookContact(name, number)
+    val out = LinkedHashMap<String, PhonebookContact>()
+
+    // A contact can hold several numbers; the first one per name is enough here.
+    runCatching {
+        context.contentResolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            arrayOf(
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                ContactsContract.CommonDataKinds.Phone.NUMBER
+            ),
+            null, null,
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
+        )?.use { c ->
+            val nameCol = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+            val numCol = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+            if (nameCol >= 0 && numCol >= 0) {
+                while (c.moveToNext() && out.size < 80) {
+                    val name = c.getString(nameCol)?.trim().orEmpty()
+                    if (name.isEmpty()) continue
+                    val number = c.getString(numCol)?.trim().orEmpty()
+                    out.getOrPut(name) { PhonebookContact(name, number) }
+                }
             }
         }
     }
-    return if (out.isEmpty()) FALLBACK_CONTACTS else out
+
+    if (out.isEmpty()) {
+        runCatching {
+            context.contentResolver.query(
+                ContactsContract.Contacts.CONTENT_URI,
+                arrayOf(ContactsContract.Contacts.DISPLAY_NAME),
+                null, null,
+                ContactsContract.Contacts.DISPLAY_NAME + " ASC"
+            )?.use { c ->
+                val nameCol = c.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME)
+                if (nameCol >= 0) {
+                    while (c.moveToNext() && out.size < 80) {
+                        val name = c.getString(nameCol)?.trim().orEmpty()
+                        if (name.isEmpty()) continue
+                        out.getOrPut(name) { PhonebookContact(name, "no number saved") }
+                    }
+                }
+            }
+        }
+    }
+
+    return if (out.isEmpty()) FALLBACK_CONTACTS else out.values.toList()
 }

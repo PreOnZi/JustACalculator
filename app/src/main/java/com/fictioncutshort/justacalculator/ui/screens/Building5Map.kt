@@ -59,6 +59,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.random.Random
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -105,6 +106,10 @@ private const val HOME_DEPARTURE_M   = 20.0                 // 3D
 private const val VISITED_BUFFER_M   = 30.0                 // exclude future picks within this
 private const val GPS_MIN_INTERVAL_MS = 1_000L
 private const val GPS_MIN_DIST_M     = 1f
+private const val LOC_MAX_ACCURACY_M = 75f      // worse than this = a tower guess, not a fix
+private const val LOC_STALE_MS       = 25_000L  // held fix older than this → prefer a fresh good one
+private const val LOC_ANCIENT_MS     = 60_000L  // …older than this → take whatever arrives
+private const val POOR_ACCURACY_M    = 30f      // above this the map says so rather than pretending
 private const val INITIAL_ZOOM       = 18.5    // tight enough that ~100m dests sit well inside the viewport
 
 // Console palette
@@ -142,23 +147,36 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
     }
 
     // ── Live location ───────────────────────────────────────────────────────
+    // Every fix from both providers used to be taken at face value. NETWORK fixes
+    // are derived from cell towers and wifi and are routinely hundreds of metres
+    // out; one arriving between two good GPS fixes threw the dot (and, on a
+    // re-fit, the whole map) somewhere the player wasn't — which is what "50+
+    // metres off" and "the dot disappeared" both are. Fixes are now filtered
+    // through isBetterLocation, and the accuracy travels with them so the map can
+    // DRAW the uncertainty rather than quietly assert a precision it doesn't have.
     var userLoc by remember { mutableStateOf<GeoPoint?>(null) }
+    var userAccuracyM by remember { mutableStateOf(0f) }
     DisposableEffect(hasLocPerm) {
         if (!hasLocPerm) return@DisposableEffect onDispose {}
         val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        var bestFix: Location? = null
+        fun offer(loc: Location) {
+            if (!isBetterLocation(loc, bestFix)) return
+            bestFix = loc
+            userLoc = GeoPoint(loc.latitude, loc.longitude, loc.altitude)
+            userAccuracyM = if (loc.hasAccuracy()) loc.accuracy else 0f
+        }
         val listener = object : LocationListener {
-            override fun onLocationChanged(loc: Location) {
-                userLoc = GeoPoint(loc.latitude, loc.longitude, loc.altitude)
-            }
+            override fun onLocationChanged(loc: Location) = offer(loc)
             override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
             override fun onProviderEnabled(provider: String) {}
             override fun onProviderDisabled(provider: String) {}
         }
         try {
-            (lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER))?.let {
-                userLoc = GeoPoint(it.latitude, it.longitude, it.altitude)
-            }
+            // Seed from whatever is cached, best-first — but through the same
+            // filter, so a stale network fix can't win over a fresh GPS one.
+            lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)?.let(::offer)
+            lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)?.let(::offer)
             if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
                 lm.requestLocationUpdates(
                     LocationManager.GPS_PROVIDER,
@@ -211,6 +229,9 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
     }
     LaunchedEffect(checkpointIdx) { com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 5, "checkpoint", checkpointIdx) }
     var route by remember { mutableStateOf<List<GeoPoint>>(emptyList()) }
+    // True when this round's points are blind compass projections rather than real
+    // OSM road vertices — nothing checked what's under them, so say so.
+    var blindRound by remember { mutableStateOf(false) }
     var activeDest by remember { mutableStateOf<GeoPoint?>(null) }
     var arrivedAt by remember { mutableStateOf<Long?>(null) }
     var checkpointStartLoc by remember { mutableStateOf<GeoPoint?>(null) }
@@ -270,12 +291,20 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
             if (fresh.any { it.distanceToAsDouble(p) < MIN_SEPARATION_M }) continue
             fresh.add(p)
         }
-        // Absolute last resort — the area returned NO roads at all (no streets in
-        // range): a couple of blind projections so the round isn't empty.
+        // Absolute last resort — Overpass gave us nothing at all (every mirror down,
+        // or genuinely no mapped street within OVERPASS_RADIUS_M). These are blind
+        // compass projections: nothing knows what's under them, so they can land in
+        // a field, and the player is told as much rather than being sent to a point
+        // the game is pretending it chose. The base bearing is random per round —
+        // it used to start at due north every time, which is why a re-roll handed
+        // back the same three directions.
+        blindRound = roadPts.isEmpty()
         if (roadPts.isEmpty()) {
+            val baseBearing = Random.nextDouble() * 360.0
             var guard = 0
             while (fresh.size < NEW_PER_ROUND && guard < 24) {
-                val bearing = (fresh.size * (360.0 / NEW_PER_ROUND) + Random.nextDouble() * 50.0) % 360.0
+                val bearing = (baseBearing + fresh.size * (360.0 / NEW_PER_ROUND) +
+                    Random.nextDouble() * 50.0) % 360.0
                 val dist = TARGET_DIST_MIN_M + Random.nextDouble() * (TARGET_DIST_MAX_M - TARGET_DIST_MIN_M)
                 val cand = loc.destinationPoint(dist, bearing)
                 if (visited.none { it.distanceToAsDouble(cand) < VISITED_BUFFER_M } &&
@@ -377,6 +406,7 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
             } else {
                 BuildingMapView(
                     userLoc = userLoc,
+                    userAccuracyM = userAccuracyM,
                     destPoints = currentDests,
                     activeDest = activeDest,
                     route = route,
@@ -394,6 +424,14 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
             currentDests.isEmpty()    -> "Picking spots near you..."
             completed                 -> "Thank you for indulging me."
             arrivedAt != null         -> "Hold there a moment..."
+            // A fix this wide can put the dot a street away. Say so — the shaded
+            // circle around the dot is how far out it might be.
+            userAccuracyM > POOR_ACCURACY_M ->
+                "I can only see you to about ${userAccuracyM.toInt()} m. Give it a moment outdoors."
+            // No street data came back, so these are guesses on a bearing. Don't
+            // let the player walk into a field thinking the game meant it.
+            blindRound ->
+                "I couldn't read the streets here — these are rough directions. Use \"?\" for others."
             else                      -> {
                 val n = (checkpointIdx + 1).coerceAtMost(TOTAL_CHECKPOINTS)
                 "Tap one. Walk there. ($n/$TOTAL_CHECKPOINTS)"
@@ -560,6 +598,7 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
 @Composable
 private fun BuildingMapView(
     userLoc: GeoPoint?,
+    userAccuracyM: Float,
     destPoints: List<GeoPoint>,
     activeDest: GeoPoint?,
     route: List<GeoPoint>,
@@ -598,6 +637,7 @@ private fun BuildingMapView(
                     refs.user = it
                 }
                 ov.pos = u
+                ov.accuracyM = userAccuracyM
             }
 
             // Destination crosshairs — sync the marker map with destPoints
@@ -687,9 +727,17 @@ private fun geoKey(p: GeoPoint) = "${p.latitude},${p.longitude}"
 // CUSTOM OVERLAYS / MARKERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Green pulsing dot at [pos]. Self-invalidates the map ~12 fps for the pulse. */
+/**
+ * Green pulsing dot at [pos], inside a translucent disc the size of the fix's
+ * reported accuracy. Self-invalidates the map ~12 fps for the pulse.
+ *
+ * The disc is the honest part: when the fix is 40 m wide the player can see that
+ * it is, instead of watching a confident little dot sit on the wrong side of the
+ * street and concluding the game is broken.
+ */
 private class PulsingDotOverlay : Overlay() {
     var pos: GeoPoint? = null
+    var accuracyM: Float = 0f
     private val dotPaint = Paint().apply {
         isAntiAlias = true
         color = AndroidColor.rgb(51, 255, 102)
@@ -700,6 +748,16 @@ private class PulsingDotOverlay : Overlay() {
         strokeWidth = 4f
         color = AndroidColor.rgb(51, 255, 102)
     }
+    private val accFill = Paint().apply {
+        isAntiAlias = true
+        color = AndroidColor.argb(38, 51, 255, 102)
+    }
+    private val accEdge = Paint().apply {
+        isAntiAlias = true
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        color = AndroidColor.argb(90, 51, 255, 102)
+    }
     private var phase = 0f
 
     override fun draw(canvas: AndroidCanvas, mapView: MapView, shadow: Boolean) {
@@ -707,6 +765,19 @@ private class PulsingDotOverlay : Overlay() {
         val p = pos ?: return
         val pt = Point()
         mapView.projection.toPixels(p, pt)
+
+        // Accuracy disc: project a point that far due north and measure in pixels,
+        // so the circle stays true at any zoom without guessing at a scale factor.
+        if (accuracyM > 1f) {
+            val edge = Point()
+            mapView.projection.toPixels(p.destinationPoint(accuracyM.toDouble(), 0.0), edge)
+            val rPx = hypot((edge.x - pt.x).toFloat(), (edge.y - pt.y).toFloat())
+            if (rPx > 12f) {
+                canvas.drawCircle(pt.x.toFloat(), pt.y.toFloat(), rPx, accFill)
+                canvas.drawCircle(pt.x.toFloat(), pt.y.toFloat(), rPx, accEdge)
+            }
+        }
+
         phase = (phase + 0.05f) % 1f
         val pulseR = 14f + phase * 40f
         ringPaint.alpha = ((1f - phase) * 200f).toInt().coerceIn(0, 255)
@@ -974,6 +1045,30 @@ private fun FallbackSketchMap(onRequestPerm: () -> Unit) {
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Is [candidate] worth switching to, given the fix we're already holding?
+ *
+ * The classic Android heuristic, trimmed to what a walking game needs: a fix far
+ * newer than ours wins (the player has moved and our fix is history), an older
+ * one never does, and between two roughly-contemporary fixes accuracy decides.
+ * A fix worse than [LOC_MAX_ACCURACY_M] is only ever accepted when we have
+ * nothing better — that's the tower-triangulated one that used to teleport the
+ * dot across the neighbourhood.
+ */
+private fun isBetterLocation(candidate: Location, current: Location?): Boolean {
+    if (current == null) return true
+    val accCand = if (candidate.hasAccuracy()) candidate.accuracy else Float.MAX_VALUE
+    val accCurr = if (current.hasAccuracy()) current.accuracy else Float.MAX_VALUE
+    val dt = candidate.time - current.time
+    if (dt > LOC_ANCIENT_MS) return true                          // ours is ancient
+    if (dt > LOC_STALE_MS && accCand <= LOC_MAX_ACCURACY_M) return true
+    if (dt < 0) return false                                      // older than ours
+    if (accCand > LOC_MAX_ACCURACY_M && accCurr <= LOC_MAX_ACCURACY_M) return false
+    if (accCand <= accCurr) return true
+    // A bit worse, but appreciably newer — still better than standing still.
+    return dt > 10_000L && accCand <= accCurr * 1.5f
+}
+
 private fun hasLocationPermission(context: Context): Boolean =
     ContextCompat.checkSelfPermission(
         context, Manifest.permission.ACCESS_FINE_LOCATION
@@ -1030,6 +1125,51 @@ private fun fetchWalkingRoute(from: GeoPoint, to: GeoPoint): List<GeoPoint>? {
 }
 
 /**
+ * Run an Overpass query, trying each mirror in turn, or null if they all fail.
+ *
+ * This used to be a single un-retried call to overpass-api.de whose every failure
+ * was swallowed. That endpoint is a free service that rate-limits hard and times
+ * out often, and a swallowed failure meant zero road candidates, which sent the
+ * caller down its blind-projection path — points invented on a compass bearing,
+ * with no idea what's under them. That is how destinations ended up in fields and
+ * back gardens. A mirror list plus an honest status check makes the road query
+ * actually succeed; nothing else about the pick changes.
+ */
+private val OVERPASS_ENDPOINTS = listOf(
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.osm.jp/api/interpreter",
+)
+
+private fun fetchOverpass(query: String): String? {
+    val encoded = URLEncoder.encode(query, "UTF-8")
+    for (endpoint in OVERPASS_ENDPOINTS) {
+        try {
+            val conn = (URL("$endpoint?data=$encoded").openConnection() as HttpURLConnection).apply {
+                connectTimeout = 8_000
+                readTimeout = 20_000
+                requestMethod = "GET"
+                setRequestProperty("User-Agent", "JustACalculator/1.x (osmdroid)")
+            }
+            // 429 (rate limited) and 504 (gateway timeout) are the usual answers
+            // from a busy mirror, and reading inputStream on either throws — which
+            // is exactly the failure that used to vanish. Check, then move on.
+            if (conn.responseCode !in 200..299) {
+                conn.disconnect()
+                continue
+            }
+            val body = conn.inputStream.use {
+                BufferedReader(InputStreamReader(it)).readText()
+            }
+            if (body.isNotBlank()) return body
+        } catch (_: Exception) {
+            // Try the next mirror.
+        }
+    }
+    return null
+}
+
+/**
  * Pick up to [n] OSM road-vertices 80–120 m from [user], spread out by bearing.
  * Pedestrian-friendly highway types are preferred; residential / unclassified /
  * service used as fallback (covers US-style suburbs without footway tagging).
@@ -1049,27 +1189,18 @@ private fun pickWalkableDestinations(
     val pedestrian = mutableListOf<GeoPoint>()
     val road = mutableListOf<GeoPoint>()
 
-    try {
-        val query = """
-            [out:json][timeout:20];
-            way(around:$OVERPASS_RADIUS_M,${user.latitude},${user.longitude})
-                ["highway"~"^(footway|pedestrian|path|cycleway|living_street|residential|tertiary|unclassified|service)$"];
-            out tags geom;
-        """.trimIndent()
-        val url = URL(
-            "https://overpass-api.de/api/interpreter?data=" +
-            URLEncoder.encode(query, "UTF-8")
-        )
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            connectTimeout = 8_000
-            readTimeout = 15_000
-            requestMethod = "GET"
-            setRequestProperty("User-Agent", "JustACalculator/1.x (osmdroid)")
-        }
-        val body = conn.inputStream.use {
-            BufferedReader(InputStreamReader(it)).readText()
-        }
-        val elements = JSONObject(body).optJSONArray("elements") ?: return emptyList()
+    val query = """
+        [out:json][timeout:20];
+        way(around:$OVERPASS_RADIUS_M,${user.latitude},${user.longitude})
+            ["highway"~"^(footway|pedestrian|path|cycleway|living_street|residential|tertiary|unclassified|service)$"];
+        out tags geom;
+    """.trimIndent()
+    val body = fetchOverpass(query)
+
+    /** Collect every way-vertex whose distance from [user] falls in [minD]..[maxD]. */
+    fun harvest(minD: Double, maxD: Double) {
+        pedestrian.clear(); road.clear()
+        val elements = JSONObject(body ?: return).optJSONArray("elements") ?: return
         for (i in 0 until elements.length()) {
             val el = elements.optJSONObject(i) ?: continue
             val tags = el.optJSONObject("tags") ?: continue
@@ -1083,11 +1214,21 @@ private fun pickWalkableDestinations(
                 val pt = geom.optJSONObject(j) ?: continue
                 val p = GeoPoint(pt.optDouble("lat"), pt.optDouble("lon"))
                 val d = user.distanceToAsDouble(p)
-                if (d in TARGET_DIST_MIN_M..TARGET_DIST_MAX_M) target.add(p)
+                if (d in minD..maxD) target.add(p)
             }
         }
+    }
+
+    try {
+        harvest(TARGET_DIST_MIN_M, TARGET_DIST_MAX_M)
+        // Nothing in the 80–120 m band doesn't mean there are no streets — it can
+        // just mean the nearest junction is 140 m off. Widen the band before
+        // giving up, because giving up here is what puts a target in a hedge.
+        if (pedestrian.isEmpty() && road.isEmpty()) {
+            harvest(TARGET_DIST_MIN_M * 0.6, TARGET_DIST_MAX_M * 1.8)
+        }
     } catch (_: Exception) {
-        // Network/parse failure → just use whatever we can carry over
+        // Malformed response → fall through with whatever we parsed
     }
 
     fun nearVisited(p: GeoPoint) =

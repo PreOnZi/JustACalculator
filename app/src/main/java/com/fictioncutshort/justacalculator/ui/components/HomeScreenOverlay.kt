@@ -160,7 +160,7 @@ fun HomeScreenOverlay(
             listOf(
                 HomeIcon("sweetscrushout",    "Sweets Crush Out"),
                 HomeIcon("halflingo",      "Halflingo"),
-                HomeIcon("tetris",   "Tetris")
+                HomeIcon("tetris",   "fallingBlocks")
             )
         )
     }

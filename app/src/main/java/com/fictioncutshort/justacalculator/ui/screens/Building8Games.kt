@@ -367,15 +367,17 @@ fun ArcadeBrowser(onExitToRoom: () -> Unit, onAllDone: () -> Unit, onGameReturne
     }
 
     val onDone: () -> Unit = {
+        // A game counts as played because it finished, not because its currency
+        // reads zero — a currency the player never collected starts at zero.
+        CurrencyStore.markGamePlayed(context, page)
         refresh++; onGameReturned()
         // Always return to the menu; the lottery announces itself from there.
         if (CurrencyStore.building8Complete(context)) onAllDone() else page = "home"
     }
 
-    // Back at the menu with the four games spent → the draw announces itself.
+    // Back at the menu with all four games played → the draw announces itself.
     LaunchedEffect(page, refresh) {
-        val othersDone = listOf(Currency.COOKIES, Currency.STARS, Currency.GIFTCARDS, Currency.KEYS)
-            .all { CurrencyStore.balance(context, it) == 0 }
+        val othersDone = CurrencyStore.arcadeGamesDone(context)
         if (page == "home" && othersDone && !CurrencyStore.lotterySettled(context)) {
             delay(1400); showDrawPopup = true
         }
@@ -498,13 +500,8 @@ fun ArcadeBrowser(onExitToRoom: () -> Unit, onAllDone: () -> Unit, onGameReturne
 @Composable
 private fun BlogHome(refreshKey: Int, onPlay: (String) -> Unit) {
     val context = LocalContext.current
-    val balances = remember(refreshKey) {
-        GAME_ENTRIES.associate { it.id to CurrencyStore.balance(context, it.currency) }
-    }
-    val othersSpent = remember(refreshKey) {
-        listOf(Currency.COOKIES, Currency.STARS, Currency.GIFTCARDS, Currency.KEYS)
-            .all { CurrencyStore.balance(context, it) == 0 }
-    }
+    val othersSpent = remember(refreshKey) { CurrencyStore.arcadeGamesDone(context) }
+    val played = remember(refreshKey) { CurrencyStore.gamesPlayed(context) }
     val lotterySettled = remember(refreshKey) { CurrencyStore.lotterySettled(context) }
 
     val scroll = rememberScrollState()
@@ -527,9 +524,8 @@ private fun BlogHome(refreshKey: Int, onPlay: (String) -> Unit) {
         Spacer(Modifier.height(12.dp))
 
         for (e in GAME_ENTRIES) {
-            val bal = balances[e.id] ?: 0
             val locked = e.id == "coins" && !othersSpent
-            val done = if (e.id == "coins") lotterySettled else bal == 0
+            val done = if (e.id == "coins") lotterySettled else e.id in played
             BlogPost(e, locked, done, onPlay)
             Spacer(Modifier.height(12.dp))
         }

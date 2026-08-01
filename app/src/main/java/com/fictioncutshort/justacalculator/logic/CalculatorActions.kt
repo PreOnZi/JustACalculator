@@ -562,10 +562,10 @@ object CalculatorActions {
             // ─── Opening: "How are you today?" → branch greeting ───────────
             119, 120 -> {
                 val (response, nextStep, branch) = when (current.lastWordCategory) {
-                    "positive" -> Triple("Glad to hear that. Did I contribute?", 121, "positive")
-                    "negative" -> Triple("That sucks. Can I help?", 131, "negative")
+                    "positive" -> Triple("Glad to hear that. Did I contribute? (one-word answers)", 121, "positive")
+                    "negative" -> Triple("That sucks. Can I help? (one-word answers)", 131, "negative")
                     else -> Triple(
-                        "Fair enough. I see life can feel just meh at times. Can I help you change that?",
+                        "Fair enough. I see life can feel just meh at times. Can I help you change that? (one-word answers)",
                         141, "neutral"
                     )
                 }

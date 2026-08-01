@@ -126,7 +126,32 @@ object CurrencyStore {
         return zero(ctx, Currency.COINS)
     }
 
-    /** All five currencies drained AND the lottery settled → Building 8 is done. */
+    // ── Arcade games actually played ───────────────────────────────────────────
+    // "Played" cannot be inferred from a zero balance. A player who never picked
+    // up a single star walks into the arcade with stars already at 0, and reading
+    // that as "done" announced the draw after their FIRST game and locked them
+    // out of the rest. A game is played when its screen says it is, and only then.
+    private const val GAMES_PLAYED = "b8_games_played"   // csv of GameEntry ids
+
+    /** The four currency games, in the order the arcade lists them. */
+    val ARCADE_GAME_IDS = listOf("cookies", "stars", "giftcard", "keys")
+
+    fun gamesPlayed(ctx: Context): Set<String> =
+        prefs(ctx).getString(GAMES_PLAYED, "").orEmpty()
+            .split(",").filter { it.isNotBlank() }.toSet()
+
+    fun gamePlayed(ctx: Context, id: String): Boolean = id in gamesPlayed(ctx)
+
+    fun markGamePlayed(ctx: Context, id: String) {
+        if (id.isBlank()) return
+        val next = gamesPlayed(ctx) + id
+        prefs(ctx).edit().putString(GAMES_PLAYED, next.joinToString(",")).apply()
+    }
+
+    /** Every currency game played (the draw is the last of them) → the room is done. */
+    fun arcadeGamesDone(ctx: Context): Boolean =
+        ARCADE_GAME_IDS.all { gamePlayed(ctx, it) }
+
     fun building8Complete(ctx: Context): Boolean =
-        Currency.entries.all { balance(ctx, it) == 0 } && lotterySettled(ctx)
+        arcadeGamesDone(ctx) && lotterySettled(ctx)
 }

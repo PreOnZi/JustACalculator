@@ -34,7 +34,16 @@ object DormancyManager {
 
     private const val CHANNEL_ID = "dormancy_channel"
     private const val PREF_RANT_END_TIME = "rant_end_timestamp"
+    private const val PREF_LAST_NOTIF_AT = "dormancy_last_notif_at"
+    private const val PREF_LAST_NOTIF_ID = "dormancy_last_notif_id"
     private const val PREFS_NAME = "JustACalculatorPrefs"
+
+    /** Minimum gap between two dormancy notifications actually reaching the user.
+     *  Doze batches deferred alarms and releases them together, which dumped the
+     *  whole escalating sequence into one buzz; a notification whose turn has been
+     *  overtaken re-arms itself for this far after the last one instead of firing
+     *  on top of it, so a backlog drains as a drip. */
+    private const val MIN_NOTIF_GAP_MS = 25_000L
 
     val STATIC_DELAY_MS = 10_000L         // 10s: static fades in behind keyboard
     val FIRST_NOTIFICATION_MS = 360_000L  // 6 min: first RAD button
@@ -92,6 +101,8 @@ object DormancyManager {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .remove(PREF_RANT_END_TIME)
+            .remove(PREF_LAST_NOTIF_AT)
+            .remove(PREF_LAST_NOTIF_ID)
             .commit()
         cancelAllNotifications(context)
     }
@@ -125,29 +136,94 @@ object DormancyManager {
     fun fireInAppNotification(context: Context, buttonNumber: Int) {
         val entry = NOTIFICATIONS.getOrNull(buttonNumber - 1) ?: return
         val (id, message, _) = entry
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (id <= prefs.getInt(PREF_LAST_NOTIF_ID, 0)) return
+        // Claim the slot, so the alarm for this same beat is skipped when the OS
+        // eventually gets round to it and the next one doesn't land on top.
+        prefs.edit()
+            .putLong(PREF_LAST_NOTIF_AT, System.currentTimeMillis())
+            .putInt(PREF_LAST_NOTIF_ID, id)
+            .commit()
         sendDormancyNotification(context, id, message)
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────
 
     private fun scheduleAllNotifications(context: Context, rantEndTime: Long) {
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         for ((id, message, delayMs) in NOTIFICATIONS) {
-            val triggerAt = rantEndTime + delayMs
-            val intent = Intent(context, DormancyNotificationReceiver::class.java).apply {
-                putExtra("notif_id", id)
-                putExtra("message", message)
+            scheduleOne(context, id, message, rantEndTime + delayMs)
+        }
+    }
+
+    /**
+     * Arm one notification for [triggerAt].
+     *
+     * Exact where the OS will allow it. `setAndAllowWhileIdle` is *inexact*: the
+     * platform is free to align it with other pending alarms, which is how twenty
+     * beats spaced 30s apart arrived as one clump several minutes late. Exact
+     * alarms are still deferred in Doze, but they are not batched with each other.
+     *
+     * NOTE: on API 31+ the exact path only opens if SCHEDULE_EXACT_ALARM is
+     * declared in the manifest (it is not — that declaration carries a Play policy
+     * review). Until then this always takes the inexact branch and the spacing
+     * guard in [postSpaced] is what keeps the sequence readable.
+     */
+    private fun scheduleOne(context: Context, id: Int, message: String, triggerAt: Long) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = Intent(context, DormancyNotificationReceiver::class.java).apply {
+            putExtra("notif_id", id)
+            putExtra("message", message)
+        }
+        val pending = PendingIntent.getBroadcast(
+            context, id, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val canBeExact = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            alarmManager.canScheduleExactAlarms()
+        } else true
+        try {
+            if (canBeExact) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pending)
+            } else {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pending)
             }
-            val pending = PendingIntent.getBroadcast(
-                context, id, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
+        } catch (e: Exception) {
+            // SecurityException if the exact-alarm grant was revoked between the
+            // check and the call — the inexact alarm is still better than none.
             try {
                 alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pending)
-            } catch (e: Exception) {
-                android.util.Log.e("DormancyManager", "Failed to schedule notification $id: ${e.message}")
+            } catch (e2: Exception) {
+                android.util.Log.e("DormancyManager", "Failed to schedule notification $id: ${e2.message}")
             }
         }
+    }
+
+    /**
+     * Post [message], unless another dormancy notification landed less than
+     * [MIN_NOTIF_GAP_MS] ago — in which case push this one back to its own slot
+     * behind that one. Called from the alarm receiver, so a batch of overdue
+     * alarms delivered in a single Doze maintenance window still reaches the user
+     * one at a time, in order, the way the escalation was written.
+     */
+    fun postSpaced(context: Context, id: Int, message: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        // Already sent — the in-app tick loop beat the alarm to this beat.
+        if (id <= prefs.getInt(PREF_LAST_NOTIF_ID, 0)) return
+        val now = System.currentTimeMillis()
+        val last = prefs.getLong(PREF_LAST_NOTIF_AT, 0L)
+        val earliest = last + MIN_NOTIF_GAP_MS
+        if (last > 0L && now < earliest) {
+            scheduleOne(context, id, message, earliest)
+            // Claim the slot straight away, so the next overdue alarm in the same
+            // burst queues behind this one rather than on top of it.
+            prefs.edit().putLong(PREF_LAST_NOTIF_AT, earliest).commit()
+            return
+        }
+        prefs.edit()
+            .putLong(PREF_LAST_NOTIF_AT, now)
+            .putInt(PREF_LAST_NOTIF_ID, id)
+            .commit()
+        sendDormancyNotification(context, id, message)
     }
 
     private fun cancelAllNotifications(context: Context) {
@@ -212,6 +288,6 @@ class DormancyNotificationReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val id = intent.getIntExtra("notif_id", 10)
         val message = intent.getStringExtra("message") ?: "..."
-        DormancyManager.sendDormancyNotification(context, id, message)
+        DormancyManager.postSpaced(context, id, message)
     }
 }
