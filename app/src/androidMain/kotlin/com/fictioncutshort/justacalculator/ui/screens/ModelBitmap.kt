@@ -66,7 +66,7 @@ object ModelBitmapRenderer {
         context: Context, objPath: String, mtlPath: String?,
         size: Int, tilt: Float, turn: Float, colorGamma: Float, fitSpan: Float,
     ): Bitmap {
-        val groups = ObjLoader.load(context.assets, objPath, mtlPath)
+        val groups = ObjLoader.load(objPath, mtlPath)
 
         // Bounding box for auto-fit centering + scaling.
         var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE; var minZ = Float.MAX_VALUE

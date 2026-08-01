@@ -653,28 +653,28 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
 
     private fun loadModels() {
         val a = assets ?: return
-        try { lampOnGroups   = ObjLoader.load(a, "models/lampon.obj",   "models/lampon.mtl") } catch (_: Throwable) {}
-        try { lampOffGroups  = ObjLoader.load(a, "models/lampoff.obj",  "models/lampoff.mtl") } catch (_: Throwable) {}
-        try { cameraOnGroups = ObjLoader.load(a, "models/cameraon.obj", "models/cameraon.mtl") } catch (_: Throwable) {}
+        try { lampOnGroups   = ObjLoader.load("models/lampon.obj",   "models/lampon.mtl") } catch (_: Throwable) {}
+        try { lampOffGroups  = ObjLoader.load("models/lampoff.obj",  "models/lampoff.mtl") } catch (_: Throwable) {}
+        try { cameraOnGroups = ObjLoader.load("models/cameraon.obj", "models/cameraon.mtl") } catch (_: Throwable) {}
         try {
-            val night = ObjLoader.load(a, "models/cameranight.obj", "models/cameranight.mtl")
+            val night = ObjLoader.load("models/cameranight.obj", "models/cameranight.mtl")
             // Only the per-material colors matter — geometry is identical to cameraon.
             cameraNightColors = night.associate { it.materialName to floatArrayOf(it.r, it.g, it.b) }
         } catch (_: Throwable) {}
-        try { doorGroups      = ObjLoader.load(a, "models/door.obj",                 "models/door.mtl") } catch (_: Throwable) {}
+        try { doorGroups      = ObjLoader.load("models/door.obj",                 "models/door.mtl") } catch (_: Throwable) {}
         // Custom bridge pieces (1..9, south→north). Materials absent; groups are
         // tagged by object name so the lamp "Icosphere" meshes can glow at night.
         bridgeGroups = Array(9) { i ->
-            runCatching { ObjLoader.load(a, "models/bridge/bridge${i + 1}.obj", "models/bridge/bridge${i + 1}.mtl") }
+            runCatching { ObjLoader.load("models/bridge/bridge${i + 1}.obj", "models/bridge/bridge${i + 1}.mtl") }
                 .getOrDefault(emptyList())
         }
-        try { muteButtonGroups = ObjLoader.load(a, "models/mutebutton.obj", "models/mutebutton.mtl") } catch (_: Throwable) {}
-        try { muteButtonBounds = ObjLoader.loadBounds(a, "models/mutebutton.obj") } catch (_: Throwable) {}
-        try { damagedGroupsA  = ObjLoader.load(a, "models/builddamage/buildd1.obj",  "models/builddamage/buildd1.mtl") } catch (_: Throwable) {}
-        try { damagedGroupsB  = ObjLoader.load(a, "models/builddamage/buildd2.obj",  "models/builddamage/buildd2.mtl") } catch (_: Throwable) {}
-        try { damagedGroupsC  = ObjLoader.load(a, "models/builddamage/buildd3.obj",  "models/builddamage/buildd3.mtl") } catch (_: Throwable) {}
+        try { muteButtonGroups = ObjLoader.load("models/mutebutton.obj", "models/mutebutton.mtl") } catch (_: Throwable) {}
+        try { muteButtonBounds = ObjLoader.loadBounds("models/mutebutton.obj") } catch (_: Throwable) {}
+        try { damagedGroupsA  = ObjLoader.load("models/builddamage/buildd1.obj",  "models/builddamage/buildd1.mtl") } catch (_: Throwable) {}
+        try { damagedGroupsB  = ObjLoader.load("models/builddamage/buildd2.obj",  "models/builddamage/buildd2.mtl") } catch (_: Throwable) {}
+        try { damagedGroupsC  = ObjLoader.load("models/builddamage/buildd3.obj",  "models/builddamage/buildd3.mtl") } catch (_: Throwable) {}
         try {
-            gunGroups = ObjLoader.load(a, "models/gun.obj", "models/gun.mtl")
+            gunGroups = ObjLoader.load("models/gun.obj", "models/gun.mtl")
             // Auto-fit: centre on the model's bounds and scale so its longest span
             // is GUN_SPAN world units, independent of how the .blend was authored.
             var mnX = Float.MAX_VALUE; var mnY = Float.MAX_VALUE; var mnZ = Float.MAX_VALUE
@@ -693,7 +693,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         try {
             // The gun fires the smallest Building-6 boulder (ball1); centre + fit it
             // so its diameter matches the projectile's collision radius.
-            bulletGroups = ObjLoader.load(a, "models/stickmancourse/assets/ball1.obj", null)
+            bulletGroups = ObjLoader.load("models/stickmancourse/assets/ball1.obj", null)
             var mnX = Float.MAX_VALUE; var mnY = Float.MAX_VALUE; var mnZ = Float.MAX_VALUE
             var mxX = -Float.MAX_VALUE; var mxY = -Float.MAX_VALUE; var mxZ = -Float.MAX_VALUE
             for (g in bulletGroups) { var i = 0; while (i < g.verts.size) {
@@ -707,15 +707,15 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 bulletFit = 1f / ext          // unit diameter; scaled to 2·radius at draw
             }
         } catch (_: Throwable) {}
-        try { mainBuildingGroups = ObjLoader.load(a, "models/mainbuilding.obj", "models/mainbuilding.mtl") } catch (_: Throwable) {}
-        try { stickmanGroups  = ObjLoader.load(a, "models/stickman.obj",  "models/stickman.mtl") } catch (_: Throwable) {}
-        try { stickman2Groups = ObjLoader.load(a, "models/stickman2.obj", "models/stickman2.mtl") } catch (_: Throwable) {}
+        try { mainBuildingGroups = ObjLoader.load("models/mainbuilding.obj", "models/mainbuilding.mtl") } catch (_: Throwable) {}
+        try { stickmanGroups  = ObjLoader.load("models/stickman.obj",  "models/stickman.mtl") } catch (_: Throwable) {}
+        try { stickman2Groups = ObjLoader.load("models/stickman2.obj", "models/stickman2.mtl") } catch (_: Throwable) {}
         try {
-            monsterGroups   = ObjLoader.load(a, "models/monster.obj",   "models/monster.mtl")
+            monsterGroups   = ObjLoader.load("models/monster.obj",   "models/monster.mtl")
             computeMonsterFaceHeading()
         } catch (_: Throwable) {}
         for (i in 0 until 10) {
-            try { debrisGroups[i] = ObjLoader.load(a, "models/debris/debris${i+1}.obj", "models/debris/debris${i+1}.mtl") } catch (_: Throwable) {}
+            try { debrisGroups[i] = ObjLoader.load("models/debris/debris${i+1}.obj", "models/debris/debris${i+1}.mtl") } catch (_: Throwable) {}
         }
     }
 

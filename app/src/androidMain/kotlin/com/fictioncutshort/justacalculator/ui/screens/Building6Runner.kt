@@ -1585,7 +1585,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
      *  the prop can be grounded (base at y=0) at draw. */
     private fun loadProp(name: String, objPath: String, mtlPath: String?, fallback: FloatArray) {
         if (propMeshes.containsKey(name) || !assetExists(objPath)) return
-        val groups = ObjLoader.load(context.assets, objPath, mtlPath)
+        val groups = ObjLoader.load(objPath, mtlPath)
         val parts = ArrayList<PropPart>()
         var minY = Float.MAX_VALUE; var maxY = -Float.MAX_VALUE
         for (g in groups) {
@@ -1696,7 +1696,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         val path = "models/stickmancourse/coin.obj"
         if (!assetExists(path)) return
         val posList = ArrayList<Float>()
-        for (g in ObjLoader.load(context.assets, path)) for (v in g.verts) posList.add(v)
+        for (g in ObjLoader.load(path)) for (v in g.verts) posList.add(v)
         if (posList.isEmpty()) return
         val pos = posList.toFloatArray()
         coinVao = makeVao(pos, computeFlatNormals(pos))
@@ -1721,7 +1721,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
     private fun loadBoulderModel() {
         val path = tilePath(HILL_BOULDER) ?: return
         val posList = ArrayList<Float>()
-        for (g in ObjLoader.load(context.assets, path)) for (v in g.verts) posList.add(v)
+        for (g in ObjLoader.load(path)) for (v in g.verts) posList.add(v)
         if (posList.isEmpty()) return
         val pos = posList.toFloatArray()
         var maxR = 0f
@@ -3215,7 +3215,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         val drawList = ArrayList<Float>()      // grey base geometry (overridden groups pulled out)
         val parts = ArrayList<TilePart>()
         if (overrides == null) {
-            for (g in ObjLoader.load(context.assets, path)) for (v in g.verts) posList.add(v)
+            for (g in ObjLoader.load(path)) for (v in g.verts) posList.add(v)
             drawList.addAll(posList)
         } else {
             for ((gname, verts) in loadNamedGroups(path)) {

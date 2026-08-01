@@ -1,6 +1,9 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
-import android.content.res.AssetManager
+import kotlin.math.pow
+import com.fictioncutshort.justacalculator.platform.Assets
+import com.fictioncutshort.justacalculator.platform.readLines
+
 
 // Minimal Wavefront OBJ + MTL loader.
 //
@@ -38,15 +41,15 @@ data class ObjBounds(
 
 object ObjLoader {
 
-    fun load(assets: AssetManager, objPath: String, mtlPath: String? = null): List<ObjGroup> {
-        val materials = if (mtlPath != null) parseMtl(assets, mtlPath) else emptyMap()
-        return parseObj(assets, objPath, materials)
+    fun load(objPath: String, mtlPath: String? = null): List<ObjGroup> {
+        val materials = if (mtlPath != null) parseMtl(mtlPath) else emptyMap()
+        return parseObj(objPath, materials)
     }
 
     // Per-object bounding boxes, keyed off the OBJ's `o` markers. [load] groups by
     // material and so loses object identity; this keeps it, which is what the
     // renderer needs to turn a scene model's props into collision footprints.
-    fun loadBounds(assets: AssetManager, objPath: String): List<ObjBounds> {
+    fun loadBounds(objPath: String): List<ObjBounds> {
         val out = mutableListOf<ObjBounds>()
         var name = ""
         var mnX = Float.MAX_VALUE; var mxX = -Float.MAX_VALUE
@@ -58,7 +61,7 @@ object ObjLoader {
             mnY = Float.MAX_VALUE; mxY = -Float.MAX_VALUE
             mnZ = Float.MAX_VALUE; mxZ = -Float.MAX_VALUE
         }
-        assets.open(objPath).bufferedReader().useLines { lines ->
+        Assets.readLines(objPath).let { lines ->
             for (raw in lines) {
                 val line = raw.trim()
                 if (line.startsWith("o ")) {
@@ -82,15 +85,15 @@ object ObjLoader {
     private fun linearToSrgb(c: Float): Float {
         val x = c.coerceIn(0f, 1f)
         return if (x <= 0.0031308f) x * 12.92f
-               else 1.055f * Math.pow(x.toDouble(), 1.0 / 2.4).toFloat() - 0.055f
+               else 1.055f * x.toDouble().pow(1.0 / 2.4).toFloat() - 0.055f
     }
 
-    private fun parseMtl(assets: AssetManager, path: String): Map<String, Mtl> {
+    private fun parseMtl(path: String): Map<String, Mtl> {
         val out = mutableMapOf<String, Mtl>()
         var cur: String? = null
         var r = 1f; var g = 1f; var b = 1f
         var tex: String? = null
-        assets.open(path).bufferedReader().useLines { lines ->
+        Assets.readLines(path).let { lines ->
             for (raw in lines) {
                 val line = raw.trim()
                 if (line.isEmpty() || line.startsWith("#")) continue
@@ -124,7 +127,7 @@ object ObjLoader {
         return out
     }
 
-    private fun parseObj(assets: AssetManager, path: String, materials: Map<String, Mtl>): List<ObjGroup> {
+    private fun parseObj(path: String, materials: Map<String, Mtl>): List<ObjGroup> {
         val positions = mutableListOf<Float>()
         val texCoords = mutableListOf<Float>()
         val groups = mutableListOf<ObjGroup>()
@@ -148,7 +151,7 @@ object ObjLoader {
             }
         }
 
-        assets.open(path).bufferedReader().useLines { lines ->
+        Assets.readLines(path).let { lines ->
             for (raw in lines) {
                 val line = raw.trim()
                 if (line.isEmpty() || line.startsWith("#")) continue

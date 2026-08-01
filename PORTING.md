@@ -179,7 +179,18 @@ its real implementation lands; nothing at the call site changes.
    Coil 3 (`coil3.*`) is multiplatform. Pairs with the asset URI change above.
 3. **Audio** — `MediaPlayer`/`SoundPool` in ~9 files → an `expect` player over
    `AVAudioPlayer`. Covers the 72 `R.raw` voiceover/SFX references.
-4. **OpenGL ES** (~12k lines, 8 files) — all hand-written **GLES 2.0 with GLSL ES
+4. **OpenGL ES** (~12k lines, 8 files) — **foundation started**: ObjLoader is
+   shared. The remaining surface is bounded and now measured: **59 distinct
+   `gl*` calls** and **65 `FloatBuffer`/`ByteBuffer` uses** across the 8 files.
+   Three seams are needed, in order:
+     1. a buffer abstraction (`java.nio.FloatBuffer` → pinned `FloatArray`),
+     2. a `Gl` object wrapping those 59 calls (GLES20 → OpenGLES via cinterop),
+     3. `PlatformGLSurface` (`GLSurfaceView` → `GLKView`/`CAEAGLLayer` in a
+        `UIKitView`).
+   The shaders themselves are GLSL ES 1.00 and port verbatim.
+
+   Old note follows:
+4. **OpenGL ES — original assessment** (~12k lines, 8 files) — all hand-written **GLES 2.0 with GLSL ES
    1.00**, which iOS still supports, so the shaders and draw calls port nearly
    verbatim. What must be replaced: `GLSurfaceView` → `GLKView`/`CAEAGLLayer`
    hosted in a `UIKitView`, and `java.nio.FloatBuffer` → Kotlin/Native memory.

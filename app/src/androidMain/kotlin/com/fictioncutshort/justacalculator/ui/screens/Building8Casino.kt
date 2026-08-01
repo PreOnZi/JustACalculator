@@ -355,7 +355,7 @@ class CasinoRoomRenderer(private val context: Context) : GLSurfaceView.Renderer 
 
     private fun buildArcade() {
         val groups = runCatching {
-            ObjLoader.load(context.assets, "models/casino/arcade.obj", "models/casino/arcade.mtl")
+            ObjLoader.load("models/casino/arcade.obj", "models/casino/arcade.mtl")
         }.getOrNull() ?: return
         // Fit: raw height ≈ 6.57 → target arcadeHeight units; base on floor; corner + turn.
         val scale = arcadeHeight / 6.57f
