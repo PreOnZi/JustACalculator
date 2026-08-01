@@ -16,3 +16,8 @@ local.properties
 
 # Claude Code local tooling state (machine-specific)
 .claude/
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/

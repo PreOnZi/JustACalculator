@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>JustACalculator</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.14</string>
+	<key>CFBundleVersion</key>
+	<string>14</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string></string>
+	</dict>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<!-- Required by Compose Multiplatform: without it UIKit caps the app at 60fps
+	     on ProMotion displays, and Compose's own plist sanity check aborts at launch. -->
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<!-- Usage strings for the parity features. Each must be present before the
+	     corresponding phase ships, or the app crashes on first permission use. -->
+	<key>NSCameraUsageDescription</key>
+	<string>The story uses your camera for the mirror and photo scenes.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>The story records short voice clips during one chapter.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Saves the pictures the story takes to your photo library.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>The in-story phone shows names from your contacts.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>One chapter shows a map of where you are.</string>
+</dict>
+</plist>
