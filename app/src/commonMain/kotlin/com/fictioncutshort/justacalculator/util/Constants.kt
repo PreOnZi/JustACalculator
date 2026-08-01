@@ -1,0 +1,292 @@
+package com.fictioncutshort.justacalculator.util
+
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import com.fictioncutshort.justacalculator.resources.Res
+import com.fictioncutshort.justacalculator.resources.calculator_lcd
+import org.jetbrains.compose.resources.Font
+
+/**
+ * Constants.kt
+ *
+ * Centralized location for all app-wide constants including:
+ * - Colors (retro theme palette)
+ * - Fonts
+ * - SharedPreferences keys
+ * - Timing constants
+ * - Calculator limits
+ * - Responsive dimensions
+ */
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RELEASE GATING
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * When false, the app cuts off after the dormancy phase (end of Part 1) and
+ * shows the "Part 1 complete" screen instead of advancing to ad cards / city.
+ * Flip to true once the post-dormancy content (Phase 2) is ready to ship.
+ */
+const val PHASE_2_ENABLED = true
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COLORS - Retro calculator theme
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Primary accent color - warm orange for buttons and highlights */
+val AccentOrange = Color(0xFFE88617)
+
+/** Classic green LCD display color (used in inverted/crisis mode) */
+val RetroDisplayGreen = Color(0xFF33FF33)
+
+/** Vintage cream/beige background color */
+val RetroCream = Color(0xFFF5F0E1)
+
+/** LCD display background - greenish gray like old calculators */
+val LcdBackground = Color(0xFFCCD5AE)
+
+/** Dark text color for light backgrounds */
+val DarkText = Color(0xFF2D2D2D)
+
+/** Top bezel color - dark brown wood tone */
+val BezelBrown = Color(0xFF4A3728)
+
+/** Inverted bezel color - near black */
+val BezelInverted = Color(0xFF1A1A1A)
+
+/** Ad banner placeholder color */
+val BannerGray = Color(0xFFD4CBC0)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FONTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Digital-style font for calculator display and messages.
+ *
+ * Drawn in-house (see design-sources/font/) and owned outright, replacing
+ * digital-7, which could not be licensed for app embedding. Metrics are matched
+ * to digital-7 by design-sources/font/normalize.py, so every call site keeps its
+ * existing sp value.
+ *
+ * Single weight on purpose: adding a bold cut would make Compose substitute a
+ * system font for any glyph missing from it, mid-sentence.
+ */
+val CalculatorDisplayFont: FontFamily
+    // Compose Resources loads fonts from a composition, so this is a composable
+    // getter rather than a top-level val. Call sites are unchanged.
+    @Composable get() = FontFamily(
+        Font(Res.font.calculator_lcd, FontWeight.Normal)
+    )
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SHAREDPREFERENCES KEYS
+// ═══════════════════════════════════════════════════════════════════════════
+
+const val PREFS_NAME = "just_a_calculator_prefs"
+
+// Story progress
+const val PREF_EQUALS_COUNT = "equals_count"
+const val PREF_CONVO_STEP = "conversation_step"
+const val PREF_IN_CONVERSATION = "in_conversation"
+const val PREF_MESSAGE = "last_message"
+
+// User input state
+const val PREF_AWAITING_NUMBER = "awaiting_number"
+const val PREF_EXPECTED_NUMBER = "expected_number"
+const val PREF_TIMEOUT_UNTIL = "timeout_until"
+
+// Settings
+const val PREF_MUTED = "muted"
+const val PREF_TERMS_ACCEPTED = "terms_accepted"
+
+// Crisis/repair state
+const val PREF_INVERTED_COLORS = "inverted_colors"
+const val PREF_MINUS_DAMAGED = "minus_damaged"
+const val PREF_MINUS_BROKEN = "minus_broken"
+const val PREF_NEEDS_RESTART = "needs_restart"
+
+// Statistics
+const val PREF_TOTAL_SCREEN_TIME = "total_screen_time"
+const val PREF_TOTAL_CALCULATIONS = "total_calculations"
+
+// Button damage
+const val PREF_DARK_BUTTONS = "dark_buttons"
+const val PREF_STORY_COMPLETE = "story_complete"
+
+// Downloads-file hunt (step 112): persisted boolean set on ON_STOP
+// while the user is at step 112 (i.e. they actually backgrounded the
+// app, not just pulled the notification shade). On the next ON_RESUME
+// at step 112 the "Did you find the file?" question (step 1120) fires
+// and the flag is cleared. ON_STOP — not ON_PAUSE — is the reliable
+// signal: it only fires when the user truly leaves, so no time-delta
+// heuristic is needed. The flag is persisted so it survives a full
+// process kill in the background.
+const val PREF_STEP_112_LEFT_APP = "step_112_left_app"
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CALCULATOR LIMITS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Maximum digits allowed in a number */
+const val MAX_DIGITS = 12
+
+/** Numbers larger than this trigger "testing me" message */
+const val ABSURDLY_LARGE_THRESHOLD = 1_000_000_000_000.0
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TIMING CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Time window for detecting double-tap (++ or --) in milliseconds */
+const val DOUBLE_PRESS_WINDOW_MS = 600L
+
+/** Camera auto-timeout in milliseconds */
+const val CAMERA_TIMEOUT_MS = 8000L
+
+/** Time window for rapid mute button clicks (debug menu access) */
+const val RAPID_CLICK_WINDOW_MS = 2000L
+
+/** Number of rapid clicks to open debug menu */
+const val DEBUG_MENU_CLICKS = 5
+
+/** Number of rapid clicks to reset game */
+const val RESET_CLICKS = 10
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BUTTON LAYOUT
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Standard calculator button layout (5 rows x 4 columns) */
+val BUTTON_LAYOUT = listOf(
+    listOf("C", "( )", "%", "/"),
+    listOf("7", "8", "9", "*"),
+    listOf("4", "5", "6", "-"),
+    listOf("1", "2", "3", "+"),
+    listOf("DEL", "0", ".", "=")
+)
+
+/** All valid buttons for whack-a-mole game (minus excluded - it's broken) */
+val WHACK_A_MOLE_BUTTONS = listOf(
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+    "+", "*", "/", "=", "%", "( )", ".", "C", "DEL"
+)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RESPONSIVE DIMENSIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Responsive dimension provider that calculates sizes based on screen dimensions.
+ * Use this to get consistent, proportional sizing across all devices.
+ */
+data class ResponsiveDimensions(
+    val screenWidth: Dp,
+    val screenHeight: Dp,
+    val isLandscape: Boolean,
+    val isTablet: Boolean,
+    val statusBarHeight: Dp,
+
+    // Calculated dimensions
+    val adBannerHeight: Dp,
+    val buttonRowHeight: Dp,
+    val buttonSpacing: Dp,
+    val lcdDisplayHeight: Dp,
+    val contentPadding: Dp,
+    val messageFontSize: Int,
+    val displayFontSizeBase: Int,
+
+    // Landscape-specific
+    val leftPanelWeight: Float,
+    val rightPanelWeight: Float,
+    val keyboardWidth: Dp
+)
+
+/**
+ * Creates responsive dimensions based on current screen configuration.
+ * Call this in your Composable to get device-appropriate sizing.
+ */
+@Composable
+fun rememberResponsiveDimensions(): ResponsiveDimensions {
+    // LocalConfiguration is Android-only; LocalWindowInfo.containerSize is the
+    // multiplatform equivalent. It reports pixels, so it is converted through the
+    // current density to get the same dp values the Android build used.
+    val density = LocalDensity.current
+    val containerSize = LocalWindowInfo.current.containerSize
+    val screenWidth = with(density) { containerSize.width.toDp() }
+    val screenHeight = with(density) { containerSize.height.toDp() }
+    val isLandscape = screenWidth > screenHeight
+    val isTablet = screenWidth.value > 600
+    val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+
+    // Calculate proportional dimensions
+    val shortestDimension = minOf(screenWidth, screenHeight)
+
+    return ResponsiveDimensions(
+        screenWidth = screenWidth,
+        screenHeight = screenHeight,
+        isLandscape = isLandscape,
+        isTablet = isTablet,
+        statusBarHeight = statusBarHeight,
+
+        // Ad banner: ~6% of screen height, min 40dp, max 60dp
+        adBannerHeight = (screenHeight.value * 0.06f).dp.coerceIn(40.dp, 60.dp),
+
+        // Button rows: larger proportion in landscape since we have less vertical space
+        buttonRowHeight = if (isLandscape) {
+            (screenHeight.value * 0.12f).dp.coerceIn(44.dp, 56.dp)
+        } else {
+            (screenHeight.value * 0.075f).dp.coerceIn(50.dp, 65.dp)
+        },
+
+        // Button spacing: proportional to shortest dimension
+        buttonSpacing = (shortestDimension.value * 0.02f).dp.coerceIn(4.dp, 10.dp),
+
+        // LCD display height: proportional
+        lcdDisplayHeight = if (isLandscape) {
+            (screenHeight.value * 0.18f).dp.coerceIn(70.dp, 100.dp)
+        } else {
+            (screenHeight.value * 0.12f).dp.coerceIn(80.dp, 120.dp)
+        },
+
+        // Content padding: proportional
+        contentPadding = (shortestDimension.value * 0.04f).dp.coerceIn(12.dp, 20.dp),
+
+        // Font sizes (in sp, returned as Int)
+        messageFontSize = if (isLandscape || screenWidth.value < 400) 22 else 28,
+        displayFontSizeBase = if (isLandscape) 48 else 58,
+
+        // Landscape panel weights
+        leftPanelWeight = 0.58f,
+        rightPanelWeight = 0.42f,
+
+        // Keyboard width in landscape (fixed proportion of screen)
+        keyboardWidth = if (isLandscape) {
+            (screenWidth.value * 0.4f).dp.coerceIn(200.dp, 320.dp)
+        } else {
+            screenWidth  // Full width in portrait
+        }
+    )
+}
+
+/**
+ * Calculate display font size based on text length.
+ * Automatically scales down for longer numbers.
+ */
+fun calculateDisplayFontSize(textLength: Int, baseFontSize: Int): Int {
+    return when {
+        textLength > 12 -> (baseFontSize * 0.65f).toInt()
+        textLength > 10 -> (baseFontSize * 0.78f).toInt()
+        textLength > 8 -> (baseFontSize * 0.88f).toInt()
+        else -> baseFontSize
+    }
+}

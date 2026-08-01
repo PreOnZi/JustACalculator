@@ -1,0 +1,316 @@
+package com.fictioncutshort.justacalculator.ui.components
+
+import com.fictioncutshort.justacalculator.platform.PlatformWebView
+import com.fictioncutshort.justacalculator.platform.PlatformCameraPreview
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.fictioncutshort.justacalculator.data.CalculatorState
+import com.fictioncutshort.justacalculator.logic.CalculatorActions
+import com.fictioncutshort.justacalculator.util.*
+
+/**
+ * PortraitCalculatorLayout.kt
+ *
+ * Portrait-specific layout for the calculator.
+ * Vertical stack: Messages at top, camera/browser/display in middle, keyboard at bottom.
+ */
+
+@Composable
+fun PortraitCalculatorContent(
+    state: MutableState<CalculatorState>,
+    current: CalculatorState,
+    displayText: String,
+    buttonLayout: List<List<String>>,
+    dimensions: ResponsiveDimensions,
+    textColor: Color,
+    currentShakeIntensity: Float,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Transparent)
+            .navigationBarsPadding()
+            .padding(horizontal = dimensions.contentPadding)
+    ) {
+        // Mute button + spinner indicator - always present, button visible from step 19
+        MuteButtonWithSpinner(
+            isMuted = current.isMuted,
+            isAutoProgressing = current.showSpinner,
+            showButton = current.conversationStep >= 19 || current.isMuted,
+            onClick = {
+                val result = CalculatorActions.handleMuteButtonClick()
+                when (result) {
+                    1 -> CalculatorActions.showDebugMenu(state)
+                    2 -> CalculatorActions.resetGame(state)
+                    else -> CalculatorActions.toggleConversation(state)
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 8.dp)
+        )
+
+        // Message display - top left
+        if (current.message.isNotEmpty() && !current.isMuted) {
+            MessageDisplay(
+                message = current.message,
+                countdownTimer = current.countdownTimer,
+                conversationStep = current.conversationStep,
+                awaitingChoice = current.awaitingChoice,
+                textColor = textColor,
+                dimensions = dimensions,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(top = 8.dp, end = 50.dp)
+            )
+        }
+
+        // Main content column
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.Bottom
+        ) {
+            if (current.cameraActive) {
+                // Top quarter stays clear for the message/talk overlay.
+                // Camera fills the remaining three quarters above the keyboard area.
+                Spacer(Modifier.weight(1f))
+                PlatformCameraPreview(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(3f),
+                    useFrontCamera = current.cameraUseFrontCamera
+                )
+            } else {
+                // Normal display + keyboard. (Dormancy uses its own
+                // dedicated screen — see DormancyScreen — so it never
+                // routes through this branch.)
+                when {
+                    current.showBrowser -> {
+                        // Suppress the inline floating LCD over the browser —
+                        // in portrait the LCD slot is taken by the browser
+                        // itself, so showing a small "0" overlay was just
+                        // visual noise. The math result still lives in state
+                        // and reappears as soon as the browser closes.
+                        BrowserViewWithFloatingDisplay(
+                            displayText = displayText,
+                            browserSearchText = current.browserSearchText,
+                            browserShowWikipedia = current.browserShowWikipedia,
+                            browserShowError = current.browserShowError,
+                            dimensions = dimensions,
+                            showFloatingDisplay = false,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                        )
+                    }
+                    else -> {
+                        CalculatorLcdDisplay(
+                            displayText = displayText,
+                            operationHistory = current.operationHistory,
+                            isReadyForNewOperation = current.isReadyForNewOperation,
+                            invertedColors = current.invertedColors,
+                            dimensions = dimensions,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .padding(start = 8.dp, end = 8.dp, bottom = 16.dp)
+                        )
+                    }
+                }
+                RadButton(
+                    visible = current.radButtonVisible,
+                    allButtonsRad = current.allButtonsRad,
+                    dimensions = dimensions
+                )
+                CalculatorButtonGrid(
+                    buttonLayout = buttonLayout,
+                    dimensions = dimensions,
+                    shakeIntensity = currentShakeIntensity,
+                    invertedColors = current.invertedColors,
+                    minusButtonDamaged = current.minusButtonDamaged,
+                    minusButtonBroken = current.minusButtonBroken,
+                    flickeringButton = current.flickeringButton,
+                    darkButtons = current.darkButtons,
+                    allButtonsRad = current.allButtonsRad,
+                    radButtonsConverted = current.radButtonsConverted,
+                    rantMode = current.rantMode,
+                    onButtonClick = { symbol ->
+                        // "RAD" is the post-story relabel of the clear key — same action.
+                        CalculatorActions.handleInput(state, if (symbol == "RAD") "C" else symbol)
+                    }
+                )
+            }
+        }
+    }
+}
+
+// ---
+// BROWSER VIEW COMPONENT
+// ---
+
+@Composable
+fun BrowserViewWithFloatingDisplay(
+    displayText: String,
+    browserSearchText: String,
+    browserShowWikipedia: Boolean,
+    browserShowError: Boolean,
+    dimensions: ResponsiveDimensions,
+    modifier: Modifier = Modifier,
+    showFloatingDisplay: Boolean = true,
+    topPadding: Dp? = null
+) {
+    // Default top padding makes room for the portrait message above. Landscape
+    // overrides this via the `topPadding` parameter because its message sits
+    // beside the browser, not above.
+    val resolvedTopPadding = topPadding
+        ?: (dimensions.screenHeight.value * 0.12f).dp.coerceIn(80.dp, 120.dp)
+
+    Box(
+        modifier = modifier
+            .padding(top = resolvedTopPadding, bottom = 8.dp)
+    ) {
+        // Browser container
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.White)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // URL/Search bar with animated text
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                        .background(
+                            Color(0xFFF0F0F0),
+                            RoundedCornerShape(24.dp)
+                        )
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                ) {
+                    Text(
+                        text = browserSearchText.ifEmpty { "Search..." },
+                        fontSize = if (browserShowWikipedia) 12.sp else 16.sp,
+                        fontFamily = if (browserSearchText.isNotEmpty()) CalculatorDisplayFont else null,
+                        color = if (browserSearchText.isEmpty()) Color.Gray else Color.Black,
+                        maxLines = 1
+                    )
+                }
+
+                // Content area
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    when {
+                        browserShowWikipedia -> {
+                            WikipediaContent()
+                        }
+                        browserShowError -> {
+                            BrowserErrorContent()
+                        }
+                        else -> {
+                            // Google logo
+                            Text(
+                                text = "Google",
+                                fontSize = 48.sp,
+                                fontFamily = CalculatorDisplayFont,
+                                color = Color(0xFF4285F4)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Floating calculator display over browser. Landscape opts out via
+        // showFloatingDisplay = false and renders its own LCD overlay instead.
+        if (showFloatingDisplay) {
+            FloatingDisplay(
+                displayText = displayText,
+                modifier = Modifier.align(Alignment.BottomEnd)
+            )
+        }
+    }
+}
+
+@Composable
+private fun WikipediaContent() {
+    var webViewFailed by remember { mutableStateOf(false) }
+
+    if (!webViewFailed) {
+        PlatformWebView(
+            url = "https://en.wikipedia.org/wiki/Calculator",
+            modifier = Modifier.fillMaxSize(),
+            onLoadError = { webViewFailed = true },
+        )
+    } else {
+        // Fallback: Fake Wikipedia page
+        FakeWikipediaContent()
+    }
+}
+
+@Composable
+private fun BrowserErrorContent() {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "âš ",
+            fontSize = 48.sp,
+            color = Color.Gray
+        )
+        Text(
+            text = "No internet connection",
+            fontSize = 20.sp,
+            fontFamily = CalculatorDisplayFont,
+            color = Color.Gray,
+            modifier = Modifier.padding(top = 8.dp)
+        )
+    }
+}
+
+// ---
+// FLOATING DISPLAY (used over camera and browser)
+// ---
+
+@Composable
+private fun FloatingDisplay(
+    displayText: String,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .background(
+                Color.White.copy(alpha = 0.85f),
+                RoundedCornerShape(8.dp)
+            )
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = displayText,
+            fontSize = 48.sp,
+            color = Color(0xFF0A0A0A),
+            textAlign = TextAlign.End,
+            maxLines = 1,
+            fontFamily = CalculatorDisplayFont
+        )
+    }
+}
