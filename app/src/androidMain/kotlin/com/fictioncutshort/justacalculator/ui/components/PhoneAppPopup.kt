@@ -1,5 +1,6 @@
 package com.fictioncutshort.justacalculator.ui.components
 
+import com.fictioncutshort.justacalculator.platform.Assets
 import org.jetbrains.compose.resources.painterResource
 import com.fictioncutshort.justacalculator.resources.calc_app_icon
 import com.fictioncutshort.justacalculator.resources.Res
@@ -41,7 +42,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.Image
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.fictioncutshort.justacalculator.R
 import kotlinx.coroutines.delay
 
@@ -186,7 +187,7 @@ fun GrowingBirdsPopup(onClose: () -> Unit) {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 AsyncImage(
-                    model = "file:///android_asset/phonescreen/phonedetour/aggitatedbirds.svg",
+                    model = Assets.uri("phonescreen/phonedetour/aggitatedbirds.svg"),
                     contentDescription = null,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.size(48.dp)

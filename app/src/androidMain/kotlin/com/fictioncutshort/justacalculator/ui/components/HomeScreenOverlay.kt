@@ -1,9 +1,11 @@
 package com.fictioncutshort.justacalculator.ui.components
 
+import com.fictioncutshort.justacalculator.platform.screenMetrics
+import com.fictioncutshort.justacalculator.platform.currentAppContext
+import com.fictioncutshort.justacalculator.platform.openExternalUrl
+import com.fictioncutshort.justacalculator.platform.Assets
 import com.fictioncutshort.justacalculator.resources.calc_app_icon
 import com.fictioncutshort.justacalculator.resources.Res
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
@@ -46,14 +48,13 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import org.jetbrains.compose.resources.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.fictioncutshort.justacalculator.R
 import com.fictioncutshort.justacalculator.logic.TalkAudioHandler
 import com.fictioncutshort.justacalculator.ui.screens.PhoneTetrisApp
@@ -94,9 +95,9 @@ fun HomeScreenOverlay(
     onIconClick: (String) -> Unit = {},
     onReturnToCalculator: () -> Unit = {}
 ) {
-    val context = LocalContext.current
-    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-    val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val context = currentAppContext()
+    val configuration = screenMetrics()
+    val isLandscape = configuration.isLandscape
     // Wider grid in landscape so the icons aren't strewn across half a screen
     // each. Dock keeps its existing relative sizing.
     val gridColumns = if (isLandscape) 6 else 4
@@ -218,14 +219,7 @@ fun HomeScreenOverlay(
     // Mail intent fires the moment "mail" becomes active, then resets.
     LaunchedEffect(activeApp) {
         if (activeApp == "mail") {
-            try {
-                val intent = Intent(Intent.ACTION_SENDTO).apply {
-                    data = Uri.parse("mailto:fictioncutshort@gmail.com")
-                }
-                context.startActivity(intent)
-            } catch (e: Exception) {
-                android.util.Log.w("JustACalc", "Mail intent failed: ${e.message}")
-            }
+            openExternalUrl(context, "mailto:fictioncutshort@gmail.com")
             activeApp = null
         }
     }
@@ -233,7 +227,7 @@ fun HomeScreenOverlay(
     Box(modifier = modifier.fillMaxSize()) {
         // ── Wallpaper ─────────────────────────────────────────────────────────
         AsyncImage(
-            model = "file:///android_asset/phonescreen/phonedetour/background.svg",
+            model = Assets.uri("phonescreen/phonedetour/background.svg"),
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
@@ -635,7 +629,7 @@ private fun HomeIconTile(
             .padding(4.dp)
     ) {
         AsyncImage(
-            model = "file:///android_asset/phonescreen/phonedetour/${icon.name}.svg",
+            model = Assets.uri("phonescreen/phonedetour/${icon.name}.svg"),
             contentDescription = icon.label,
             contentScale = ContentScale.Fit,
             modifier = Modifier.size(iconSize)

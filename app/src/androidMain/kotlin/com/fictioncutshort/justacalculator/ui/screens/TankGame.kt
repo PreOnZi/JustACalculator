@@ -65,7 +65,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.fictioncutshort.justacalculator.R
 import com.fictioncutshort.justacalculator.ui.components.DonationLandingPage
 import kotlinx.coroutines.delay
@@ -77,7 +77,7 @@ private const val ICON_DIR_USED  = "phonescreen/tankgame"
 // The degrimer icon always renders from the colour ("fresh") set — it has no
 // black-and-white variant and must look the same everywhere. (The giftcard now
 // uses the 3D currency model via GiftcardIcon, see CurrencyIcon.kt.)
-private const val DEGRIMER_ICON = "file:///android_asset/$ICON_DIR_FRESH/degrimer.svg"
+private val DEGRIMER_ICON = Assets.uri("$ICON_DIR_FRESH/degrimer.svg")
 
 // SharedPreferences (shared with the city) — giftcards persist across entries.
 private const val PREFS_NAME = "calc_city"
@@ -206,7 +206,7 @@ fun TankGame(onComplete: () -> Unit) {
 
     Box(modifier = Modifier.fillMaxSize().background(Color(0xFF101418))) {
         AsyncImage(
-            model = "file:///android_asset/$ICON_DIR_FRESH/background.svg",
+            model = Assets.uri("$ICON_DIR_FRESH/background.svg"),
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
@@ -232,7 +232,7 @@ fun TankGame(onComplete: () -> Unit) {
                         val dir = if (app.name in visited && !sticky) ICON_DIR_USED else ICON_DIR_FRESH
                         IconTile(
                             label = app.label,
-                            assetPath = "file:///android_asset/$dir/${app.name}.svg",
+                            assetPath = Assets.uri("$dir/${app.name}.svg"),
                             enabled = !used,
                             onClick = { activeApp = app.name }
                         )
@@ -281,13 +281,13 @@ fun TankGame(onComplete: () -> Unit) {
             ) {
                 when (pendingNotif) {
                     "tetris" -> NotifBanner(
-                        icon = "file:///android_asset/$ICON_DIR_FRESH/tetris.svg",
+                        icon = Assets.uri("$ICON_DIR_FRESH/tetris.svg"),
                         title = "fallingBlocks",
                         body = "Win Dumbazon giftcards, play for free!",
                         onClick = { tetrisNotif = false; tetrisNotifDone = true; activeApp = "tetris" }
                     )
                     "amax" -> NotifBanner(
-                        icon = "file:///android_asset/$ICON_DIR_FRESH/message.svg",
+                        icon = Assets.uri("$ICON_DIR_FRESH/message.svg"),
                         title = "Amax",
                         body = "Free giftcards here: hxxp://amax-free-cards.win/claim",
                         onClick = { amaxNotif = false; amaxDone = true; virusActive = true }
@@ -369,7 +369,7 @@ private fun DockBar(visited: Set<String>, onTap: (String) -> Unit) {
             val used = app.name in visited
             val dir = if (used) ICON_DIR_USED else ICON_DIR_FRESH
             AsyncImage(
-                model = "file:///android_asset/$dir/${app.name}.svg",
+                model = Assets.uri("$dir/${app.name}.svg"),
                 contentDescription = app.label,
                 modifier = Modifier
                     .size(54.dp)
@@ -607,7 +607,7 @@ private fun TukTakVideo(res: String, modifier: Modifier = Modifier) {
 private data class DumbProduct(
     val title: String, val desc: String, val image: String, val swatch: Color, val margin: Int,
 )
-private const val PHONE_DIR = "file:///android_asset/phonescreen/phonedetour"
+private val PHONE_DIR = Assets.uri("phonescreen/phonedetour")
 private val DUMB_PRODUCTS = listOf(
     DumbProduct("iQoOo 12", "NEW best fast Android phone, BEST camera 18GB RAM, microSD, headphone jack, charger included.", "$PHONE_DIR/phone1.svg", Color(0xFF8C9AA6), 9),
     DumbProduct("UltraPhone 20 pro", "Flagship phone, best camera, fastest Android 15, 23GB ROM, free screen protector, Spotify, YouTube.", "$PHONE_DIR/phone2.svg", Color(0xFFB7A38C), 29),
@@ -854,7 +854,7 @@ private fun AppDuolingo(addGiftcards: (Int) -> Unit, onClose: () -> Unit) {
                 .height(faceBoxH)
         ) {
             AsyncImage(
-                model = "file:///android_asset/filters/full.svg",
+                model = Assets.uri("filters/full.svg"),
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize()
             )
@@ -1798,7 +1798,7 @@ private fun AppTetris(addGiftcards: (Int) -> Unit, giftcards: Int, onClose: () -
                                 } else if (drawIcon != null) {
                                     // Everything else desaturates once phase ≥ 1.
                                     AsyncImage(
-                                        model = "file:///android_asset/${if (phase >= 1) ICON_DIR_USED else ICON_DIR_FRESH}/$drawIcon.svg",
+                                        model = Assets.uri("${if (phase >= 1) ICON_DIR_USED else ICON_DIR_FRESH}/$drawIcon.svg"),
                                         contentDescription = null,
                                         modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(3.dp))
                                     )

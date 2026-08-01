@@ -1,5 +1,6 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.platform.Assets
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -27,7 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 import kotlin.random.Random
@@ -218,7 +219,7 @@ fun FlappyBirdGame(
         val birdSprite = if (vel < 0f) "birdup" else "birddown"
         val spriteDp = with(density) { spriteSize.toDp() }
         AsyncImage(
-            model = "file:///android_asset/flappybird/$birdSprite.svg",
+            model = Assets.uri("flappybird/$birdSprite.svg"),
             contentDescription = null,
             modifier = Modifier
                 .offset {

@@ -1,5 +1,6 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.platform.Assets
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -46,7 +47,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.fictioncutshort.justacalculator.logic.Currency
 import com.fictioncutshort.justacalculator.logic.CurrencyStore
 import kotlin.math.floor
@@ -741,8 +742,8 @@ fun StarSlotsGame(onDone: () -> Unit) {
     // Each reel's strip: 6 colourful + its own greyed icon (index 6 = "black").
     val reels = remember {
         List(4) { r ->
-            SLOT_COLOR.map { SlotSym("file:///android_asset/$PHONE_FRESH/$it.svg", false) } +
-                SlotSym("file:///android_asset/$PHONE_USED/${SLOT_BLACK[r]}.svg", true)
+            SLOT_COLOR.map { SlotSym(Assets.uri("$PHONE_FRESH/$it.svg"), false) } +
+                SlotSym(Assets.uri("$PHONE_USED/${SLOT_BLACK[r]}.svg"), true)
         }
     }
     val stripSize = SLOT_COLOR.size + 1
@@ -832,7 +833,7 @@ fun StarSlotsGame(onDone: () -> Unit) {
                 }
 
                 // 3) The shape I provided, on top of the reels + cut-out RGB.
-                AsyncImage(model = "file:///android_asset/slots.svg", contentDescription = null,
+                AsyncImage(model = Assets.uri("slots.svg"), contentDescription = null,
                     modifier = Modifier.fillMaxSize())
 
                 // 4) Outer + title RGB on top — rounded to match the yellow corners.

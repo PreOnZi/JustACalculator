@@ -1,9 +1,6 @@
 package com.fictioncutshort.justacalculator
 
 import android.app.Application
-import coil.ImageLoader
-import coil.ImageLoaderFactory
-import coil.decode.SvgDecoder
 import com.fictioncutshort.justacalculator.logic.CalculatorActions
 import com.fictioncutshort.justacalculator.logic.EasterEggTheme
 
@@ -20,13 +17,15 @@ import com.fictioncutshort.justacalculator.logic.EasterEggTheme
  * leaving `prefs == null` for the entire session and silently no-opping every
  * persistConversationStep / persistInConversation call.
  *
- * Implements [ImageLoaderFactory] so Coil's `AsyncImage` automatically picks
- * up the SVG decoder for asset-loaded SVGs in phonescreen/phonedetour/.
+ * Also installs the shared Coil image loader, so `AsyncImage` picks up the SVG
+ * decoder for the asset-loaded SVGs in phonescreen/phonedetour/.
  */
-class JustACalculatorApp : Application(), ImageLoaderFactory {
+class JustACalculatorApp : Application() {
     override fun onCreate() {
         super.onCreate()
         android.util.Log.d("JustACalc", "🟢 Application.onCreate — initializing CalculatorActions")
+        com.fictioncutshort.justacalculator.platform.AppInit.initialize(applicationContext)
+        com.fictioncutshort.justacalculator.platform.installImageLoader()
         CalculatorActions.init(applicationContext)
         EasterEggTheme.init(applicationContext)
         // Guarantee the narration player has a context before ANY screen plays a
@@ -36,9 +35,4 @@ class JustACalculatorApp : Application(), ImageLoaderFactory {
         com.fictioncutshort.justacalculator.logic.VoiceoverManager.init(applicationContext)
     }
 
-    override fun newImageLoader(): ImageLoader {
-        return ImageLoader.Builder(this)
-            .components { add(SvgDecoder.Factory()) }
-            .build()
-    }
 }

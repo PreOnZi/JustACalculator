@@ -41,6 +41,9 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.lifecycle.viewmodel.compose)
             implementation(libs.lifecycle.runtime.compose)
+            // Coil 3 — multiplatform image loading (SVG icons from assets).
+            implementation(libs.coil.compose)
+            implementation(libs.coil.svg)
         }
 
         androidMain.dependencies {
@@ -65,9 +68,6 @@ kotlin {
             // (landmark anchoring for PNG overlays). On-device, offline, no API key.
             implementation("com.google.mlkit:face-detection:16.1.7")
 
-            // Coil for image loading (SVGs from assets, used by HomeScreenOverlay).
-            implementation("io.coil-kt:coil-compose:2.7.0")
-            implementation("io.coil-kt:coil-svg:2.7.0")
             // AndroidSVG — rasterise the Building 7 vector filters straight to bitmaps.
             implementation("com.caverock:androidsvg-aar:1.4")
 

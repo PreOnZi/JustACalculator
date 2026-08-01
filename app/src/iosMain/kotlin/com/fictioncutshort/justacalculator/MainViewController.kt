@@ -5,6 +5,7 @@ import androidx.compose.ui.window.ComposeUIViewController
 import com.fictioncutshort.justacalculator.logic.CalculatorActions
 import com.fictioncutshort.justacalculator.platform.AppInit
 import com.fictioncutshort.justacalculator.platform.IosAppContext
+import com.fictioncutshort.justacalculator.platform.installImageLoader
 import com.fictioncutshort.justacalculator.ui.PortHarnessCalculator
 import platform.UIKit.UIViewController
 
@@ -18,6 +19,7 @@ fun MainViewController(): UIViewController = ComposeUIViewController {
     // Same ordering contract as MainActivity: platform services before any UI.
     if (!AppInit.isInitialized) {
         AppInit.initialize(IosAppContext)
+        installImageLoader()
         CalculatorActions.init(IosAppContext)
     }
 
