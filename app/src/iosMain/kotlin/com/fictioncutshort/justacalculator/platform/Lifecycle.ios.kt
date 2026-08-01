@@ -19,6 +19,10 @@ import platform.UIKit.UIApplicationDidBecomeActiveNotification
 import platform.UIKit.UIApplicationDidEnterBackgroundNotification
 import platform.UIKit.UIApplicationWillEnterForegroundNotification
 import platform.UIKit.UIApplicationWillResignActiveNotification
+import platform.UserNotifications.UNAuthorizationOptionAlert
+import platform.UserNotifications.UNAuthorizationOptionBadge
+import platform.UserNotifications.UNAuthorizationOptionSound
+import platform.UserNotifications.UNUserNotificationCenter
 import platform.darwin.NSObject
 
 /**
@@ -92,5 +96,17 @@ private class LocationPermissionDelegate(
 ) : NSObject(), CLLocationManagerDelegateProtocol {
     override fun locationManagerDidChangeAuthorization(manager: CLLocationManager) {
         onResult(hasPermission(IosAppContext, AppPermission.LOCATION))
+    }
+}
+
+@Composable
+actual fun rememberNotificationPermissionRequest(
+    onResult: (granted: Boolean) -> Unit,
+): () -> Unit {
+    val current by rememberUpdatedState(onResult)
+    return {
+        UNUserNotificationCenter.currentNotificationCenter().requestAuthorizationWithOptions(
+            UNAuthorizationOptionAlert or UNAuthorizationOptionSound or UNAuthorizationOptionBadge,
+        ) { granted, _ -> current(granted) }
     }
 }

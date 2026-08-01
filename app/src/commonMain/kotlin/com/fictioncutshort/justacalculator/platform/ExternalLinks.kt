@@ -9,3 +9,9 @@ package com.fictioncutshort.justacalculator.platform
  * a device with no mail client configured.
  */
 expect fun openExternalUrl(context: AppContext, url: String): Boolean
+
+/**
+ * Opens this app's store listing — Play on Android (falling back to the web if
+ * the Play app is absent), the App Store on iOS.
+ */
+expect fun openAppStoreListing(context: AppContext)

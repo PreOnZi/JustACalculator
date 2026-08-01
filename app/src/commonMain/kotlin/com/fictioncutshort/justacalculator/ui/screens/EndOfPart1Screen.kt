@@ -1,8 +1,8 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
-import android.content.ActivityNotFoundException
-import android.content.Intent
-import android.net.Uri
+import com.fictioncutshort.justacalculator.platform.openAppStoreListing
+import com.fictioncutshort.justacalculator.platform.AppContext
+import com.fictioncutshort.justacalculator.platform.currentAppContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,7 +24,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -45,7 +44,7 @@ import com.fictioncutshort.justacalculator.util.RetroCream
  */
 @Composable
 fun Part1CompletePanel(modifier: Modifier = Modifier) {
-    val context = LocalContext.current
+    val context = currentAppContext()
 
     Column(
         modifier = modifier
@@ -126,20 +125,6 @@ fun EndOfPart1Screen(modifier: Modifier = Modifier) {
     }
 }
 
-private fun openPlayStore(context: android.content.Context) {
-    val pkg = context.packageName
-    val marketIntent = Intent(
-        Intent.ACTION_VIEW,
-        Uri.parse("market://details?id=$pkg")
-    ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-    try {
-        context.startActivity(marketIntent)
-    } catch (_: ActivityNotFoundException) {
-        // Play Store app not installed — fall back to the web link.
-        val webIntent = Intent(
-            Intent.ACTION_VIEW,
-            Uri.parse("https://play.google.com/store/apps/details?id=$pkg")
-        ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-        context.startActivity(webIntent)
-    }
+private fun openPlayStore(context: AppContext) {
+    openAppStoreListing(context)
 }

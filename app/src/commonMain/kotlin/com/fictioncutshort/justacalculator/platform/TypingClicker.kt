@@ -1,12 +1,22 @@
 package com.fictioncutshort.justacalculator.platform
 
 /**
- * The per-character click the calculator makes while "typing" a message.
+ * The story's non-music audio: the per-character typing click, the dormancy
+ * static, and the realtime mic echo used during the phone detour.
  *
- * Narrowed to this one method on purpose: EffectsController only needs the
- * click, while the full TalkAudioHandler also owns realtime mic echo built on
- * AudioRecord/AudioTrack, which has no shared equivalent yet.
+ * Android implements all of it in TalkAudioHandler (AudioRecord + AudioTrack).
+ * The iOS actual is a no-op until that ports — the beats still advance, they are
+ * just silent, which is preferable to blocking the whole story on an
+ * AVAudioEngine port.
  */
 interface TypingClicker {
     fun playTypingClick()
+
+    /** Dormancy static; [onComplete] fires when it finishes. */
+    fun playStaticSound(onComplete: () -> Unit = {}) = onComplete()
+
+    /** Begin echoing the mic back at the player. */
+    fun startRealtimeEcho(decay: Float = 0.18f, distortion: Float = 1.0f) = Unit
+
+    fun stopRealtimeEcho() = Unit
 }

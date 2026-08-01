@@ -37,3 +37,15 @@ expect fun rememberPermissionRequest(
     permission: AppPermission,
     onResult: (granted: Boolean) -> Unit,
 ): () -> Unit
+
+/**
+ * Asks for permission to post notifications.
+ *
+ * Separate from [rememberPermissionRequest] because it is not a device
+ * capability: Android only made it a runtime grant in 13 (and auto-grants
+ * below that), while iOS has always required an explicit prompt.
+ */
+@Composable
+expect fun rememberNotificationPermissionRequest(
+    onResult: (granted: Boolean) -> Unit,
+): () -> Unit

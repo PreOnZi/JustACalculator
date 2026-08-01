@@ -148,36 +148,26 @@ lands them at `<bundle>/assets/`. Relative paths are therefore identical
 (`"models/stickman.obj"`), and the [Assets] seam is deliberately **synchronous** —
 the GL renderers and audio players load from threads with no coroutine scope.
 
-## The path to deleting `PortHarness.kt`
+## CalculatorScreen: ported
 
-`MainActivity.CalculatorScreen` (2,257 lines, **64 LaunchedEffect/DisposableEffect
-blocks**) is the last big piece. It owns the terms/privacy screen, the timers
-that animate the story, and every overlay. Until it is ported, iOS shows the
-real calculator but no story.
+`MainActivity.CalculatorScreen` — 2,257 lines and 64 effect blocks — now lives
+in `commonMain/ui/CalculatorScreen.kt` and runs on both platforms. MainActivity
+is a 57-line Android entry point; `MainViewController` is its iOS counterpart.
+**`PortHarness.kt` is deleted.**
 
-Its dependencies — 15 of 18 shared:
+The terms/privacy screen and the story timers run on iOS.
 
-| Dependency | State |
+Four dependencies are stubbed behind `UnportedScreens.kt` and render a labelled
+"not ported yet" panel on iOS rather than failing silently. Each disappears when
+its real implementation lands; nothing at the call site changes.
+
+| Stub | Waiting on |
 |---|---|
-| AutoProgressEffects | ✅ commonMain |
-| BrowserEffects | ✅ commonMain |
-| DormancyManager | ✅ commonMain |
-| EffectsController | ✅ commonMain |
-| Consolewindow | ✅ commonMain |
-| Browseroverlay | ✅ commonMain |
-| Landscapecalculatorlayout | ✅ commonMain |
-| PausedCalculatorOverlay | ✅ commonMain |
-| PhoneOverlay | ✅ commonMain |
-| PortraitCalculatorContent | ✅ commonMain |
-| ScambleGameOverlay | ✅ commonMain |
-| Filecreation | ✅ commonMain |
-| Calculatorcomponents | ✅ commonMain |
-| Adcardstack | ⬜ **blocked on the GL city** — it launches CalculatorCityView, BeepCheckScreen and VoiceoverManager. Its 25 drawables are already on Compose Resources. |
-| LetterBlockGame | ✅ commonMain |
-| HomeScreenOverlay | ⬜ needs TalkAudioHandler, PhonebookContact, CalcFakeNotification |
-| util/Notifications | ✅ commonMain |
-| TalkAudioHandler | ⬜ `AudioRecord`/`AudioTrack` realtime mic echo — hard |
-| Camerapreview | ⬜ CameraX → AVFoundation — hard (placeholder ships today) |
+| `PlatformAdCardStack` | the OpenGL city (~12k lines) |
+| `PlatformHomeScreenOverlay` | contacts + mic echo |
+| `PlatformDebugPasswordGate` | the city debug menu |
+| `createTalkAudioHandler` | AVAudioEngine mic echo (no-op on iOS today) |
+| `PlatformCameraPreview` | AVFoundation capture |
 
 ## Remaining, in dependency order
 

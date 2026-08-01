@@ -1,5 +1,9 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.platform.screenMetrics
+import com.fictioncutshort.justacalculator.platform.AppContext
+import com.fictioncutshort.justacalculator.platform.nowMillis
+import com.fictioncutshort.justacalculator.platform.currentAppContext
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -14,7 +18,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -116,10 +119,8 @@ private val PIXEL_DIGITS: Map<Char, List<String>> = mapOf(
  */
 @Composable
 fun DormancyCountdown(modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-    val isLandscape = configuration.orientation ==
-        android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val context = currentAppContext()
+    val isLandscape = screenMetrics().isLandscape
 
     var remainingMs by remember { mutableLongStateOf(computeRemainingMs(context)) }
 
@@ -133,8 +134,8 @@ fun DormancyCountdown(modifier: Modifier = Modifier) {
     if (remainingMs <= 0) return
 
     val totalSeconds = (remainingMs / 1000).toInt()
-    val mm = "%02d".format(totalSeconds / 60)
-    val ss = "%02d".format(totalSeconds % 60)
+    val mm = (totalSeconds / 60).toString().padStart(2, '0')
+    val ss = (totalSeconds % 60).toString().padStart(2, '0')
     val pixelColor = Color(200, 200, 200, (0.14f * 255).toInt())
 
     // Portrait: stack MM over SS, large cells, centred at the top.
@@ -208,10 +209,10 @@ private fun PixelText(text: String, cellSize: Dp, color: Color) {
     }
 }
 
-private fun computeRemainingMs(context: android.content.Context): Long {
+private fun computeRemainingMs(context: AppContext): Long {
     val rantEnd = DormancyManager.getRantEndTime(context)
     if (rantEnd < 0) return 0L
-    val elapsed = System.currentTimeMillis() - rantEnd
+    val elapsed = nowMillis() - rantEnd
     return (DormancyManager.DORMANCY_COMPLETE_MS - elapsed).coerceAtLeast(0L)
 }
 
@@ -283,7 +284,7 @@ private fun DormancyRadCell(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     val backgroundColor = if (isPressed) Color(0xFF3A0000) else Color(0xFF8B0000)
     val textColor = if (isPressed) Color(0xFF888888) else Color.White
 
@@ -342,7 +343,7 @@ fun DormancyScreen(
     currentShakeIntensity: Float,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     // Local-only: tracks which keyboard cells the user has clicked away
     // during dormancy. Not persisted — on app restart the keyboard re-fills
     // and the user can clear it again. The "additional" grid above keeps its

@@ -49,3 +49,22 @@ actual fun rememberPermissionRequest(
     }
     return { launcher.launch(name) }
 }
+
+@Composable
+actual fun rememberNotificationPermissionRequest(
+    onResult: (granted: Boolean) -> Unit,
+): () -> Unit {
+    val current by rememberUpdatedState(onResult)
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> current(granted) }
+
+    return {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            // Auto-granted before Android 13.
+            current(true)
+        }
+    }
+}

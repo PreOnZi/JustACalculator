@@ -64,10 +64,7 @@ class TalkAudioHandler(private val context: Context) : com.fictioncutshort.justa
      * @param distortion soft-clipping gain; 1.0 = none. Lower values reduce the
      *                   harsh saturation that sells the rotary-phone fail.
      */
-    fun startRealtimeEcho(
-        decay: Float = 0.4f,
-        distortion: Float = 1.2f
-    ) {
+    override fun startRealtimeEcho(decay: Float, distortion: Float) {
         activeEchoDecay = decay
         activeDistortion = distortion
         echoMuted = false
@@ -132,7 +129,7 @@ class TalkAudioHandler(private val context: Context) : com.fictioncutshort.justa
     /**
      * Stop audio processing
      */
-    fun stopRealtimeEcho() {
+    override fun stopRealtimeEcho() {
         isProcessing = false
         processingJob?.cancel()
 
@@ -177,7 +174,7 @@ class TalkAudioHandler(private val context: Context) : com.fictioncutshort.justa
     /**
      * Play static crackle sound
      */
-    fun playStaticSound(onComplete: () -> Unit) {
+    override fun playStaticSound(onComplete: () -> Unit) {
         CoroutineScope(Dispatchers.IO).launch {
             val staticTrack = AudioTrack.Builder()
                 .setAudioAttributes(

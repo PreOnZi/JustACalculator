@@ -16,3 +16,12 @@ actual fun openExternalUrl(context: AppContext, url: String): Boolean = try {
     logWarn("ExternalLinks", "Could not open $url: ${e.message}")
     false
 }
+
+actual fun openAppStoreListing(context: AppContext) {
+    val pkg = context.packageName
+    // market:// opens the Play app directly; the https form is the fallback for
+    // devices without it.
+    if (!openExternalUrl(context, "market://details?id=$pkg")) {
+        openExternalUrl(context, "https://play.google.com/store/apps/details?id=$pkg")
+    }
+}
