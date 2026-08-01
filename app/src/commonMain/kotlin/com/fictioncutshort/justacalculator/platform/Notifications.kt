@@ -24,8 +24,22 @@ expect object LocalNotifications {
     /** Post [message] immediately under [id]. */
     fun postNow(context: AppContext, id: Int, message: String)
 
-    /** Arm [message] to fire at absolute wall-clock [triggerAtMillis]. */
-    fun scheduleAt(context: AppContext, id: Int, message: String, triggerAtMillis: Long)
+    /**
+     * Arm [message] to fire at absolute wall-clock [triggerAtMillis].
+     *
+     * [spaced] opts the notification into the dormancy sequence's minimum-gap
+     * guard. Only the dormancy beats want it: that guard drops any id at or
+     * below the last one delivered, so a low-id one-off like the repair-complete
+     * beat would be silently swallowed once dormancy has run. Ignored on iOS,
+     * which does not batch scheduled notifications.
+     */
+    fun scheduleAt(
+        context: AppContext,
+        id: Int,
+        message: String,
+        triggerAtMillis: Long,
+        spaced: Boolean = false,
+    )
 
     /** Cancel every pending notification in [ids] that has not fired yet. */
     fun cancel(context: AppContext, ids: List<Int>)

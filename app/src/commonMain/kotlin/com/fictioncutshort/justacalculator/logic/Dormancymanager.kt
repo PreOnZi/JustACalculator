@@ -160,7 +160,7 @@ object DormancyManager {
      * guard in [postSpaced] is what keeps the sequence readable.
      */
     private fun scheduleOne(context: AppContext, id: Int, message: String, triggerAt: Long) {
-        LocalNotifications.scheduleAt(context, id, message, triggerAt)
+        LocalNotifications.scheduleAt(context, id, message, triggerAt, spaced = true)
     }
 
     /**

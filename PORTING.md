@@ -148,7 +148,7 @@ blocks**) is the last big piece. It owns the terms/privacy screen, the timers
 that animate the story, and every overlay. Until it is ported, iOS shows the
 real calculator but no story.
 
-Its dependencies — 13 of 18 shared:
+Its dependencies — 15 of 18 shared:
 
 | Dependency | State |
 |---|---|
@@ -165,10 +165,10 @@ Its dependencies — 13 of 18 shared:
 | ScambleGameOverlay | ✅ commonMain |
 | Filecreation | ✅ commonMain |
 | Calculatorcomponents | ✅ commonMain |
-| Adcardstack | ⬜ `LocalContext` + 25 `R.drawable` webps → composeResources |
-| LetterBlockGame | ⬜ `nativeCanvas` → Compose Canvas |
+| Adcardstack | ⬜ **blocked on the GL city** — it launches CalculatorCityView, BeepCheckScreen and VoiceoverManager. Its 25 drawables are already on Compose Resources. |
+| LetterBlockGame | ✅ commonMain |
 | HomeScreenOverlay | ⬜ needs TalkAudioHandler, PhonebookContact, CalcFakeNotification |
-| util/Notifications | ⬜ small — folds into `LocalNotifications` |
+| util/Notifications | ✅ commonMain |
 | TalkAudioHandler | ⬜ `AudioRecord`/`AudioTrack` realtime mic echo — hard |
 | Camerapreview | ⬜ CameraX → AVFoundation — hard (placeholder ships today) |
 

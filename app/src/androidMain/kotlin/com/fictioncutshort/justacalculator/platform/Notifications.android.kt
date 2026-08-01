@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import com.fictioncutshort.justacalculator.MainActivity
 import com.fictioncutshort.justacalculator.R
 import com.fictioncutshort.justacalculator.logic.DormancyNotificationReceiver
+import com.fictioncutshort.justacalculator.util.NotificationReceiver
 
 private const val CHANNEL_ID = "dormancy_channel"
 
@@ -65,9 +66,15 @@ actual object LocalNotifications {
      * platform batches it with other pending alarms, which is how twenty beats
      * spaced 30s apart once arrived as a single clump minutes late.
      */
-    actual fun scheduleAt(context: AppContext, id: Int, message: String, triggerAtMillis: Long) {
+    actual fun scheduleAt(
+        context: AppContext,
+        id: Int,
+        message: String,
+        triggerAtMillis: Long,
+        spaced: Boolean,
+    ) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val pending = pendingBroadcast(context, id, message)
+        val pending = pendingBroadcast(context, id, message, spaced)
         val canBeExact = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             alarmManager.canScheduleExactAlarms()
         } else true
@@ -90,11 +97,23 @@ actual object LocalNotifications {
 
     actual fun cancel(context: AppContext, ids: List<Int>) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        ids.forEach { alarmManager.cancel(pendingBroadcast(context, it, null)) }
+        ids.forEach { alarmManager.cancel(pendingBroadcast(context, it, null, spaced = true)) }
     }
 
-    private fun pendingBroadcast(context: AppContext, id: Int, message: String?): PendingIntent {
-        val intent = Intent(context, DormancyNotificationReceiver::class.java).apply {
+    private fun pendingBroadcast(
+        context: AppContext,
+        id: Int,
+        message: String?,
+        spaced: Boolean,
+    ): PendingIntent {
+        // Spaced beats go through DormancyManager's gap guard; everything else
+        // posts directly, or a low id would be dropped by that guard.
+        val target = if (spaced) {
+            DormancyNotificationReceiver::class.java
+        } else {
+            NotificationReceiver::class.java
+        }
+        val intent = Intent(context, target).apply {
             putExtra("notif_id", id)
             if (message != null) putExtra("message", message)
         }

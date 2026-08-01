@@ -1,5 +1,11 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.platform.nowMillis
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -33,7 +39,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -232,13 +237,13 @@ fun LetterBlockGame(
             }
 
             var prevNs = 0L
-            var lastSpawnAt = System.currentTimeMillis()
+            var lastSpawnAt = nowMillis()
             while (true) {
                 val nowNs = withFrameNanos { it }
                 val dt = if (prevNs == 0L) 0f else (nowNs - prevNs) / 1_000_000_000f
                 prevNs = nowNs
                 if (dt > 0f) {
-                    val nowMs = System.currentTimeMillis()
+                    val nowMs = nowMillis()
                     lastSpawnAt = spawnIfNeeded(nowMs, lastSpawnAt)
                     blocks = stepPhysics(
                         blocks,
@@ -290,7 +295,7 @@ fun LetterBlockGame(
             blocks = blocks.map { b ->
                 if (b.id in ids) b.copy(fallingOut = true, vy = -350f) else b
             }
-            fallingOutDeadline = System.currentTimeMillis() + FALL_OUT_DURATION_MS
+            fallingOutDeadline = nowMillis() + FALL_OUT_DURATION_MS
         }
 
         // ── Play area ────────────────────────────────────────────────────
@@ -329,12 +334,14 @@ fun LetterBlockGame(
                     }
                 }
         ) {
+            val textMeasurer = rememberTextMeasurer()
             Canvas(modifier = Modifier.fillMaxSize()) {
                 blocks.forEach { b ->
                     drawCube(
                         block = b,
                         isSelected = b.id in selectedIds,
-                        selectionOrder = selectedIds.indexOf(b.id) + 1
+                        selectionOrder = selectedIds.indexOf(b.id) + 1,
+                        textMeasurer = textMeasurer,
                     )
                 }
             }
@@ -439,7 +446,8 @@ private fun stepPhysics(
 private fun DrawScope.drawCube(
     block: Block,
     isSelected: Boolean,
-    selectionOrder: Int
+    selectionOrder: Int,
+    textMeasurer: TextMeasurer,
 ) {
     val s = block.size
     val cx = block.x
@@ -490,22 +498,17 @@ private fun DrawScope.drawCube(
         style = Stroke(width = 1.5f)
     )
 
-    // Letter — drawn via native canvas because Compose's text APIs from inside
-    // DrawScope are ergonomically painful for this use case. Dark text on
-    // the bright LCD-green selected block reads better than white-on-green.
-    val nativePaint = android.graphics.Paint().apply {
-        color = if (isSelected) android.graphics.Color.rgb(0x2D, 0x2D, 0x2D) else android.graphics.Color.WHITE
-        textAlign = android.graphics.Paint.Align.CENTER
-        textSize = s * 0.55f
-        isAntiAlias = true
-        isFakeBoldText = true
-    }
-    val textY = cy + (nativePaint.textSize / 3f)
-    drawContext.canvas.nativeCanvas.drawText(
-        block.letter.toString(),
-        cx,
-        textY,
-        nativePaint
+    // Letter. Dark text on the bright LCD-green selected block reads better
+    // than white-on-green. TextMeasurer replaces the old native-canvas
+    // drawText, which was Android-only; centring is done by measuring, since
+    // there is no Paint.Align equivalent.
+    drawCenteredText(
+        textMeasurer = textMeasurer,
+        text = block.letter.toString(),
+        centerX = cx,
+        centerY = cy,
+        fontSize = s * 0.55f,
+        color = if (isSelected) Color(0xFF2D2D2D) else Color.White,
     )
 
     // Selection-order badge (small circle bottom-right with the order number).
@@ -520,20 +523,46 @@ private fun DrawScope.drawCube(
             center = Offset(badgeCx, badgeCy),
             style = Stroke(width = 2f)
         )
-        val badgePaint = android.graphics.Paint().apply {
-            color = android.graphics.Color.WHITE
-            textAlign = android.graphics.Paint.Align.CENTER
-            textSize = badgeR * 1.2f
-            isAntiAlias = true
-            isFakeBoldText = true
-        }
-        drawContext.canvas.nativeCanvas.drawText(
-            selectionOrder.toString(),
-            badgeCx,
-            badgeCy + badgeR * 0.4f,
-            badgePaint
+        drawCenteredText(
+            textMeasurer = textMeasurer,
+            text = selectionOrder.toString(),
+            centerX = badgeCx,
+            centerY = badgeCy,
+            fontSize = badgeR * 1.2f,
+            color = Color.White,
         )
     }
+}
+
+/**
+ * Draws [text] centred on ([centerX], [centerY]).
+ *
+ * The native canvas offered Paint.Align.CENTER plus a baseline fudge; Compose
+ * has neither, so the glyph box is measured and offset by half its size.
+ */
+private fun DrawScope.drawCenteredText(
+    textMeasurer: TextMeasurer,
+    text: String,
+    centerX: Float,
+    centerY: Float,
+    fontSize: Float,
+    color: Color,
+) {
+    val layout = textMeasurer.measure(
+        text = AnnotatedString(text),
+        style = TextStyle(
+            fontSize = (fontSize / density).sp,
+            fontWeight = FontWeight.Bold,
+            color = color,
+        ),
+    )
+    drawText(
+        textLayoutResult = layout,
+        topLeft = Offset(
+            centerX - layout.size.width / 2f,
+            centerY - layout.size.height / 2f,
+        ),
+    )
 }
 
 private fun Color.lighten(amount: Float): Color {

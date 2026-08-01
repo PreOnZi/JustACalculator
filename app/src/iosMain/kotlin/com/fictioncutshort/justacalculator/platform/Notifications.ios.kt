@@ -42,7 +42,13 @@ actual object LocalNotifications {
         submit(id, message, delaySeconds = 0.1)
     }
 
-    actual fun scheduleAt(context: AppContext, id: Int, message: String, triggerAtMillis: Long) {
+    actual fun scheduleAt(
+        context: AppContext,
+        id: Int,
+        message: String,
+        triggerAtMillis: Long,
+        spaced: Boolean,
+    ) {
         val nowMs = NSDate().timeIntervalSince1970 * 1000.0
         val delaySeconds = ((triggerAtMillis - nowMs) / 1000.0).coerceAtLeast(0.1)
         submit(id, message, delaySeconds)

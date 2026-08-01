@@ -1,8 +1,37 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import org.jetbrains.compose.resources.DrawableResource
+import com.fictioncutshort.justacalculator.platform.logDebug
+import com.fictioncutshort.justacalculator.platform.currentAppContext
+import com.fictioncutshort.justacalculator.resources.adspexeso_9
+import com.fictioncutshort.justacalculator.resources.adspexeso_8
+import com.fictioncutshort.justacalculator.resources.adspexeso_7
+import com.fictioncutshort.justacalculator.resources.adspexeso_6
+import com.fictioncutshort.justacalculator.resources.adspexeso_5
+import com.fictioncutshort.justacalculator.resources.adspexeso_4
+import com.fictioncutshort.justacalculator.resources.adspexeso_3
+import com.fictioncutshort.justacalculator.resources.adspexeso_25
+import com.fictioncutshort.justacalculator.resources.adspexeso_24
+import com.fictioncutshort.justacalculator.resources.adspexeso_23
+import com.fictioncutshort.justacalculator.resources.adspexeso_22
+import com.fictioncutshort.justacalculator.resources.adspexeso_21
+import com.fictioncutshort.justacalculator.resources.adspexeso_20
+import com.fictioncutshort.justacalculator.resources.adspexeso_2
+import com.fictioncutshort.justacalculator.resources.adspexeso_19
+import com.fictioncutshort.justacalculator.resources.adspexeso_18
+import com.fictioncutshort.justacalculator.resources.adspexeso_17
+import com.fictioncutshort.justacalculator.resources.adspexeso_16
+import com.fictioncutshort.justacalculator.resources.adspexeso_15
+import com.fictioncutshort.justacalculator.resources.adspexeso_14
+import com.fictioncutshort.justacalculator.resources.adspexeso_13
+import com.fictioncutshort.justacalculator.resources.adspexeso_12
+import com.fictioncutshort.justacalculator.resources.adspexeso_11
+import com.fictioncutshort.justacalculator.resources.adspexeso_10
+import com.fictioncutshort.justacalculator.resources.adspexeso_1
+import com.fictioncutshort.justacalculator.resources.Res
 import com.fictioncutshort.justacalculator.R
 import androidx.compose.animation.core.*
-import androidx.compose.ui.res.painterResource
+import org.jetbrains.compose.resources.painterResource
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -23,7 +52,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -108,17 +136,17 @@ data class AdCard(
     val color: Color,
     val accentColor: Color,    // For retro border/trim
     val isSwipeable: Boolean,  // Only first 5 are swipeable
-    val imageRes: Int? = null, // Drawable res — null shows placeholder number
+    val imageRes: DrawableResource? = null, // null shows placeholder number
 )
 
 private fun buildCardStack(): List<AdCard> {
     // ── Swipe-only cards (ids 0–4) → AdsPexeso_21 … AdsPexeso_25 ─────────────
     val swipeImages = listOf(
-        R.drawable.adspexeso_21,
-        R.drawable.adspexeso_22,
-        R.drawable.adspexeso_23,
-        R.drawable.adspexeso_24,
-        R.drawable.adspexeso_25,
+        Res.drawable.adspexeso_21,
+        Res.drawable.adspexeso_22,
+        Res.drawable.adspexeso_23,
+        Res.drawable.adspexeso_24,
+        Res.drawable.adspexeso_25,
     )
     val swipeOnly = (0 until 5).map { i ->
         AdCard(
@@ -245,7 +273,7 @@ fun AdCardStack(
     onJumpToPhase1: ((com.fictioncutshort.justacalculator.data.Chapter) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     val scope = rememberCoroutineScope()
 
     // u2500u2500 State u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
@@ -268,7 +296,7 @@ fun AdCardStack(
     // drops you back in. onCityEntered() (→ saveInCityPhase) is idempotent.
     var previousPhase by remember { mutableStateOf(phase) }
     LaunchedEffect(phase) {
-        android.util.Log.d("JustACalc", "TANK-DEBUG AdCardStack phase=$phase (prev=$previousPhase)")
+        logDebug("JustACalc", "TANK-DEBUG AdCardStack phase=$phase (prev=$previousPhase)")
         if (phase == AdCardPhase.CITY) {
             onCityEntered()
         }
@@ -289,8 +317,8 @@ fun AdCardStack(
         previousPhase = phase
     }
     DisposableEffect(Unit) {
-        android.util.Log.d("JustACalc", "TANK-DEBUG AdCardStack ENTER composition (startAtCity=$startAtCity, phase=$phase)")
-        onDispose { android.util.Log.d("JustACalc", "TANK-DEBUG AdCardStack LEAVE composition") }
+        logDebug("JustACalc", "TANK-DEBUG AdCardStack ENTER composition (startAtCity=$startAtCity, phase=$phase)")
+        onDispose { logDebug("JustACalc", "TANK-DEBUG AdCardStack LEAVE composition") }
     }
 
     // Hint nudge: auto-nudges the top card left/right after 2s idle
@@ -431,7 +459,7 @@ fun AdCardStack(
                         onConfirmed = { phase = AdCardPhase.INTRO }
                     )
                     AdCardPhase.INTRO -> {
-                        val introCtx = LocalContext.current
+                        val introCtx = currentAppContext()
                         // vo001 then vo002, clean — no radio-static bed underneath (it
                         // was distracting over the voice). Only once vo002 finishes do we
                         // drop into the city (its aerial intro), so 003 can fire when the
@@ -725,7 +753,7 @@ private fun AdCardFace(
         if (card.imageRes != null) {
             // Ad image fills the card — no background color, image fills edge to edge
             androidx.compose.foundation.Image(
-                painter = painterResource(id = card.imageRes),
+                painter = painterResource(card.imageRes),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -990,7 +1018,7 @@ private fun CollapseIntoGridAnimation(
             ) {
                 if (pexesoCard?.imageRes != null) {
                     androidx.compose.foundation.Image(
-                        painter = painterResource(id = pexesoCard.imageRes),
+                        painter = painterResource(pexesoCard.imageRes),
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
@@ -1018,7 +1046,7 @@ private fun CollapseIntoGridAnimation(
 data class PexesoCard(
     val id: Int,
     val pairId: Int,      // cards with same pairId are a match
-    val imageRes: Int?,   // face-up image — each card in the pair has its own
+    val imageRes: DrawableResource?,   // face-up image — each card in the pair has its own
     // Fallback color + symbol used until images are assigned
     val color: Color,
     val symbol: String
@@ -1035,17 +1063,17 @@ private val PEXESO_COLORS  = listOf(
 // AdsPexeso_1.png … AdsPexeso_20.png → drawable names: adspexeso_1 … adspexeso_20
 // Pairs: (1,2), (3,4), (5,6), (7,8), (9,10), (11,12), (13,14), (15,16), (17,18), (19,20)
 // Each pair matches its own two cards — identity fixed, grid position shuffles each launch.
-private val PEXESO_PAIR_IMAGES: List<Pair<Int?, Int?>> = listOf(
-    Pair(R.drawable.adspexeso_1,  R.drawable.adspexeso_2),  // pair 0
-    Pair(R.drawable.adspexeso_3,  R.drawable.adspexeso_4),  // pair 1
-    Pair(R.drawable.adspexeso_5,  R.drawable.adspexeso_6),  // pair 2
-    Pair(R.drawable.adspexeso_7,  R.drawable.adspexeso_8),  // pair 3
-    Pair(R.drawable.adspexeso_9,  R.drawable.adspexeso_10), // pair 4
-    Pair(R.drawable.adspexeso_11, R.drawable.adspexeso_12), // pair 5
-    Pair(R.drawable.adspexeso_13, R.drawable.adspexeso_14), // pair 6
-    Pair(R.drawable.adspexeso_15, R.drawable.adspexeso_16), // pair 7
-    Pair(R.drawable.adspexeso_17, R.drawable.adspexeso_18), // pair 8
-    Pair(R.drawable.adspexeso_19, R.drawable.adspexeso_20), // pair 9
+private val PEXESO_PAIR_IMAGES: List<Pair<DrawableResource?, DrawableResource?>> = listOf(
+    Pair(Res.drawable.adspexeso_1,  Res.drawable.adspexeso_2),  // pair 0
+    Pair(Res.drawable.adspexeso_3,  Res.drawable.adspexeso_4),  // pair 1
+    Pair(Res.drawable.adspexeso_5,  Res.drawable.adspexeso_6),  // pair 2
+    Pair(Res.drawable.adspexeso_7,  Res.drawable.adspexeso_8),  // pair 3
+    Pair(Res.drawable.adspexeso_9,  Res.drawable.adspexeso_10), // pair 4
+    Pair(Res.drawable.adspexeso_11, Res.drawable.adspexeso_12), // pair 5
+    Pair(Res.drawable.adspexeso_13, Res.drawable.adspexeso_14), // pair 6
+    Pair(Res.drawable.adspexeso_15, Res.drawable.adspexeso_16), // pair 7
+    Pair(Res.drawable.adspexeso_17, Res.drawable.adspexeso_18), // pair 8
+    Pair(Res.drawable.adspexeso_19, Res.drawable.adspexeso_20), // pair 9
 )
 
 private fun buildPexesoGrid(): List<PexesoCard> {
@@ -1185,7 +1213,7 @@ private fun PexesoGame(
             ) {
                 if (enlargedCard.imageRes != null) {
                     androidx.compose.foundation.Image(
-                        painter = painterResource(id = enlargedCard.imageRes),
+                        painter = painterResource(enlargedCard.imageRes),
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
@@ -1364,7 +1392,7 @@ private fun ReunionCard(card: PexesoCard, modifier: Modifier) {
     ) {
         if (card.imageRes != null) {
             androidx.compose.foundation.Image(
-                painter = painterResource(id = card.imageRes),
+                painter = painterResource(card.imageRes),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -1429,7 +1457,7 @@ private fun PexesoCardCell(
             // Face up: show ad image if assigned, otherwise fallback symbol
             if (card.imageRes != null) {
                 androidx.compose.foundation.Image(
-                    painter = painterResource(id = card.imageRes),
+                    painter = painterResource(card.imageRes),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
