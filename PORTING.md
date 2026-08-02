@@ -191,13 +191,20 @@ its real implementation lands; nothing at the call site changes.
    |---|---|
    | `gl/Matrix.kt` — the 8 `android.opengl.Matrix` functions | ✅ shared, 11 tests |
    | `gl/GlBuffer.kt` — `java.nio.FloatBuffer` → direct buffer / pinned array | ✅ shared, 7 tests |
-   | `gl/Gl.kt` — the 65 `gl*` calls | ⬜ next — **API verified, see below** |
-   | `PlatformGLSurface` — `GLSurfaceView` → `GLKView` in `UIKitView` | ⬜ |
+   | `gl/Gl.kt` — 63 calls + 44 constants | ✅ shared, both platforms compile |
+   | `PlatformGLSurface` — `GLSurfaceView` → `GLKView`/`EAGL` in `UIKitView` | ⬜ next |
    | the 8 renderers themselves | ⬜ |
 
-   All 7 files already use the shared `Matrix`. The buffer type exists but the
-   renderers still construct `java.nio` buffers directly — swapping those call
-   sites is mechanical and comes with the `Gl` wrapper.
+   All 7 files already use the shared `Matrix`. The renderers still call
+   `GLES20.`/`GLES30.` directly and construct `java.nio` buffers — swapping both
+   is mechanical now that `Gl` and `GlFloatBuffer` exist and mirror those APIs.
+
+   Two things the `Gl` iOS actual absorbs, so the renderers never see them:
+   inside `actual object Gl`, a bare `glFoo(...)` resolves to `Gl.glFoo` and
+   recurses — every platform call must be written `platform.gles3.glFoo(...)`.
+   And `toCPointer()` needs an explicit type argument
+   (`offset.toLong().toCPointer<ByteVar>()`) for the "read from the bound
+   buffer at this offset" idiom.
 
    **iOS GL binding facts, verified by compiling against them** (each of these
    would have made a blind wrapper wrong):
