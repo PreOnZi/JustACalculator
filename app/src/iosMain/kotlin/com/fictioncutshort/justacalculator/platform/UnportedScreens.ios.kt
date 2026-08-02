@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -80,3 +81,14 @@ actual fun PlatformDebugPasswordGate(onUnlock: () -> Unit, onCancel: () -> Unit)
         onSkip = onCancel,
     )
 }
+
+@Composable
+actual fun rememberModelIcon(
+    objPath: String,
+    mtlPath: String?,
+    sizePx: Int,
+    tilt: Float,
+    turn: Float,
+    colorGamma: Float,
+    fitSpan: Float,
+): ImageBitmap? = null

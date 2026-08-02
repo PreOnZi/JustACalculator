@@ -204,9 +204,16 @@ its real implementation lands; nothing at the call site changes.
    `java.util` uses are gone. Moving it to commonMain currently fails on exactly
    **nine unresolved references**, all to screens it launches:
 
-       CityDebugMenu, CityLotteryPopup, DebugPasswordGate, FlappyBirdGame,
-       LowVolumeWarning, MazeGame, TankGame, TowerDefenseGame,
-       rememberCurrencyIcon
+   | Blocker | State |
+   |---|---|
+   | CityDebugMenu + DebugPasswordGate | ✅ commonMain |
+   | FlappyBirdGame | ✅ commonMain |
+   | rememberCurrencyIcon | ⬜ Bitmap + Executors (45 lines) |
+   | LowVolumeWarning | ⬜ AudioManager/AudioDeviceInfo seam (133 lines) |
+   | CityLotteryPopup (in Building8Games) | ⬜ android.graphics (1.2k lines) |
+   | TowerDefenseGame | ⬜ SoundPool + BitmapFactory (1k lines) |
+   | TankGame | ⬜ Intent/Uri/Vibrator/AndroidView (2k lines) |
+   | MazeGame | ⬜ **hardest** — CoreMotion sensors + sceneview (1.9k lines) |
 
    It is the city hub, so it moves only once those do — or once they are stubbed
    behind `UnportedScreens.kt` the way the ad-card stack is. Several of them

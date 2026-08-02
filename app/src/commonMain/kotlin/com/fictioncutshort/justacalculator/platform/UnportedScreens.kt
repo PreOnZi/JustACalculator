@@ -1,6 +1,7 @@
 package com.fictioncutshort.justacalculator.platform
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.ImageBitmap
 import com.fictioncutshort.justacalculator.data.Chapter
 
 /**
@@ -44,3 +45,21 @@ expect fun createTalkAudioHandler(context: AppContext): TypingClicker
 /** The debug-menu password gate; lives in the city debug menu on Android. */
 @Composable
 expect fun PlatformDebugPasswordGate(onUnlock: () -> Unit, onCancel: () -> Unit)
+
+/**
+ * Renders an OBJ model to a bitmap for use as a 2D icon.
+ *
+ * Android does this with an offscreen EGL pbuffer context. iOS returns null
+ * until that is ported — callers already treat null as "model not ready" and
+ * fall back to drawing without it, so the screens stay usable.
+ */
+@Composable
+expect fun rememberModelIcon(
+    objPath: String,
+    mtlPath: String? = null,
+    sizePx: Int = 160,
+    tilt: Float = -22f,
+    turn: Float = 32f,
+    colorGamma: Float = 1f,
+    fitSpan: Float = 1.7f,
+): ImageBitmap?

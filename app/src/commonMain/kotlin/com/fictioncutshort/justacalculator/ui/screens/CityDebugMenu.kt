@@ -1,5 +1,6 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.platform.currentAppContext
 import com.fictioncutshort.justacalculator.platform.Prefs
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -34,7 +35,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -197,7 +197,7 @@ fun CityDebugMenu(
     onClose: () -> Unit,
     onJumpToPhase1: ((Chapter) -> Unit)? = null,
 ) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     // Bumped after every write to force this panel to re-read the prefs.
     var rev by remember { mutableIntStateOf(0) }
 

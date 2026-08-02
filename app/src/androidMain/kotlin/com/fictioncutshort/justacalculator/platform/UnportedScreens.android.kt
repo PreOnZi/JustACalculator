@@ -1,6 +1,7 @@
 package com.fictioncutshort.justacalculator.platform
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.ImageBitmap
 import com.fictioncutshort.justacalculator.data.Chapter
 import com.fictioncutshort.justacalculator.logic.TalkAudioHandler
 import com.fictioncutshort.justacalculator.ui.components.HomeScreenOverlay
@@ -48,3 +49,16 @@ actual fun PlatformDebugPasswordGate(onUnlock: () -> Unit, onCancel: () -> Unit)
         onCancel = onCancel,
     )
 }
+
+@Composable
+actual fun rememberModelIcon(
+    objPath: String,
+    mtlPath: String?,
+    sizePx: Int,
+    tilt: Float,
+    turn: Float,
+    colorGamma: Float,
+    fitSpan: Float,
+): ImageBitmap? = com.fictioncutshort.justacalculator.ui.screens.rememberModelBitmap(
+    objPath, mtlPath, sizePx, tilt, turn, colorGamma, fitSpan,
+)

@@ -1,7 +1,9 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.platform.rememberModelIcon
+import com.fictioncutshort.justacalculator.platform.openPrefs
+import com.fictioncutshort.justacalculator.platform.currentAppContext
 import com.fictioncutshort.justacalculator.platform.Assets
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -61,17 +63,17 @@ fun FlappyBirdGame(
 ) {
     BoxWithConstraints(modifier.fillMaxSize().background(Color(0xFF4EC0CA))) {
         val density = LocalDensity.current
-        val context = LocalContext.current
+        val context = currentAppContext()
         val w = with(density) { maxWidth.toPx() }
         val h = with(density) { maxHeight.toPx() }
 
         // Collectible fingers rendered from the 3D model as a flat sprite.
-        val fingerBmp = rememberModelBitmap("models/finger.obj", "models/finger.mtl",
+        val fingerBmp = rememberModelIcon("models/finger.obj", "models/finger.mtl",
             sizePx = 128, tilt = -8f, turn = 18f, fitSpan = 1.85f)
         // Cumulative tally, persisted in the city store so it survives every retry
         // (and app kill) but stays trapped in Building 9 — see [B9_FINGERS_KEY].
         val cityPrefs = remember {
-            context.getSharedPreferences("calc_city", android.content.Context.MODE_PRIVATE)
+            context.openPrefs("calc_city")
         }
         var fingerTotal by remember { mutableIntStateOf(cityPrefs.getInt(B9_FINGERS_KEY, 0)) }
 
