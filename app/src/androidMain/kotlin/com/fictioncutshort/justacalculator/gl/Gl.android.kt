@@ -121,4 +121,18 @@ actual object Gl {
 
     actual fun glVertexAttribPointerOffset(index: Int, size: Int, type: Int, normalized: Boolean, stride: Int, offset: Int) =
         GLES30.glVertexAttribPointer(index, size, type, normalized, stride, offset)
+    actual fun glTexImage2DRgba(width: Int, height: Int, pixels: ByteArray) {
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, width, height, 0,
+            GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE,
+            java.nio.ByteBuffer.wrap(pixels),
+        )
+    }
+
+    actual fun glTexImage2DEmpty(internalFormat: Int, width: Int, height: Int, format: Int, type: Int) {
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, null,
+        )
+    }
+
 }

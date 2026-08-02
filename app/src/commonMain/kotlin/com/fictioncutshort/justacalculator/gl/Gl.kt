@@ -122,4 +122,10 @@ expect object Gl {
 
     /** Vertex attributes sourced from a bound buffer object rather than client memory. */
     fun glVertexAttribPointerOffset(index: Int, size: Int, type: Int, normalized: Boolean, stride: Int, offset: Int)
+    /** Uploads tightly-packed RGBA8888 pixels as the bound 2D texture. */
+    fun glTexImage2DRgba(width: Int, height: Int, pixels: ByteArray)
+
+    /** Allocates an uninitialised 2D texture — used for render targets. */
+    fun glTexImage2DEmpty(internalFormat: Int, width: Int, height: Int, format: Int, type: Int)
+
 }

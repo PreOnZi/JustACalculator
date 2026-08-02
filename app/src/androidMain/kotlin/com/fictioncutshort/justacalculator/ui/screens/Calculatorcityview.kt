@@ -1,5 +1,7 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.platform.screenMetrics
+import com.fictioncutshort.justacalculator.gl.PlatformGlSurface
 import com.fictioncutshort.justacalculator.platform.createSoundPlayer
 import com.fictioncutshort.justacalculator.platform.Sounds
 import com.fictioncutshort.justacalculator.platform.SoundPlayer
@@ -476,7 +478,7 @@ fun CalculatorCityView(
 ) {
 
     val context  = LocalContext.current
-    val renderer = remember { CityGLRenderer(context.assets) }
+    val renderer = remember { CityGLRenderer() }
     val configuration = LocalConfiguration.current
     // Mutable state so the game-loop coroutine always reads the current orientation
     var isLandscape by remember { mutableStateOf(configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) }
@@ -2509,17 +2511,12 @@ fun CalculatorCityView(
 
     Box(modifier = modifier.fillMaxSize()) {
 
-        AndroidView(
-            factory = { ctx ->
-                renderer.isLandscape = ctx.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-                GLSurfaceView(ctx).apply {
-                    setEGLContextClientVersion(2)
-                    setEGLConfigChooser(8, 8, 8, 0, 24, 0)
-                    setRenderer(renderer)
-                    renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
-                }
-            },
-            modifier = Modifier.fillMaxSize()
+        // Orientation now comes from the composition rather than the factory's
+        // Context, so it also tracks rotation instead of being read once.
+        renderer.isLandscape = screenMetrics().isLandscape
+        PlatformGlSurface(
+            renderer = renderer,
+            modifier = Modifier.fillMaxSize(),
         )
 
         if (introDone && !showTowerDefense && !forceAerial && doorOpeningDigit == null) {

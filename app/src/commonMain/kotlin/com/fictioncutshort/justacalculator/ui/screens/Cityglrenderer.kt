@@ -1,14 +1,16 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
-import android.content.res.AssetManager
-import android.opengl.GLES20
-import android.opengl.GLSurfaceView
+import kotlin.math.PI
+import com.fictioncutshort.justacalculator.gl.throttleRenderThread
+import com.fictioncutshort.justacalculator.gl.toGlBuffer
+import kotlin.concurrent.Volatile
+import com.fictioncutshort.justacalculator.platform.nowMillis
+import com.fictioncutshort.justacalculator.platform.logWarn
+import com.fictioncutshort.justacalculator.gl.uploadTextureFromAsset
+import com.fictioncutshort.justacalculator.gl.GlRenderer
+import com.fictioncutshort.justacalculator.gl.GlFloatBuffer
+import com.fictioncutshort.justacalculator.gl.Gl
 import com.fictioncutshort.justacalculator.gl.Matrix
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.nio.FloatBuffer
-import javax.microedition.khronos.egl.EGLConfig
-import javax.microedition.khronos.opengles.GL10
 import kotlin.math.*
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -35,7 +37,7 @@ import kotlin.math.*
 // and out of the set as the player walks and the light seems to follow them.
 private const val MAX_LIGHTS = 12
 
-class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.Renderer {
+class CityGLRenderer : GlRenderer {
 
     // ── The key light ─────────────────────────────────────────────────────────
     // Exactly one directional light at any moment, fixed in WORLD space so it
@@ -127,7 +129,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     private val lightRadBuf = FloatArray(MAX_LIGHTS)
 
     private data class Mesh(
-        val buf: FloatBuffer, val mode: Int, val cnt: Int,
+        val buf: GlFloatBuffer, val mode: Int, val cnt: Int,
         val r: Float, val g: Float, val b: Float, val a: Float = 1f,
         val fog: Float = 0.65f, val lava: Boolean = false,
         val aerialSkip: Boolean = false,   // skip during aerial intro
@@ -143,7 +145,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         val skyNight: Boolean = false,     // sky body belonging to the night (the moon)
         val crack: Boolean = false,        // a tear in the sky — only during the collapse
         val tex: Int = 0,                  // GL texture — 0 for the flat-coloured majority
-        val uv: FloatBuffer? = null        // its UVs, in step with buf
+        val uv: GlFloatBuffer? = null        // its UVs, in step with buf
     )
     private val meshes = mutableListOf<Mesh>()
 
@@ -272,11 +274,11 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     // vertical faces. [min/max X/Z] is the footprint AABB for cheap containment.
     // Rebuilt each buildScene.
     class DamagedInterior(
-        @JvmField val minX: Float, @JvmField val maxX: Float,
-        @JvmField val minZ: Float, @JvmField val maxZ: Float,
-        @JvmField val h: Float,                     // world height (scales the door band)
-        @JvmField val floors: List<FloatArray>,
-        @JvmField val walls: FloatArray,            // stride 6: x0,z0,x1,z1,yBot,yTop
+        val minX: Float, val maxX: Float,
+        val minZ: Float, val maxZ: Float,
+        val h: Float,                     // world height (scales the door band)
+        val floors: List<FloatArray>,
+        val walls: FloatArray,            // stride 6: x0,z0,x1,z1,yBot,yTop
     )
     private val damagedList = ArrayList<DamagedInterior>()
     val damagedInteriors: List<DamagedInterior> get() = damagedList
@@ -612,39 +614,39 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
-    override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        GLES20.glClearColor(0.96f, 0.94f, 0.88f, 1f)
-        GLES20.glEnable(GLES20.GL_DEPTH_TEST)
-        GLES20.glDepthFunc(GLES20.GL_LESS)
-        GLES20.glDisable(GLES20.GL_CULL_FACE)
+    override fun onSurfaceCreated() {
+        Gl.glClearColor(0.96f, 0.94f, 0.88f, 1f)
+        Gl.glEnable(Gl.GL_DEPTH_TEST)
+        Gl.glDepthFunc(Gl.GL_LESS)
+        Gl.glDisable(Gl.GL_CULL_FACE)
         // Lit shader needs GL_OES_standard_derivatives. It's on every Android GPU
         // we care about, but if the compile fails we silently drop to the old flat
         // shader rather than shipping a black screen.
-        val ext = GLES20.glGetString(GLES20.GL_EXTENSIONS) ?: ""
+        val ext = Gl.glGetString(Gl.GL_EXTENSIONS) ?: ""
         lightingOn = ext.contains("GL_OES_standard_derivatives")
         prog = if (lightingOn) runCatching { buildProg(VS, FS_LIT) }.getOrElse { 0 } else 0
         if (prog == 0) { lightingOn = false; prog = buildProg(VS, FS_FLAT) }
 
-        aPos    = GLES20.glGetAttribLocation(prog, "aPosition")
-        uMVP    = GLES20.glGetUniformLocation(prog, "uMVP")
-        uCol    = GLES20.glGetUniformLocation(prog, "uColor")
-        uFog    = GLES20.glGetUniformLocation(prog, "uFog")
-        uAerial = GLES20.glGetUniformLocation(prog, "uAerial")
-        uGray   = GLES20.glGetUniformLocation(prog, "uGray")
-        uShift  = GLES20.glGetUniformLocation(prog, "uShift")
-        uTip    = GLES20.glGetUniformLocation(prog, "uTip")
-        uPivot  = GLES20.glGetUniformLocation(prog, "uPivot")
-        aUV         = GLES20.glGetAttribLocation(prog, "aUV")
-        uTexSampler = GLES20.glGetUniformLocation(prog, "uTex")
-        uTexOn      = GLES20.glGetUniformLocation(prog, "uTexOn")
+        aPos    = Gl.glGetAttribLocation(prog, "aPosition")
+        uMVP    = Gl.glGetUniformLocation(prog, "uMVP")
+        uCol    = Gl.glGetUniformLocation(prog, "uColor")
+        uFog    = Gl.glGetUniformLocation(prog, "uFog")
+        uAerial = Gl.glGetUniformLocation(prog, "uAerial")
+        uGray   = Gl.glGetUniformLocation(prog, "uGray")
+        uShift  = Gl.glGetUniformLocation(prog, "uShift")
+        uTip    = Gl.glGetUniformLocation(prog, "uTip")
+        uPivot  = Gl.glGetUniformLocation(prog, "uPivot")
+        aUV         = Gl.glGetAttribLocation(prog, "aUV")
+        uTexSampler = Gl.glGetUniformLocation(prog, "uTex")
+        uTexOn      = Gl.glGetUniformLocation(prog, "uTexOn")
         if (lightingOn) {
-            uLit      = GLES20.glGetUniformLocation(prog, "uLit")
-            uDark     = GLES20.glGetUniformLocation(prog, "uDark")
-            uKeyDir   = GLES20.glGetUniformLocation(prog, "uKeyDir")
-            uKeyCol   = GLES20.glGetUniformLocation(prog, "uKeyCol")
-            uCamPos   = GLES20.glGetUniformLocation(prog, "uCamPos")
-            uLightPos = GLES20.glGetUniformLocation(prog, "uLightPos")
-            uLightRad = GLES20.glGetUniformLocation(prog, "uLightRad")
+            uLit      = Gl.glGetUniformLocation(prog, "uLit")
+            uDark     = Gl.glGetUniformLocation(prog, "uDark")
+            uKeyDir   = Gl.glGetUniformLocation(prog, "uKeyDir")
+            uKeyCol   = Gl.glGetUniformLocation(prog, "uKeyCol")
+            uCamPos   = Gl.glGetUniformLocation(prog, "uCamPos")
+            uLightPos = Gl.glGetUniformLocation(prog, "uLightPos")
+            uLightRad = Gl.glGetUniformLocation(prog, "uLightRad")
         }
         cctv.init()
         loadModels()
@@ -652,7 +654,6 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     }
 
     private fun loadModels() {
-        val a = assets ?: return
         try { lampOnGroups   = ObjLoader.load("models/lampon.obj",   "models/lampon.mtl") } catch (_: Throwable) {}
         try { lampOffGroups  = ObjLoader.load("models/lampoff.obj",  "models/lampoff.mtl") } catch (_: Throwable) {}
         try { cameraOnGroups = ObjLoader.load("models/cameraon.obj", "models/cameraon.mtl") } catch (_: Throwable) {}
@@ -719,8 +720,8 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         }
     }
 
-    override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
-        GLES20.glViewport(0, 0, w, h); sw = w; sh = h
+    override fun onSurfaceChanged(w: Int, h: Int) {
+        Gl.glViewport(0, 0, w, h); sw = w; sh = h
     }
     private var sw = 1; private var sh = 1
 
@@ -728,47 +729,47 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     // Post-Building-4 glitch: while true, the render thread randomly hitches so the
     // world stammers along with the glitched voiceover. Cleared once Building 3 is done.
     @Volatile var glitchStutter = false
-    override fun onDrawFrame(gl: GL10?) {
+    override fun onDrawFrame() {
         // Frame-rate cap (~33 fps). The scene rendered continuously at full device
         // frame-rate, which ran the GPU hot and drained the battery; pacing the GL
         // thread here roughly halves that sustained load with no visible cost.
-        val nowMs = android.os.SystemClock.uptimeMillis()
+        val nowMs = monotonicMillis()
         val since = nowMs - lastFrameMs
         if (lastFrameMs != 0L && since in 0 until 30L) {
-            try { Thread.sleep(30L - since) } catch (_: InterruptedException) {}
+            throttleRenderThread(30L - since)
         }
         // Post-Building-4 glitch: some frames hitch for a random beat, dropping the
         // effective frame-rate raggedly so the world stutters with the voiceover.
         if (glitchStutter && kotlin.random.Random.nextFloat() < 0.30f) {
-            try { Thread.sleep((45L + kotlin.random.Random.nextInt(160)).toLong()) } catch (_: InterruptedException) {}
+            throttleRenderThread(45L + kotlin.random.Random.nextInt(160).toLong())
         }
-        lastFrameMs = android.os.SystemClock.uptimeMillis()
+        lastFrameMs = monotonicMillis()
         if (needsRebuild) { needsRebuild = false; buildScene() }
         // Easter-egg background colour (707) + grayscale (1134206) — both read
         // live so a tweak made on the calculator shows next time the city draws.
         val clearRgb = com.fictioncutshort.justacalculator.logic.EasterEggTheme.cityClearRgb()
-        GLES20.glClearColor(clearRgb[0], clearRgb[1], clearRgb[2], 1f)
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
-        GLES20.glUseProgram(prog)
-        GLES20.glUniform1f(uGray,
+        Gl.glClearColor(clearRgb[0], clearRgb[1], clearRgb[2], 1f)
+        Gl.glClear(Gl.GL_COLOR_BUFFER_BIT or Gl.GL_DEPTH_BUFFER_BIT)
+        Gl.glUseProgram(prog)
+        Gl.glUniform1f(uGray,
             if (com.fictioncutshort.justacalculator.logic.EasterEggTheme.grayscale) 1f else 0f)
 
         if (lightingOn) {
             val dk = darknessLevel.coerceIn(0f, 1f)
-            GLES20.glUniform1f(uDark, dk)
+            Gl.glUniform1f(uDark, dk)
             // Crossfade the one key light from sun to moon. Both bearings are fixed
             // in world space, so the lighting never shifts with the player.
             val kx = SUN[0] + (MOON[0] - SUN[0]) * dk
             val ky = SUN[1] + (MOON[1] - SUN[1]) * dk
             val kz = SUN[2] + (MOON[2] - SUN[2]) * dk
             val kl = sqrt(kx*kx + ky*ky + kz*kz).coerceAtLeast(1e-4f)
-            GLES20.glUniform3f(uKeyDir, kx/kl, ky/kl, kz/kl)
+            Gl.glUniform3f(uKeyDir, kx/kl, ky/kl, kz/kl)
             val s = SUN_STRENGTH + (MOON_STRENGTH - SUN_STRENGTH) * dk
-            GLES20.glUniform3f(uKeyCol,
+            Gl.glUniform3f(uKeyCol,
                 (SUN_COL[0] + (MOON_COL[0] - SUN_COL[0]) * dk) * s,
                 (SUN_COL[1] + (MOON_COL[1] - SUN_COL[1]) * dk) * s,
                 (SUN_COL[2] + (MOON_COL[2] - SUN_COL[2]) * dk) * s)
-            GLES20.glUniform3f(uCamPos, camX, camY, camZ)
+            Gl.glUniform3f(uCamPos, camX, camY, camZ)
             uploadNearestLights()
         }
 
@@ -782,7 +783,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         if (collapse > 0f) {
             val q = collapse.coerceIn(0f, 1f)
             val amp = 1.2f + q * 8f
-            val t = (System.nanoTime() / 1_000_000L) * 0.001f
+            val t = (nowMillis() * 1_000_000L / 1_000_000L) * 0.001f
             shX = (sin(t * 27f) + sin(t * 61f) * 0.4f) * amp
             shY = sin(t * 43f) * amp * 0.7f
             shZ = (cos(t * 33f) + cos(t * 71f) * 0.4f) * amp
@@ -807,8 +808,8 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         }
 
         Matrix.multiplyMM(mvp, 0, proj, 0, view, 0)
-        GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
-        GLES20.glUniform1f(uAerial, aerialBlend)
+        Gl.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
+        Gl.glUniform1f(uAerial, aerialBlend)
 
         val radA = ((radAngle % 360f) + 360f) % 360f
         val dkLvl = darknessLevel.coerceIn(0f, 1f)
@@ -896,35 +897,35 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             val want = if (m.softShadow || seeThrough) 1 else 0
             if (want != blendMode) {
                 if (want == 0) {
-                    GLES20.glDisable(GLES20.GL_BLEND)
-                    GLES20.glDepthMask(true)
+                    Gl.glDisable(Gl.GL_BLEND)
+                    Gl.glDepthMask(true)
                 } else {
-                    GLES20.glEnable(GLES20.GL_BLEND)
-                    GLES20.glDepthMask(false)
-                    GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+                    Gl.glEnable(Gl.GL_BLEND)
+                    Gl.glDepthMask(false)
+                    Gl.glBlendFunc(Gl.GL_SRC_ALPHA, Gl.GL_ONE_MINUS_SRC_ALPHA)
                 }
                 blendMode = want
             }
 
             val wantAerial = if (m.noAO) 1f else aerialBlend
             if (wantAerial != curAerial) {
-                GLES20.glUniform1f(uAerial, wantAerial)
+                Gl.glUniform1f(uAerial, wantAerial)
                 curAerial = wantAerial
             }
             setLit(if (m.lava || m.radArc || m.softShadow || m.noAO ||
-                       m.mode == GLES20.GL_LINES) 0f else 1f)
+                       m.mode == Gl.GL_LINES) 0f else 1f)
 
             bindMeshTexture(m)
-            GLES20.glUniform4f(uCol, r, g, b, if (seeThrough) 0.22f else m.a)
-            GLES20.glUniform1f(uFog, if (aerialMode) m.fog else 0f)
+            Gl.glUniform4f(uCol, r, g, b, if (seeThrough) 0.22f else m.a)
+            Gl.glUniform1f(uFog, if (aerialMode) m.fog else 0f)
             m.buf.position(0)
-            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, m.buf)
-            GLES20.glEnableVertexAttribArray(aPos)
-            GLES20.glDrawArrays(m.mode, 0, m.cnt)
+            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, m.buf)
+            Gl.glEnableVertexAttribArray(aPos)
+            Gl.glDrawArrays(m.mode, 0, m.cnt)
         }
         if (blendMode != 0) {
-            GLES20.glDisable(GLES20.GL_BLEND)
-            GLES20.glDepthMask(true)
+            Gl.glDisable(Gl.GL_BLEND)
+            Gl.glDepthMask(true)
         }
         setXform(null)   // the meshes drawn from here on carry their own transforms
         clearMeshTexture()   // ...and none of them are textured
@@ -951,36 +952,36 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         // buildings. Drawn last with the depth test off so it tints everything.
         if (darknessLevel > 0.001f) {
             val identity = FloatArray(16); Matrix.setIdentityM(identity, 0)
-            GLES20.glUniformMatrix4fv(uMVP, 1, false, identity, 0)
-            GLES20.glUniform1f(uFog, 0f)
-            GLES20.glUniform1f(uAerial, 1f)
+            Gl.glUniformMatrix4fv(uMVP, 1, false, identity, 0)
+            Gl.glUniform1f(uFog, 0f)
+            Gl.glUniform1f(uAerial, 1f)
             setLit(0f)
-            GLES20.glDisable(GLES20.GL_DEPTH_TEST)
-            GLES20.glEnable(GLES20.GL_BLEND)
-            GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+            Gl.glDisable(Gl.GL_DEPTH_TEST)
+            Gl.glEnable(Gl.GL_BLEND)
+            Gl.glBlendFunc(Gl.GL_SRC_ALPHA, Gl.GL_ONE_MINUS_SRC_ALPHA)
             val a = (darknessLevel * 0.70f).coerceIn(0f, 1f)
-            GLES20.glUniform4f(uCol, 0.010f, 0.016f, 0.045f, a)
+            Gl.glUniform4f(uCol, 0.010f, 0.016f, 0.045f, a)
             val quad = floatArrayOf(-1f,-1f,0f,  1f,-1f,0f,  1f,1f,0f,  -1f,1f,0f).toFB()
             quad.position(0)
-            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, quad)
-            GLES20.glEnableVertexAttribArray(aPos)
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_FAN, 0, 4)
-            GLES20.glDisable(GLES20.GL_BLEND)
-            GLES20.glEnable(GLES20.GL_DEPTH_TEST)
+            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, quad)
+            Gl.glEnableVertexAttribArray(aPos)
+            Gl.glDrawArrays(Gl.GL_TRIANGLE_FAN, 0, 4)
+            Gl.glDisable(Gl.GL_BLEND)
+            Gl.glEnable(Gl.GL_DEPTH_TEST)
         }
 
         // CRITICAL: the overlay above swapped uMVP to identity for its fullscreen
         // quad. Restore the real scene matrix — the monster and the PASS-2 glow
         // (lamp bulbs, halos, lit windows) are world-space, so without this they
         // were being drawn off-screen (= invisible lamps + invisible monster).
-        GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
+        Gl.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
 
         // The monitors. Drawn AFTER the night overlay — a screen is a light source,
         // and in a dark room it is the only thing you can see. Depth still holds, so
         // walking behind the desk hides them.
         if (insideRad && cctv.ready) {
             cctv.draw(mvp, dkLvl)
-            GLES20.glUseProgram(prog)
+            Gl.glUseProgram(prog)
         }
 
         // ── Sky bodies (sun + moon) ──────────────────────────────────────────
@@ -992,12 +993,12 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         if (!aerialMode && cellStage >= 3) {
             val skyMvp = mvp.copyOf()
             Matrix.translateM(skyMvp, 0, camX, camY, camZ)
-            GLES20.glUniformMatrix4fv(uMVP, 1, false, skyMvp, 0)
+            Gl.glUniformMatrix4fv(uMVP, 1, false, skyMvp, 0)
             setLit(0f)
-            GLES20.glUniform1f(uFog, 0f)
-            GLES20.glUniform1f(uAerial, 1f)
-            GLES20.glEnable(GLES20.GL_BLEND)
-            GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+            Gl.glUniform1f(uFog, 0f)
+            Gl.glUniform1f(uAerial, 1f)
+            Gl.glEnable(Gl.GL_BLEND)
+            Gl.glBlendFunc(Gl.GL_SRC_ALPHA, Gl.GL_ONE_MINUS_SRC_ALPHA)
             for (m in meshes) {
                 if (!m.sky) continue
                 val fade = if (m.crack) {
@@ -1006,14 +1007,14 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                     ((col - m.arcAngle * 0.6f) * 3f).coerceIn(0f, 1f)
                 } else if (m.skyNight) dkLvl else 1f - dkLvl
                 if (fade < 0.01f) continue
-                GLES20.glUniform4f(uCol, m.r, m.g, m.b, m.a * fade)
+                Gl.glUniform4f(uCol, m.r, m.g, m.b, m.a * fade)
                 m.buf.position(0)
-                GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, m.buf)
-                GLES20.glEnableVertexAttribArray(aPos)
-                GLES20.glDrawArrays(m.mode, 0, m.cnt)
+                Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, m.buf)
+                Gl.glEnableVertexAttribArray(aPos)
+                Gl.glDrawArrays(m.mode, 0, m.cnt)
             }
-            GLES20.glDisable(GLES20.GL_BLEND)
-            GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
+            Gl.glDisable(Gl.GL_BLEND)
+            Gl.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
         }
 
         // ── PASS 2 — light sources drawn ADDITIVELY on top of the darkness so
@@ -1021,12 +1022,12 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         // (so they already wrote depth) — use GL_LEQUAL so the re-draw at equal
         // depth isn't rejected, otherwise their glow never appears.
         if (!aerialMode && dkLvl > 0.01f) {
-            GLES20.glUniform1f(uAerial, 1f)  // disable AO so lights stay full-bright
+            Gl.glUniform1f(uAerial, 1f)  // disable AO so lights stay full-bright
             setLit(0f)                       // light sources are emissive, never shaded
-            GLES20.glEnable(GLES20.GL_BLEND)
-            GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE)
-            GLES20.glDepthMask(false)
-            GLES20.glDepthFunc(GLES20.GL_LEQUAL)
+            Gl.glEnable(Gl.GL_BLEND)
+            Gl.glBlendFunc(Gl.GL_SRC_ALPHA, Gl.GL_ONE)
+            Gl.glDepthMask(false)
+            Gl.glDepthFunc(Gl.GL_LEQUAL)
             for ((meshIdx, m) in meshes.withIndex()) {
                 if (m.aerialSkip && (cellStage < 3 || aerialMode)) continue
                 // Lit (un-completed) windows also glow here so they punch through
@@ -1056,12 +1057,12 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                     r = m.r; g = m.g; b = m.b; a = m.a * glowLvl
                 }
                 if (a < 0.01f) continue
-                GLES20.glUniform4f(uCol, r, g, b, a)
-                GLES20.glUniform1f(uFog, 0f)
+                Gl.glUniform4f(uCol, r, g, b, a)
+                Gl.glUniform1f(uFog, 0f)
                 m.buf.position(0)
-                GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, m.buf)
-                GLES20.glEnableVertexAttribArray(aPos)
-                GLES20.glDrawArrays(m.mode, 0, m.cnt)
+                Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, m.buf)
+                Gl.glEnableVertexAttribArray(aPos)
+                Gl.glDrawArrays(m.mode, 0, m.cnt)
             }
             setXform(null)
             // The way in to every building you haven't done yet.
@@ -1073,9 +1074,9 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             // A faint glint marks the wall gun; the rolling rounds catch the night too.
             drawWallGunGlow()
             drawBoulderProjectiles(additive = true)
-            GLES20.glDisable(GLES20.GL_BLEND)
-            GLES20.glDepthMask(true)
-            GLES20.glDepthFunc(GLES20.GL_LESS)
+            Gl.glDisable(Gl.GL_BLEND)
+            Gl.glDepthMask(true)
+            Gl.glDepthFunc(Gl.GL_LESS)
         }
 
         // First-person held gun, on top of everything (day or night).
@@ -1103,11 +1104,11 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 falls = true
             }
         }
-        GLES20.glEnable(GLES20.GL_BLEND)
-        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE)   // additive glow
-        GLES20.glDepthMask(false)
-        GLES20.glUniform1f(uAerial, 1f)
-        GLES20.glUniform1f(uFog, 0f)
+        Gl.glEnable(Gl.GL_BLEND)
+        Gl.glBlendFunc(Gl.GL_SRC_ALPHA, Gl.GL_ONE)   // additive glow
+        Gl.glDepthMask(false)
+        Gl.glUniform1f(uAerial, 1f)
+        Gl.glUniform1f(uFog, 0f)
         val cx = mount[0]; val dh = mount[1]; val cz = mount[2]
         val face = mount[3].toInt()
         val dw = mount[4] * DOOR_HALF_W
@@ -1126,10 +1127,10 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         val hSpan = yTop - yBot               // side edge length
         val perim = 2f * eSpan + 2f * hSpan
         val n = (perim / 1.3f).toInt().coerceIn(24, 90)
-        val phase = ((System.nanoTime() / 1_000_000L) % 2600L) / 2600f
+        val phase = ((nowMillis() * 1_000_000L / 1_000_000L) % 2600L) / 2600f
         val br = 0.85f                        // bulb half-size (large, bright)
         val push = 1.0f                       // sit well in front of the wall
-        GLES20.glUniform1f(uFog, 0f)
+        Gl.glUniform1f(uFog, 0f)
         for (i in 0 until n) {
             val d = (i.toFloat() / n) * perim
             // Position (s along width, y up) around the rectangle perimeter.
@@ -1161,14 +1162,14 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 }
             }
             val v = quad.toFB()
-            GLES20.glUniform4f(uCol, r, g, b, 1f)
+            Gl.glUniform4f(uCol, r, g, b, 1f)
             v.position(0)
-            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, v)
-            GLES20.glEnableVertexAttribArray(aPos)
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 6)
+            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, v)
+            Gl.glEnableVertexAttribArray(aPos)
+            Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, 6)
         }
-        GLES20.glDisable(GLES20.GL_BLEND)
-        GLES20.glDepthMask(true)
+        Gl.glDisable(Gl.GL_BLEND)
+        Gl.glDepthMask(true)
     }
 
     // ── Unfinished buildings: a lit frame around the doorway ────────────────────
@@ -1183,7 +1184,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         val lvl = ((dkLvl - 0.2f) / 0.5f).coerceIn(0f, 1f)
         if (lvl < 0.01f) return
         // A slow breath, so the eye catches it from down the street.
-        val pulse = 0.82f + 0.18f * sin((System.nanoTime() / 1_000_000L % 2400L) / 2400f * 2f * PI.toFloat())
+        val pulse = 0.82f + 0.18f * sin((nowMillis() * 1_000_000L / 1_000_000L % 2400L) / 2400f * 2f * PI.toFloat())
         val col = collapse.coerceIn(0f, 1f)
         val xf = FloatArray(10)
         val pt = FloatArray(3)
@@ -1243,12 +1244,12 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         if (verts.isEmpty()) return
         val arr = FloatArray(verts.size) { verts[it] }
         val fb = arr.toFB()
-        GLES20.glUniform1f(uFog, 0f)
-        GLES20.glUniform4f(uCol, 1.0f, 0.74f, 0.32f, 0.62f * lvl * pulse)
+        Gl.glUniform1f(uFog, 0f)
+        Gl.glUniform4f(uCol, 1.0f, 0.74f, 0.32f, 0.62f * lvl * pulse)
         fb.position(0)
-        GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
-        GLES20.glEnableVertexAttribArray(aPos)
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, arr.size / 3)
+        Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
+        Gl.glEnableVertexAttribArray(aPos)
+        Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, arr.size / 3)
     }
 
     /** Fully-saturated hue (0..1) → RGB. */
@@ -1279,12 +1280,12 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         cctv.refresh(CCTV_FEEDS_PER_FRAME) { feedMvp, ex, ey, ez ->
             drawFeedScene(feedMvp, ex, ey, ez, col, groupOf)
         }
-        GLES20.glViewport(0, 0, sw, sh)
-        GLES20.glUniformMatrix4fv(uMVP, 1, false, mvpMain, 0)
-        GLES20.glUniform1f(uAerial, aerialBlend)
+        Gl.glViewport(0, 0, sw, sh)
+        Gl.glUniformMatrix4fv(uMVP, 1, false, mvpMain, 0)
+        Gl.glUniform1f(uAerial, aerialBlend)
         setXform(null)
         if (lightingOn) {
-            GLES20.glUniform3f(uCamPos, camX, camY, camZ)
+            Gl.glUniform3f(uCamPos, camX, camY, camZ)
             uploadNearestLights()
         }
     }
@@ -1294,11 +1295,11 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         feedMvp: FloatArray, ex: Float, ey: Float, ez: Float,
         col: Float, groupOf: HashMap<Int, FloatArray>?,
     ) {
-        GLES20.glUniformMatrix4fv(uMVP, 1, false, feedMvp, 0)
-        GLES20.glUniform1f(uAerial, aerialBlend)
-        GLES20.glUniform1f(uFog, 0f)
+        Gl.glUniformMatrix4fv(uMVP, 1, false, feedMvp, 0)
+        Gl.glUniform1f(uAerial, aerialBlend)
+        Gl.glUniform1f(uFog, 0f)
         if (lightingOn) {
-            GLES20.glUniform3f(uCamPos, ex, ey, ez)
+            Gl.glUniform3f(uCamPos, ex, ey, ez)
             uploadNearestLights(ex, ez)
         }
         extractFrustum(feedMvp)
@@ -1312,7 +1313,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             // A feed carries the city itself, not the mood: no shadow blobs, no
             // glow pass, no sky. It's a 256px window on a monitor.
             if (m.glow || m.sky || m.softShadow) continue
-            if (m.mode == GLES20.GL_LINES) continue
+            if (m.mode == Gl.GL_LINES) continue
             if (m.aerialSkip && cellStage < 3) continue
             if (m.radDoor && radDoorOpen) continue
             // Textured surfaces are all inside Building 10, which no street camera
@@ -1356,11 +1357,11 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             } else { r = m.r; g = m.g; b = m.b }
 
             setLit(if (m.lava || m.radArc || m.noAO) 0f else 1f)
-            GLES20.glUniform4f(uCol, r, g, b, m.a)
+            Gl.glUniform4f(uCol, r, g, b, m.a)
             m.buf.position(0)
-            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, m.buf)
-            GLES20.glEnableVertexAttribArray(aPos)
-            GLES20.glDrawArrays(m.mode, 0, m.cnt)
+            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, m.buf)
+            Gl.glEnableVertexAttribArray(aPos)
+            Gl.glDrawArrays(m.mode, 0, m.cnt)
         }
         setXform(null)
 
@@ -1626,7 +1627,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             Pair(rA + BD + 2f, rB - BD - 2f), Pair(rB + BD + 2f, rC - BD - 2f),
             Pair(rC + BD + 2f, rD - BD - 2f), Pair(rD + BD + 2f, rE - BD - 2f),
         )
-        val rnd = java.util.Random(133L)
+        val rnd = kotlin.random.Random(133L)
         for ((gz0, gz1) in col4Gaps) {
             if (gz1 <= gz0) continue
             val gapW = c4 + BW + 80f - (c4 - BW - 80f)
@@ -1646,7 +1647,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             floatArrayOf(0.68f, 0.65f, 0.62f), floatArrayOf(0.65f, 0.32f, 0.18f),
             floatArrayOf(0.54f, 0.50f, 0.45f), floatArrayOf(0.32f, 0.28f, 0.24f),
         )
-        val rnd2 = java.util.Random(77L)
+        val rnd2 = kotlin.random.Random(77L)
         for (cx in listOf(lC1L, lC2L, lC3L)) {
             val z1 = rE + BD + 4f
             repeat(12) {
@@ -1716,7 +1717,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             val pi = i*2; val pj = ((i+1)%8)*2
             ov += listOf(tcx, h, tcz, op[pi], h, op[pi+1], op[pj], h, op[pj+1])
         }
-        meshes.add(Mesh(ov.toFloatArray().toFB(), GLES20.GL_TRIANGLES, 24, tR,tG,tB,1f,fog))
+        meshes.add(Mesh(ov.toFloatArray().toFB(), Gl.GL_TRIANGLES, 24, tR,tG,tB,1f,fog))
     }
 
     private fun addChamfEdges(x0: Float, z0: Float, x1: Float, z1: Float, h: Float, ch: Float = 12f) {
@@ -1966,7 +1967,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 if (visibleVerts.isNotEmpty()) {
                     val arr = FloatArray(visibleVerts.size).also { for (k in visibleVerts.indices) it[k] = visibleVerts[k] }
                     meshes.add(Mesh(
-                        arr.toFB(), GLES20.GL_TRIANGLES, arr.size / 3,
+                        arr.toFB(), Gl.GL_TRIANGLES, arr.size / 3,
                         baseCol[0] * brightness, baseCol[1] * brightness, baseCol[2] * brightness,
                         1f, 0f, windowDigit = tagDigit
                     ))
@@ -1975,7 +1976,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 if (sidewalkVerts.isNotEmpty()) {
                     val arr = FloatArray(sidewalkVerts.size).also { for (k in sidewalkVerts.indices) it[k] = sidewalkVerts[k] }
                     meshes.add(Mesh(
-                        arr.toFB(), GLES20.GL_TRIANGLES, arr.size / 3,
+                        arr.toFB(), Gl.GL_TRIANGLES, arr.size / 3,
                         baseCol[0] * brightness, baseCol[1] * brightness, baseCol[2] * brightness,
                         1f, 0f, aerialSkip = true
                     ))
@@ -2245,7 +2246,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                     val mul = (matMod * brightness)
                     val arr = FloatArray(verts.size).also { for (k in verts.indices) it[k] = verts[k] }
                     meshes.add(Mesh(
-                        arr.toFB(), GLES20.GL_TRIANGLES, arr.size / 3,
+                        arr.toFB(), Gl.GL_TRIANGLES, arr.size / 3,
                         (pal[0] * mul).coerceAtMost(1f),
                         (pal[1] * mul).coerceAtMost(1f),
                         (pal[2] * mul).coerceAtMost(1f),
@@ -2342,7 +2343,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         val bk=0.04f
 
         for (i in 1..8) addL(wx+wt+0.4f,wh*i/9f,z1, wx+wt+0.4f,wh*i/9f,z0, 0.22f,0.14f,0.09f)
-        val rand = java.util.Random(42L)
+        val rand = kotlin.random.Random(42L)
         repeat(4) {
             val czC = lerp(z1, z0, rand.nextFloat()); val cy = rand.nextFloat()*wh*0.80f
             addL(wx+wt+0.5f,cy,czC, wx+wt+0.5f,cy+40f+rand.nextFloat()*70f,czC+rand.nextFloat()*22f-11f, 0.20f,0.14f,0.10f)
@@ -2356,7 +2357,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         addRoundedRectFill(lxW, LAVA_Y, LAVA_N, lxE, LAVA_S - 20f,
             12f, 1.0f, 0.32f, 0.04f, fog=0.05f)
         // Molten streaks — red/orange, glow so they emit light at night (PASS 2).
-        val rnd = java.util.Random(4242L)
+        val rnd = kotlin.random.Random(4242L)
         val y = LAVA_Y + 1f
         val zSpan = abs(LAVA_N - LAVA_S)
         for (i in 0 until 18) {
@@ -2399,9 +2400,8 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             verts += listOf(cx,y,cz, pts[i].first,y,pts[i].second, pts[j].first,y,pts[j].second)
         }
         val arr = verts.toFloatArray()
-        val fb = ByteBuffer.allocateDirect(arr.size*4).order(ByteOrder.nativeOrder()).asFloatBuffer()
-            .also { it.put(arr); it.position(0) }
-        meshes.add(Mesh(fb, GLES20.GL_TRIANGLES, arr.size/3, rr,gg,bb,1f,fog))
+        val fb = arr.toGlBuffer()
+        meshes.add(Mesh(fb, Gl.GL_TRIANGLES, arr.size/3, rr,gg,bb,1f,fog))
     }
 
     // ── Green terrain north of lava ───────────────────────────────────────────
@@ -2428,7 +2428,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
      * shattering all at once.
      */
     private fun addSkyCracks() {
-        val rnd = java.util.Random(20261013L)   // fixed: the same sky tears the same way
+        val rnd = kotlin.random.Random(20261013L)   // fixed: the same sky tears the same way
         val n = 7
         for (i in 0 until n) {
             var az = rnd.nextFloat() * 360f
@@ -2436,8 +2436,8 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             var width = 26f + rnd.nextFloat() * 26f
             val segs = 7 + rnd.nextInt(5)
             fun pt(azimuth: Float, elev: Float, w: Float): FloatArray {
-                val a = Math.toRadians(azimuth.toDouble())
-                val e = Math.toRadians(elev.toDouble())
+                val a = ((azimuth.toDouble() * PI / 180.0))
+                val e = ((elev.toDouble() * PI / 180.0))
                 val r = SKY_DIST * 0.92f
                 return floatArrayOf(
                     (cos(e) * sin(a)).toFloat() * r,
@@ -2462,7 +2462,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             val arr = verts.toFloatArray()
             if (arr.isEmpty()) continue
             // Near-black: a crack is the ABSENCE of sky.
-            meshes.add(Mesh(arr.toFB(), GLES20.GL_TRIANGLES, arr.size / 3,
+            meshes.add(Mesh(arr.toFB(), Gl.GL_TRIANGLES, arr.size / 3,
                 0.02f, 0.01f, 0.03f, 1f, fog = 0f,
                 aerialSkip = true, sky = true, crack = true,
                 arcAngle = (i + 1).toFloat() / n))   // reused field: when this one opens
@@ -2508,7 +2508,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 verts += listOf(sx+r*cos(a1), sy+r*sin(a1), sz)
             }
             val arr = verts.toFloatArray()
-            meshes.add(Mesh(arr.toFB(), GLES20.GL_TRIANGLES, arr.size/3, cr,cg,cb,1f, fog=0f,
+            meshes.add(Mesh(arr.toFB(), Gl.GL_TRIANGLES, arr.size/3, cr,cg,cb,1f, fog=0f,
                 aerialSkip=true, sky=true, skyNight=night))
         }
     }
@@ -2565,12 +2565,12 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             // aerialSkip = true so the rubble doesn't clutter the high-up
             // aerial pose during the intro. Revealed at cut 3 along with the
             // sidewalks / lamps / cameras.
-            meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3, r, gC, b, 1f, fog, aerialSkip = true))
+            meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3, r, gC, b, 1f, fog, aerialSkip = true))
         }
     }
 
     private fun addDebris() {
-        val rnd = java.util.Random(77L)
+        val rnd = kotlin.random.Random(77L)
 
         // South face of each row E damaged building: rubble spilling outward
         val southDebrisColors = listOf(
@@ -2628,7 +2628,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             Pair(RC + BD + 2f, RD - BD - 2f),
             Pair(RD + BD + 2f, RE - BD - 2f),
         )
-        val rnd2 = java.util.Random(133L)
+        val rnd2 = kotlin.random.Random(133L)
         for ((gz0, gz1) in col4Gaps) {
             if (gz1 <= gz0) continue
             val gapW = C4 + BW + 80f - (C4 - BW - 80f)
@@ -2679,7 +2679,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 i += 3
             }
             // Keep the model's authored per-material colour (Kd from the MTL).
-            meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3,
+            meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3,
                 g.r, g.g, g.b, 1f, fog, aerialSkip = true))
         }
     }
@@ -2752,18 +2752,18 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         ).flatMap{it.toList()}.toFloatArray()
         val hfb = halo.toFB()
 
-        GLES20.glUniform4f(uCol, 0.55f,0.20f,0.90f,1f)
-        GLES20.glUniform1f(uFog, 0.0f)
+        Gl.glUniform4f(uCol, 0.55f,0.20f,0.90f,1f)
+        Gl.glUniform1f(uFog, 0.0f)
         hfb.position(0)
-        GLES20.glVertexAttribPointer(aPos,3,GLES20.GL_FLOAT,false,12,hfb)
-        GLES20.glEnableVertexAttribArray(aPos)
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLES,0,24)
+        Gl.glVertexAttribPointer(aPos,3,Gl.GL_FLOAT,false,12,hfb)
+        Gl.glEnableVertexAttribArray(aPos)
+        Gl.glDrawArrays(Gl.GL_TRIANGLES,0,24)
 
-        GLES20.glUniform4f(uCol, 0.85f,0.92f,1.0f,1f)
+        Gl.glUniform4f(uCol, 0.85f,0.92f,1.0f,1f)
         fb.position(0)
-        GLES20.glVertexAttribPointer(aPos,3,GLES20.GL_FLOAT,false,12,fb)
-        GLES20.glEnableVertexAttribArray(aPos)
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLES,0,24)
+        Gl.glVertexAttribPointer(aPos,3,Gl.GL_FLOAT,false,12,fb)
+        Gl.glEnableVertexAttribArray(aPos)
+        Gl.glDrawArrays(Gl.GL_TRIANGLES,0,24)
     }
 
     // ── Geometry helpers ──────────────────────────────────────────────────────
@@ -2948,18 +2948,18 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 }
                 if (shell.isNotEmpty()) {
                     val out = modelToWorld(shell)
-                    meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3, r, gg, b, 1f, fog, radShell = true))
+                    meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3, r, gg, b, 1f, fog, radShell = true))
                 }
                 if (fixedInner.isNotEmpty()) {
                     val out = modelToWorld(fixedInner)
-                    meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3, r, gg, b, 1f, fog, radShell = false))
+                    meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3, r, gg, b, 1f, fog, radShell = false))
                 }
             }
             // Interior image planes not tied to any floating unit are drawn fixed.
             for (tb in fixedTex.values) {
                 if (tb.v.isEmpty()) continue
                 val out = modelToWorld(tb.v)
-                meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3, 1f, 1f, 1f, 1f, fog,
+                meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3, 1f, 1f, 1f, 1f, fog,
                     tex = tb.texId, uv = tb.uv.toFloatArray().toFB()))
             }
 
@@ -2988,12 +2988,12 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 collapsible(ocx, ocz, ohx, ohz, COLLAPSE_FLOAT, pivY) {
                     for (batch in piece.flat) {
                         val out = modelToWorld(batch.v)
-                        meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3,
+                        meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3,
                             batch.r, batch.g, batch.b, 1f, fog, radShell = false))
                     }
                     for (tb in piece.tex.values) {
                         val out = modelToWorld(tb.v)
-                        meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3,
+                        meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3,
                             1f, 1f, 1f, 1f, fog, tex = tb.texId, uv = tb.uv.toFloatArray().toFB()))
                     }
                 }
@@ -3007,15 +3007,15 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 val a0 = RAD_DOOR_DEG - RAD_DOOR_HALF_DEG
                 val a1 = RAD_DOOR_DEG + RAD_DOOR_HALF_DEG
                 for (i in 0 until segs) {
-                    val t0 = Math.toRadians((a0 + (a1 - a0) * i / segs).toDouble())
-                    val t1 = Math.toRadians((a0 + (a1 - a0) * (i + 1) / segs).toDouble())
+                    val t0 = (((a0 + (a1 - a0) * PI / 180.0) * i / segs).toDouble())
+                    val t1 = (((a0 + (a1 - a0) * PI / 180.0) * (i + 1) / segs).toDouble())
                     val x0 = bx + cos(t0).toFloat() * r0; val z0 = bz + sin(t0).toFloat() * r0
                     val x1 = bx + cos(t1).toFloat() * r0; val z1 = bz + sin(t1).toFloat() * r0
                     val v = floatArrayOf(
                         x0, baseY, z0,  x1, baseY, z1,  x1, baseY + radDoorTopY, z1,
                         x0, baseY, z0,  x1, baseY + radDoorTopY, z1,  x0, baseY + radDoorTopY, z0,
                     )
-                    meshes.add(Mesh(v.toFB(), GLES20.GL_TRIANGLES, 6,
+                    meshes.add(Mesh(v.toFB(), Gl.GL_TRIANGLES, 6,
                         0.02f, 0.02f, 0.03f, 1f, 0f, noAO = true, radDoor = true))
                 }
             }
@@ -3080,7 +3080,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 x0v, baseY,  z0v,   x1v, baseY,  z1v,   x1v, arcTopY, z1v,
                 x0v, baseY,  z0v,   x1v, arcTopY, z1v,   x0v, arcTopY, z0v
             )
-            meshes.add(Mesh(v.toFB(), GLES20.GL_TRIANGLES, 6,
+            meshes.add(Mesh(v.toFB(), Gl.GL_TRIANGLES, 6,
                 0f, 0f, 0f, 1f, fog, radArc = true, arcAngle = segCenterDeg))
         }
 
@@ -3177,7 +3177,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                         post -> { r = 0.32f; gg = 0.30f; b = 0.28f }  // dark metal post
                         else -> { r = 0.62f; gg = 0.55f; b = 0.46f }  // stone/wood deck
                     }
-                    meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3,
+                    meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3,
                         r, gg, b, 1f, 0.04f, glow = lamp, noAO = lamp))
                 }
             }
@@ -3231,7 +3231,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         // Model y=+1 (visible post bottom) → world sidewalkTopY ⇒ baseY = sidewalkTopY - LAMP_SCALE.
         val baseY = sidewalkTopY - LAMP_Y_OFFSET
         val s = LAMP_SCALE
-        val yawRad = Math.toRadians(yawDeg.toDouble()).toFloat()
+        val yawRad = ((yawDeg.toDouble() * PI / 180.0)).toFloat()
         for (g in lampOffGroups) {
             addInstancedGroup(g, px, baseY, pz, s, yaw = yawRad, aerialSkip = true, noAO = true)
         }
@@ -3260,7 +3260,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         }
         val s = LAMP_SCALE
         val yOff = LAMP_Y_OFFSET
-        val yaw = Math.toRadians(LAMP_YAW_DEG.toDouble()).toFloat()
+        val yaw = ((LAMP_YAW_DEG.toDouble() * PI / 180.0)).toFloat()
         for (lamp in positions) {
             val px = lamp[0]; val pz = lamp[1]
             for (g in lampOffGroups) {
@@ -3359,7 +3359,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         val cr = glowColor?.getOrNull(0) ?: g.r
         val cg = glowColor?.getOrNull(1) ?: g.g
         val cb = glowColor?.getOrNull(2) ?: g.b
-        meshes.add(Mesh(out.toFB(), GLES20.GL_TRIANGLES, out.size / 3,
+        meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3,
             cr, cg, cb, a = alpha, fog = if (aerialSkip) 0f else 0.05f,
             aerialSkip = aerialSkip, glow = glow, noAO = noAO, lamp = lamp))
     }
@@ -3492,7 +3492,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         val cellX = (2f * BW) / (cols + 1).toFloat()
         val cellZ = (2f * BD) / (cols + 1).toFloat()
         val eps = 0.6f
-        val rnd = java.util.Random(seed)
+        val rnd = kotlin.random.Random(seed)
         val warmR = 1.00f; val warmG = 0.84f; val warmB = 0.36f
 
         fun winQ(x0: Float, y0: Float, z0: Float, x1: Float, y1: Float, z1: Float,
@@ -3551,7 +3551,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         val off = 10f
         val invR = 1f / sqrt(2f)
         // Fixed seed so the random subset of corners is the same on every run.
-        val rng = java.util.Random(20260530L)
+        val rng = kotlin.random.Random(20260530L)
         val keepProb = 0.30f
 
         fun cornersFor(cx: Float, cz: Float) {
@@ -3607,7 +3607,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         val dz = faceZ / faceN - bodyZ / bodyN
         if (dx * dx + dz * dz < 1e-6f) { monsterFaceYawOffsetDeg = 0f; return }
         // Model heading of the face, then the yaw offset that cancels it.
-        val faceHeading = Math.toDegrees(atan2(dx.toDouble(), dz.toDouble())).toFloat()
+        val faceHeading = (atan2(dx.toDouble(), dz.toDouble()) * 180.0 / PI).toFloat()
         monsterFaceYawOffsetDeg = -faceHeading
     }
 
@@ -3618,8 +3618,8 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             if (monsterFaceArrs.isNotEmpty()) monsterFaceArrs = emptyList()
             return
         }
-        GLES20.glUniform1f(uFog, 0f)
-        GLES20.glUniform1f(uAerial, 1f)   // self-lit so it reads in the night dark
+        Gl.glUniform1f(uFog, 0f)
+        Gl.glUniform1f(uAerial, 1f)   // self-lit so it reads in the night dark
         val faces = mutableListOf<Pair<FloatArray, FloatArray>>()
         if (monsterActive) drawMonsterInstance(monsterX, monsterZ, monsterAngle, monsterScale,
             monsterTilt, monsterTiltX, monsterTiltZ, faces)
@@ -3636,13 +3636,13 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         faces: MutableList<Pair<FloatArray, FloatArray>>
     ) {
         setLit(1f)   // the monster's body takes the sun and the lamps it passes
-        val yaw = Math.toRadians(angleDeg.toDouble()).toFloat()
+        val yaw = ((angleDeg.toDouble() * PI / 180.0)).toFloat()
         val cy = cos(yaw); val sy = sin(yaw)
         val oy = 4f * s
         // Tilt is a rotation about the horizontal axis k = (tdz, 0, -tdx) through
         // the feet (model y = -4·s), so the body falls toward (tdx, tdz) face-first.
         val hasTilt = tilt > 0.01f
-        val tr = Math.toRadians(tilt.toDouble()).toFloat()
+        val tr = ((tilt.toDouble() * PI / 180.0)).toFloat()
         val ct = cos(tr); val st = sin(tr)
         val kx = tdz; val kz = -tdx
         val fy = -4f * s
@@ -3677,11 +3677,11 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             // Body is authored pure black — lift it just enough that it reads as
             // a dark shape. It's drawn before the overlay, so the night dims it
             // down to a shadow rather than a bright cut-out.
-            GLES20.glUniform4f(uCol, g.r.coerceAtLeast(0.40f), g.g.coerceAtLeast(0.40f), g.b.coerceAtLeast(0.40f), 1f)
+            Gl.glUniform4f(uCol, g.r.coerceAtLeast(0.40f), g.g.coerceAtLeast(0.40f), g.b.coerceAtLeast(0.40f), 1f)
             fb.position(0)
-            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
-            GLES20.glEnableVertexAttribArray(aPos)
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, src.size / 3)
+            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
+            Gl.glEnableVertexAttribArray(aPos)
+            Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, src.size / 3)
             // The bright face materials (red / white) are captured so PASS 2 can
             // re-draw them additively — illuminating the faces through the night
             // while the dark body stays dimmed.
@@ -3694,16 +3694,16 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     private fun drawMonsterFaces(dkLvl: Float) {
         setLit(0f)   // the face glows in the dark
         if (aerialMode || monsterFaceArrs.isEmpty()) return
-        GLES20.glUniform1f(uFog, 0f)
+        Gl.glUniform1f(uFog, 0f)
         val k = (0.6f * dkLvl).coerceIn(0f, 1f)
         for ((arr, col) in monsterFaceArrs) {
             if (arr.isEmpty()) continue
             val fb = arr.toFB()
-            GLES20.glUniform4f(uCol, col[0], col[1], col[2], k)
+            Gl.glUniform4f(uCol, col[0], col[1], col[2], k)
             fb.position(0)
-            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
-            GLES20.glEnableVertexAttribArray(aPos)
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, arr.size / 3)
+            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
+            Gl.glEnableVertexAttribArray(aPos)
+            Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, arr.size / 3)
         }
     }
 
@@ -3711,7 +3711,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     private fun drawWallGun() {
         if (aerialMode || gunGrabbed || gunGroups.isEmpty()) return
         setLit(1f)
-        GLES20.glUniform1f(uFog, 0f)
+        Gl.glUniform1f(uFog, 0f)
         for (g in gunGroups) {
             if (g.verts.isEmpty()) continue
             val arr = wallGunVerts(g)
@@ -3719,11 +3719,11 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             val r  = if (emptyMat) 0.55f else g.r
             val gg = if (emptyMat) 0.55f else g.g
             val b  = if (emptyMat) 0.58f else g.b
-            GLES20.glUniform4f(uCol, r, gg, b, 1f)
+            Gl.glUniform4f(uCol, r, gg, b, 1f)
             val fb = arr.toFB(); fb.position(0)
-            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
-            GLES20.glEnableVertexAttribArray(aPos)
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, g.verts.size / 3)
+            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
+            Gl.glEnableVertexAttribArray(aPos)
+            Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, g.verts.size / 3)
         }
     }
 
@@ -3733,15 +3733,15 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     private fun drawWallGunGlow() {
         if (aerialMode || gunGrabbed || gunGroups.isEmpty()) return
         setLit(0f)
-        GLES20.glUniform1f(uFog, 0f)
+        Gl.glUniform1f(uFog, 0f)
         for (g in gunGroups) {
             if (g.verts.isEmpty()) continue
             val arr = wallGunVerts(g)
-            GLES20.glUniform4f(uCol, 0.42f, 0.46f, 0.55f, 0.40f)
+            Gl.glUniform4f(uCol, 0.42f, 0.46f, 0.55f, 0.40f)
             val fb = arr.toFB(); fb.position(0)
-            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
-            GLES20.glEnableVertexAttribArray(aPos)
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, g.verts.size / 3)
+            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
+            Gl.glEnableVertexAttribArray(aPos)
+            Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, g.verts.size / 3)
         }
     }
 
@@ -3752,13 +3752,13 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         val ps = projectiles
         if (aerialMode || ps.isEmpty() || bulletGroups.isEmpty()) return
         setLit(if (additive) 0f else 1f)
-        GLES20.glUniform1f(uFog, 0f)
+        Gl.glUniform1f(uFog, 0f)
         for (p in ps) {
             val cx = p[0]; val cy = p[1]; val cz = p[2]; val r = p[3]
             val spin = if (p.size > 4) p[4] else 0f
             val s = bulletFit * (r * 1.6f)                     // model → ~1.6× the hit radius
             // Tumble about a fixed diagonal axis for a rolling look.
-            val a = Math.toRadians(spin.toDouble()).toFloat()
+            val a = ((spin.toDouble() * PI / 180.0)).toFloat()
             val ca = cos(a); val sa = sin(a)
             val kx = 0.577f; val ky = 0.577f; val kz = 0.577f  // normalised (1,1,1)
             for (g in bulletGroups) {
@@ -3780,15 +3780,15 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                     arr[i] = rx + cx; arr[i + 1] = ry + cy; arr[i + 2] = rz + cz
                     i += 3
                 }
-                if (additive) GLES20.glUniform4f(uCol, 0.55f, 0.56f, 0.60f, 0.5f)
+                if (additive) Gl.glUniform4f(uCol, 0.55f, 0.56f, 0.60f, 0.5f)
                 else {
                     val er = g.r == 0f && g.g == 0f && g.b == 0f
-                    GLES20.glUniform4f(uCol, if (er) 0.62f else g.r, if (er) 0.60f else g.g, if (er) 0.56f else g.b, 1f)
+                    Gl.glUniform4f(uCol, if (er) 0.62f else g.r, if (er) 0.60f else g.g, if (er) 0.56f else g.b, 1f)
                 }
                 val fb = arr.toFB(); fb.position(0)
-                GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
-                GLES20.glEnableVertexAttribArray(aPos)
-                GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, src.size / 3)
+                Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
+                Gl.glEnableVertexAttribArray(aPos)
+                Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, src.size / 3)
             }
         }
     }
@@ -3807,18 +3807,18 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         if (aerialMode || !gunGrabbed || gunGroups.isEmpty()) return
         val v = if (gunHeld) VM_USE else VM_AWAY
         setLit(0f)                                       // emissive → constant brightness
-        GLES20.glUniform1f(uFog, 0f)
-        GLES20.glUniform1f(uAerial, 1f)
+        Gl.glUniform1f(uFog, 0f)
+        Gl.glUniform1f(uAerial, 1f)
         // Draw the viewmodel on a FRESH depth buffer: clear depth so the gun sits on
         // top of the whole world, but keep the depth TEST enabled so it self-occludes
         // correctly (barrel over its own far side, sights in front of the receiver).
         // Disabling the depth test entirely painted the gun's back faces over its
         // front — no self-occlusion — which is why it "fell apart" when drawn.
-        GLES20.glDisable(GLES20.GL_BLEND)
-        GLES20.glEnable(GLES20.GL_DEPTH_TEST)
-        GLES20.glDepthMask(true)
-        GLES20.glDepthFunc(GLES20.GL_LESS)
-        GLES20.glClear(GLES20.GL_DEPTH_BUFFER_BIT)
+        Gl.glDisable(Gl.GL_BLEND)
+        Gl.glEnable(Gl.GL_DEPTH_TEST)
+        Gl.glDepthMask(true)
+        Gl.glDepthFunc(Gl.GL_LESS)
+        Gl.glClear(Gl.GL_DEPTH_BUFFER_BIT)
         // Dedicated view-space transform — the gun sits at a fixed spot in front of
         // the (origin) camera, so screen placement is constant every frame.
         val aspect = if (sh != 0) sw.toFloat() / sh.toFloat() else 1f
@@ -3830,7 +3830,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         Matrix.rotateM(model, 0, v[6], 0f, 0f, 1f)
         Matrix.scaleM(model, 0, v[3], v[3], v[3])
         val mvp = FloatArray(16); Matrix.multiplyMM(mvp, 0, proj, 0, model, 0)
-        GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
+        Gl.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
         val norm = gunFit / GUN_SPAN                     // → unit-sized model, centred
         for (g in gunGroups) {
             val src = g.verts; if (src.isEmpty()) continue
@@ -3845,16 +3845,16 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             // Lift the (dark steel) material so the viewmodel reads day and night.
             val er = g.r == 0f && g.g == 0f && g.b == 0f
             val mr = if (er) 0.5f else g.r; val mg = if (er) 0.5f else g.g; val mb = if (er) 0.55f else g.b
-            GLES20.glUniform4f(uCol,
+            Gl.glUniform4f(uCol,
                 (0.34f + mr * 0.6f).coerceAtMost(1f),
                 (0.34f + mg * 0.6f).coerceAtMost(1f),
                 (0.36f + mb * 0.6f).coerceAtMost(1f), 1f)
             val fb = arr.toFB(); fb.position(0)
-            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
-            GLES20.glEnableVertexAttribArray(aPos)
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, src.size / 3)
+            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
+            Gl.glEnableVertexAttribArray(aPos)
+            Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, src.size / 3)
         }
-        GLES20.glEnable(GLES20.GL_DEPTH_TEST)
+        Gl.glEnable(Gl.GL_DEPTH_TEST)
     }
 
     private fun drawCameras() {
@@ -3871,7 +3871,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         val s = CAMERA_SCALE
         val tx = playerX; val tz = playerZ
         val ty = PLAYER_LOOK_Y
-        val offsetYaw = Math.toRadians(CAMERA_MODEL_YAW_OFFSET_DEG.toDouble()).toFloat()
+        val offsetYaw = ((CAMERA_MODEL_YAW_OFFSET_DEG.toDouble() * PI / 180.0)).toFloat()
 
         // A camera is bolted to a building corner, so when that building goes over,
         // the camera goes with it — otherwise the city falls and leaves a grid of
@@ -3950,8 +3950,8 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             }
         }
 
-        GLES20.glUniform1f(uFog, 0f)
-        GLES20.glUniform1f(uAerial, 1f)  // self-lit / metallic — skip the ground AO darkening
+        Gl.glUniform1f(uFog, 0f)
+        Gl.glUniform1f(uAerial, 1f)  // self-lit / metallic — skip the ground AO darkening
         val dk = darknessLevel.coerceIn(0f, 1f)
         val lights = mutableListOf<FloatArray>()
         for (gi in cameraOnGroups.indices) {
@@ -3967,11 +3967,11 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                 gC = g.g + (night[1] - g.g) * dk
                 b  = g.b + (night[2] - g.b) * dk
             } else { r = g.r; gC = g.g; b = g.b }
-            GLES20.glUniform4f(uCol, r, gC, b, 1f)
+            Gl.glUniform4f(uCol, r, gC, b, 1f)
             fb.position(0)
-            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
-            GLES20.glEnableVertexAttribArray(aPos)
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, arr.size / 3)
+            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
+            Gl.glEnableVertexAttribArray(aPos)
+            Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, arr.size / 3)
             // Only the small recording light (Material.002, red at night) gets the
             // additive "defy the dark" pop. The larger lens (Material.003) stays
             // dimmed by the overlay, per design.
@@ -3986,15 +3986,15 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     private fun drawCameraLights(dkLvl: Float) {
         setLit(0f)   // the lens dot is a light source
         if (aerialMode || cameraLightArrs.isEmpty()) return
-        GLES20.glUniform1f(uFog, 0f)
-        GLES20.glUniform4f(uCol, 1.0f, 0.06f, 0.07f, (0.95f * dkLvl).coerceIn(0f, 1f))
+        Gl.glUniform1f(uFog, 0f)
+        Gl.glUniform4f(uCol, 1.0f, 0.06f, 0.07f, (0.95f * dkLvl).coerceIn(0f, 1f))
         for (arr in cameraLightArrs) {
             if (arr.isEmpty()) continue
             val fb = arr.toFB()
             fb.position(0)
-            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
-            GLES20.glEnableVertexAttribArray(aPos)
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, arr.size / 3)
+            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
+            Gl.glEnableVertexAttribArray(aPos)
+            Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, arr.size / 3)
         }
     }
 
@@ -4027,24 +4027,24 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             addCameraBox(lensVerts, mx, my, mz, sx, sz, fx, fz, 3f, 3f, 11f, 15f)
         }
 
-        GLES20.glUniform1f(uFog, 0f)
-        GLES20.glUniform1f(uAerial, aerialBlend)
+        Gl.glUniform1f(uFog, 0f)
+        Gl.glUniform1f(uAerial, aerialBlend)
 
         val bodyArr = bodyVerts.toFloatArray()
         val bodyFb  = bodyArr.toFB()
-        GLES20.glUniform4f(uCol, 0.18f, 0.18f, 0.20f, 1f)
+        Gl.glUniform4f(uCol, 0.18f, 0.18f, 0.20f, 1f)
         bodyFb.position(0)
-        GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, bodyFb)
-        GLES20.glEnableVertexAttribArray(aPos)
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, bodyArr.size / 3)
+        Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, bodyFb)
+        Gl.glEnableVertexAttribArray(aPos)
+        Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, bodyArr.size / 3)
 
         val lensArr = lensVerts.toFloatArray()
         val lensFb  = lensArr.toFB()
-        GLES20.glUniform4f(uCol, 0.85f, 0.10f, 0.10f, 1f)
+        Gl.glUniform4f(uCol, 0.85f, 0.10f, 0.10f, 1f)
         lensFb.position(0)
-        GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, lensFb)
-        GLES20.glEnableVertexAttribArray(aPos)
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, lensArr.size / 3)
+        Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, lensFb)
+        Gl.glEnableVertexAttribArray(aPos)
+        Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, lensArr.size / 3)
     }
 
     // ── Sliding doors ────────────────────────────────────────────────────────
@@ -4131,8 +4131,8 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             }
         }
 
-        GLES20.glUniform1f(uFog, 0f)
-        GLES20.glUniform1f(uAerial, 1f)
+        Gl.glUniform1f(uFog, 0f)
+        Gl.glUniform1f(uAerial, 1f)
         for (gi in doorGroups.indices) {
             val arr = perGroup[gi].toFloatArray()
             if (arr.isEmpty()) continue
@@ -4143,11 +4143,11 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             val r = (g.r * 1.6f + 0.04f).coerceAtMost(0.30f)
             val gC = (g.g * 1.6f + 0.04f).coerceAtMost(0.30f)
             val b = (g.b * 1.6f + 0.04f).coerceAtMost(0.45f)
-            GLES20.glUniform4f(uCol, r, gC, b, 1f)
+            Gl.glUniform4f(uCol, r, gC, b, 1f)
             fb.position(0)
-            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, fb)
-            GLES20.glEnableVertexAttribArray(aPos)
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, arr.size / 3)
+            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
+            Gl.glEnableVertexAttribArray(aPos)
+            Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, arr.size / 3)
         }
     }
 
@@ -4188,7 +4188,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
 
     private fun addTri(x0:Float,y0:Float,z0:Float, x1:Float,y1:Float,z1:Float,
                        x2:Float,y2:Float,z2:Float, r:Float,g:Float,b:Float, fog:Float=0.65f) {
-        meshes.add(Mesh(floatArrayOf(x0,y0,z0,x1,y1,z1,x2,y2,z2).toFB(), GLES20.GL_TRIANGLES, 3, r,g,b,1f,fog))
+        meshes.add(Mesh(floatArrayOf(x0,y0,z0,x1,y1,z1,x2,y2,z2).toFB(), Gl.GL_TRIANGLES, 3, r,g,b,1f,fog))
     }
     private fun addQ(x0:Float,y0:Float,z0:Float, x1:Float,y1:Float,z1:Float,
                      x2:Float,y2:Float,z2:Float, x3:Float,y3:Float,z3:Float,
@@ -4197,12 +4197,12 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
                      glow: Boolean = false,
                      softShadow: Boolean = false, lamp: Boolean = false) {
         val v = floatArrayOf(x0,y0,z0,x1,y1,z1,x2,y2,z2, x0,y0,z0,x2,y2,z2,x3,y3,z3)
-        meshes.add(Mesh(v.toFB(), GLES20.GL_TRIANGLES, 6, r,g,b,a,fog,
+        meshes.add(Mesh(v.toFB(), Gl.GL_TRIANGLES, 6, r,g,b,a,fog,
             aerialSkip = aerialSkip, glow = glow, softShadow = softShadow, lamp = lamp))
     }
     private fun addL(x0:Float,y0:Float,z0:Float, x1:Float,y1:Float,z1:Float,
                      r:Float,g:Float,b:Float) {
-        meshes.add(Mesh(floatArrayOf(x0,y0,z0,x1,y1,z1).toFB(), GLES20.GL_LINES, 2, r,g,b, fog=0.70f))
+        meshes.add(Mesh(floatArrayOf(x0,y0,z0,x1,y1,z1).toFB(), Gl.GL_LINES, 2, r,g,b, fog=0.70f))
     }
 
     /**
@@ -4420,25 +4420,8 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     /** Uploads [name] from assets/models/textures/, once. 0 if it isn't there. */
     private fun modelTexture(name: String): Int {
         modelTextures[name]?.let { return it }
-        val a = assets ?: return 0
-        val id = try {
-            val bmp = a.open("models/textures/$name").use {
-                android.graphics.BitmapFactory.decodeStream(it)
-            } ?: return 0
-            val ids = IntArray(1)
-            GLES20.glGenTextures(1, ids, 0)
-            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, ids[0])
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
-            android.opengl.GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bmp, 0)
-            bmp.recycle()
-            ids[0]
-        } catch (t: Throwable) {
-            android.util.Log.w("CityGL", "texture missing: $name")
-            0
-        }
+        val id = uploadTextureFromAsset("models/textures/$name")
+        if (id == 0) logWarn("CityGL", "texture missing: $name")
         modelTextures[name] = id
         return id
     }
@@ -4449,8 +4432,8 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     private var curTexOn = false
     private fun clearMeshTexture() {
         if (!curTexOn) return
-        GLES20.glUniform1f(uTexOn, 0f)
-        GLES20.glDisableVertexAttribArray(aUV)
+        Gl.glUniform1f(uTexOn, 0f)
+        Gl.glDisableVertexAttribArray(aUV)
         curTexOn = false
     }
     private fun bindMeshTexture(m: Mesh): Boolean {
@@ -4459,13 +4442,13 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             clearMeshTexture()
             return false
         }
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, m.tex)
-        GLES20.glUniform1i(uTexSampler, 0)
-        if (!curTexOn) { GLES20.glUniform1f(uTexOn, 1f); curTexOn = true }
+        Gl.glActiveTexture(Gl.GL_TEXTURE0)
+        Gl.glBindTexture(Gl.GL_TEXTURE_2D, m.tex)
+        Gl.glUniform1i(uTexSampler, 0)
+        if (!curTexOn) { Gl.glUniform1f(uTexOn, 1f); curTexOn = true }
         uv.position(0)
-        GLES20.glVertexAttribPointer(aUV, 2, GLES20.GL_FLOAT, false, 8, uv)
-        GLES20.glEnableVertexAttribArray(aUV)
+        Gl.glVertexAttribPointer(aUV, 2, Gl.GL_FLOAT, false, 8, uv)
+        Gl.glEnableVertexAttribArray(aUV)
         return true
     }
 
@@ -4477,16 +4460,16 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     private fun setXform(xf: FloatArray?) {
         if (xf == null) {
             if (!curXformSet) return                     // already identity
-            GLES20.glUniform3f(uShift, 0f, 0f, 0f)
-            GLES20.glUniform4f(uTip, 0f, 1f, 0f, 0f)
-            GLES20.glUniform3f(uPivot, 0f, 0f, 0f)
+            Gl.glUniform3f(uShift, 0f, 0f, 0f)
+            Gl.glUniform4f(uTip, 0f, 1f, 0f, 0f)
+            Gl.glUniform3f(uPivot, 0f, 0f, 0f)
             curXformSet = false
             return
         }
         if (curXformSet && xf.contentEquals(curXform)) return
-        GLES20.glUniform3f(uShift, xf[0], xf[1], xf[2])
-        GLES20.glUniform4f(uTip, xf[3], xf[4], xf[5], xf[6])
-        GLES20.glUniform3f(uPivot, xf[7], xf[8], xf[9])
+        Gl.glUniform3f(uShift, xf[0], xf[1], xf[2])
+        Gl.glUniform4f(uTip, xf[3], xf[4], xf[5], xf[6])
+        Gl.glUniform3f(uPivot, xf[7], xf[8], xf[9])
         xf.copyInto(curXform)
         curXformSet = true
     }
@@ -4494,7 +4477,7 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
     private var curLitU = -1f
     private fun setLit(v: Float) {
         val want = if (aerialMode) 0f else v
-        if (lightingOn && want != curLitU) { GLES20.glUniform1f(uLit, want); curLitU = want }
+        if (lightingOn && want != curLitU) { Gl.glUniform1f(uLit, want); curLitU = want }
     }
 
     // The shader carries MAX_LIGHTS point lights; the city has far more lamps than
@@ -4531,35 +4514,35 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
             lightRadBuf[n] = 0f
             n++
         }
-        GLES20.glUniform3fv(uLightPos, MAX_LIGHTS, lightPosBuf, 0)
-        GLES20.glUniform1fv(uLightRad, MAX_LIGHTS, lightRadBuf, 0)
+        Gl.glUniform3fv(uLightPos, MAX_LIGHTS, lightPosBuf, 0)
+        Gl.glUniform1fv(uLightRad, MAX_LIGHTS, lightRadBuf, 0)
     }
 
     // Returns 0 if anything fails to compile or link, so callers can fall back
     // instead of binding a dead program (which just renders black).
     private fun buildProg(vs:String, fs:String): Int {
-        val v=comp(GLES20.GL_VERTEX_SHADER,vs)
-        val f=comp(GLES20.GL_FRAGMENT_SHADER,fs)
+        val v=comp(Gl.GL_VERTEX_SHADER,vs)
+        val f=comp(Gl.GL_FRAGMENT_SHADER,fs)
         if (v == 0 || f == 0) return 0
-        val p=GLES20.glCreateProgram()
-        GLES20.glAttachShader(p,v); GLES20.glAttachShader(p,f); GLES20.glLinkProgram(p)
+        val p=Gl.glCreateProgram()
+        Gl.glAttachShader(p,v); Gl.glAttachShader(p,f); Gl.glLinkProgram(p)
         val ok = IntArray(1)
-        GLES20.glGetProgramiv(p, GLES20.GL_LINK_STATUS, ok, 0)
+        Gl.glGetProgramiv(p, Gl.GL_LINK_STATUS, ok, 0)
         if (ok[0] == 0) {
-            android.util.Log.w("CityGL", "link failed: " + GLES20.glGetProgramInfoLog(p))
-            GLES20.glDeleteProgram(p)
+            logWarn("CityGL", "link failed: " + Gl.glGetProgramInfoLog(p))
+            Gl.glDeleteProgram(p)
             return 0
         }
         return p
     }
     private fun comp(t:Int, s:String): Int {
-        val sh=GLES20.glCreateShader(t)
-        GLES20.glShaderSource(sh,s); GLES20.glCompileShader(sh)
+        val sh=Gl.glCreateShader(t)
+        Gl.glShaderSource(sh,s); Gl.glCompileShader(sh)
         val ok = IntArray(1)
-        GLES20.glGetShaderiv(sh, GLES20.GL_COMPILE_STATUS, ok, 0)
+        Gl.glGetShaderiv(sh, Gl.GL_COMPILE_STATUS, ok, 0)
         if (ok[0] == 0) {
-            android.util.Log.w("CityGL", "shader compile failed: " + GLES20.glGetShaderInfoLog(sh))
-            GLES20.glDeleteShader(sh)
+            logWarn("CityGL", "shader compile failed: " + Gl.glGetShaderInfoLog(sh))
+            Gl.glDeleteShader(sh)
             return 0
         }
         return sh
@@ -4573,10 +4556,19 @@ class CityGLRenderer(private val assets: AssetManager? = null) : GLSurfaceView.R
         return if (s <= e) a in s..e else a >= s || a <= e
     }
 
-    private val PI = Math.PI
+    private val PI = kotlin.math.PI
     private fun lerp(a:Float, b:Float, t:Float) = a+(b-a)*t
 }
 
-private fun FloatArray.toFB(): FloatBuffer =
-    ByteBuffer.allocateDirect(size*4).order(ByteOrder.nativeOrder())
-        .asFloatBuffer().also { it.put(this); it.position(0) }
+private fun FloatArray.toFB(): GlFloatBuffer =
+    this.toGlBuffer()
+
+/**
+ * Monotonic milliseconds — was `SystemClock.uptimeMillis()`. Frame pacing must
+ * not be affected by wall-clock changes, so this deliberately does not use
+ * nowMillis().
+ */
+private val frameClockStart = kotlin.time.TimeSource.Monotonic.markNow()
+
+private fun monotonicMillis(): Long =
+    frameClockStart.elapsedNow().inWholeMilliseconds

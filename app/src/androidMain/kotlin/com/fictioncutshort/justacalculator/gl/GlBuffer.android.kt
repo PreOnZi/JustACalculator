@@ -24,6 +24,10 @@ actual class GlFloatBuffer(internal val nio: FloatBuffer) {
 
     // The JVM reclaims direct buffers itself; nothing to release.
     actual fun dispose() = Unit
+
+    actual fun get(index: Int): Float = nio.get(index)
+    actual fun put(index: Int, value: Float): GlFloatBuffer = apply { nio.put(index, value) }
+
 }
 
 actual fun glFloatBuffer(capacity: Int): GlFloatBuffer =

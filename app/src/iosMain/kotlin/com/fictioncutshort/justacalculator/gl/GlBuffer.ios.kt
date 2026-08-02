@@ -53,6 +53,10 @@ actual class GlFloatBuffer(private val data: FloatArray) {
         pinned?.unpin()
         pinned = null
     }
+
+    actual fun get(index: Int): Float = data[index]
+    actual fun put(index: Int, value: Float): GlFloatBuffer = apply { data[index] = value }
+
 }
 
 actual fun glFloatBuffer(capacity: Int): GlFloatBuffer = GlFloatBuffer(FloatArray(capacity))

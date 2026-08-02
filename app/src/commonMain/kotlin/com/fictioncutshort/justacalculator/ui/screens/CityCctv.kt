@@ -1,10 +1,11 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
-import android.opengl.GLES20
+import com.fictioncutshort.justacalculator.platform.nowMillis
+import com.fictioncutshort.justacalculator.platform.logWarn
+import com.fictioncutshort.justacalculator.gl.toGlBuffer
+import com.fictioncutshort.justacalculator.gl.GlFloatBuffer
+import com.fictioncutshort.justacalculator.gl.Gl
 import com.fictioncutshort.justacalculator.gl.Matrix
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.nio.FloatBuffer
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -221,7 +222,7 @@ class CityCctv {
     private var aPos = 0; private var aAtlas = 0; private var aCell = 0
     private var uMVP = 0; private var uTex = 0; private var uTime = 0; private var uNight = 0
 
-    private var quadBuf: FloatBuffer? = null
+    private var quadBuf: GlFloatBuffer? = null
     private var quadVerts = 0
     private var nextCell = 0
 
@@ -244,53 +245,52 @@ class CityCctv {
         release()
         prog = buildProg()
         if (prog == 0) return
-        aPos    = GLES20.glGetAttribLocation(prog, "aPosition")
-        aAtlas  = GLES20.glGetAttribLocation(prog, "aAtlas")
-        aCell   = GLES20.glGetAttribLocation(prog, "aCell")
-        uMVP    = GLES20.glGetUniformLocation(prog, "uMVP")
-        uTex    = GLES20.glGetUniformLocation(prog, "uTex")
-        uTime   = GLES20.glGetUniformLocation(prog, "uTime")
-        uNight  = GLES20.glGetUniformLocation(prog, "uNight")
+        aPos    = Gl.glGetAttribLocation(prog, "aPosition")
+        aAtlas  = Gl.glGetAttribLocation(prog, "aAtlas")
+        aCell   = Gl.glGetAttribLocation(prog, "aCell")
+        uMVP    = Gl.glGetUniformLocation(prog, "uMVP")
+        uTex    = Gl.glGetUniformLocation(prog, "uTex")
+        uTime   = Gl.glGetUniformLocation(prog, "uTime")
+        uNight  = Gl.glGetUniformLocation(prog, "uNight")
 
         val w = COLS * CELL_W
         val h = ROWS * CELL_H
         val ids = IntArray(1)
-        GLES20.glGenTextures(1, ids, 0); tex = ids[0]
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex)
-        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGB, w, h, 0,
-            GLES20.GL_RGB, GLES20.GL_UNSIGNED_BYTE, null)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        Gl.glGenTextures(1, ids, 0); tex = ids[0]
+        Gl.glBindTexture(Gl.GL_TEXTURE_2D, tex)
+        Gl.glTexImage2DEmpty(Gl.GL_RGB, w, h, Gl.GL_RGB, Gl.GL_UNSIGNED_BYTE)
+        Gl.glTexParameteri(Gl.GL_TEXTURE_2D, Gl.GL_TEXTURE_MIN_FILTER, Gl.GL_LINEAR)
+        Gl.glTexParameteri(Gl.GL_TEXTURE_2D, Gl.GL_TEXTURE_MAG_FILTER, Gl.GL_LINEAR)
+        Gl.glTexParameteri(Gl.GL_TEXTURE_2D, Gl.GL_TEXTURE_WRAP_S, Gl.GL_CLAMP_TO_EDGE)
+        Gl.glTexParameteri(Gl.GL_TEXTURE_2D, Gl.GL_TEXTURE_WRAP_T, Gl.GL_CLAMP_TO_EDGE)
 
-        GLES20.glGenRenderbuffers(1, ids, 0); depthRb = ids[0]
-        GLES20.glBindRenderbuffer(GLES20.GL_RENDERBUFFER, depthRb)
-        GLES20.glRenderbufferStorage(GLES20.GL_RENDERBUFFER, GLES20.GL_DEPTH_COMPONENT16, w, h)
+        Gl.glGenRenderbuffers(1, ids, 0); depthRb = ids[0]
+        Gl.glBindRenderbuffer(Gl.GL_RENDERBUFFER, depthRb)
+        Gl.glRenderbufferStorage(Gl.GL_RENDERBUFFER, Gl.GL_DEPTH_COMPONENT16, w, h)
 
-        GLES20.glGenFramebuffers(1, ids, 0); fbo = ids[0]
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo)
-        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0,
-            GLES20.GL_TEXTURE_2D, tex, 0)
-        GLES20.glFramebufferRenderbuffer(GLES20.GL_FRAMEBUFFER, GLES20.GL_DEPTH_ATTACHMENT,
-            GLES20.GL_RENDERBUFFER, depthRb)
-        val ok = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) == GLES20.GL_FRAMEBUFFER_COMPLETE
+        Gl.glGenFramebuffers(1, ids, 0); fbo = ids[0]
+        Gl.glBindFramebuffer(Gl.GL_FRAMEBUFFER, fbo)
+        Gl.glFramebufferTexture2D(Gl.GL_FRAMEBUFFER, Gl.GL_COLOR_ATTACHMENT0,
+            Gl.GL_TEXTURE_2D, tex, 0)
+        Gl.glFramebufferRenderbuffer(Gl.GL_FRAMEBUFFER, Gl.GL_DEPTH_ATTACHMENT,
+            Gl.GL_RENDERBUFFER, depthRb)
+        val ok = Gl.glCheckFramebufferStatus(Gl.GL_FRAMEBUFFER) == Gl.GL_FRAMEBUFFER_COMPLETE
         // Start every screen black rather than on whatever junk the driver handed us.
         if (ok) {
-            GLES20.glViewport(0, 0, w, h)
-            GLES20.glClearColor(0.01f, 0.02f, 0.02f, 1f)
-            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+            Gl.glViewport(0, 0, w, h)
+            Gl.glClearColor(0.01f, 0.02f, 0.02f, 1f)
+            Gl.glClear(Gl.GL_COLOR_BUFFER_BIT or Gl.GL_DEPTH_BUFFER_BIT)
         }
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
-        if (!ok) { release(); android.util.Log.w("CityGL", "CCTV framebuffer incomplete") }
+        Gl.glBindFramebuffer(Gl.GL_FRAMEBUFFER, 0)
+        if (!ok) { release(); logWarn("CityGL", "CCTV framebuffer incomplete") }
     }
 
     fun release() {
         val ids = IntArray(1)
-        if (fbo != 0)     { ids[0] = fbo;     GLES20.glDeleteFramebuffers(1, ids, 0);  fbo = 0 }
-        if (depthRb != 0) { ids[0] = depthRb; GLES20.glDeleteRenderbuffers(1, ids, 0); depthRb = 0 }
-        if (tex != 0)     { ids[0] = tex;     GLES20.glDeleteTextures(1, ids, 0);      tex = 0 }
-        if (prog != 0)    { GLES20.glDeleteProgram(prog); prog = 0 }
+        if (fbo != 0)     { ids[0] = fbo;     Gl.glDeleteFramebuffers(1, ids, 0);  fbo = 0 }
+        if (depthRb != 0) { ids[0] = depthRb; Gl.glDeleteRenderbuffers(1, ids, 0); depthRb = 0 }
+        if (tex != 0)     { ids[0] = tex;     Gl.glDeleteTextures(1, ids, 0);      tex = 0 }
+        if (prog != 0)    { Gl.glDeleteProgram(prog); prog = 0 }
     }
 
     /** Bakes the monitors into the single vertex buffer every screen is drawn from. */
@@ -299,8 +299,7 @@ class CityCctv {
         val data = mutableListOf<Float>()
         for (m in monitors) m.emit(data)
         val arr = FloatArray(data.size) { data[it] }
-        quadBuf = ByteBuffer.allocateDirect(arr.size * 4).order(ByteOrder.nativeOrder())
-            .asFloatBuffer().also { it.put(arr); it.position(0) }
+        quadBuf = arr.toGlBuffer()
         quadVerts = arr.size / 7
     }
 
@@ -311,19 +310,19 @@ class CityCctv {
      */
     fun refresh(count: Int, drawScene: (FloatArray, Float, Float, Float) -> Unit) {
         if (!ready) return
-        val t = (System.nanoTime() / 1_000_000L) * 0.001f
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo)
-        GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
-        GLES20.glClearColor(0.01f, 0.02f, 0.02f, 1f)
+        val t = (nowMillis() * 1_000_000L / 1_000_000L) * 0.001f
+        Gl.glBindFramebuffer(Gl.GL_FRAMEBUFFER, fbo)
+        Gl.glEnable(Gl.GL_SCISSOR_TEST)
+        Gl.glClearColor(0.01f, 0.02f, 0.02f, 1f)
         repeat(count.coerceAtMost(feeds.size)) {
             val idx = nextCell % feeds.size
             nextCell = (nextCell + 1) % feeds.size
             val f = feeds[idx]
             val cx = (idx % COLS) * CELL_W
             val cy = (idx / COLS) * CELL_H
-            GLES20.glViewport(cx, cy, CELL_W, CELL_H)
-            GLES20.glScissor(cx, cy, CELL_W, CELL_H)
-            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+            Gl.glViewport(cx, cy, CELL_W, CELL_H)
+            Gl.glScissor(cx, cy, CELL_W, CELL_H)
+            Gl.glClear(Gl.GL_COLOR_BUFFER_BIT or Gl.GL_DEPTH_BUFFER_BIT)
 
             // Slow pan around the camera's beat, so a feed of an empty street still
             // reads as running footage rather than a still.
@@ -351,8 +350,8 @@ class CityCctv {
             Matrix.multiplyMM(mvp, 0, proj, 0, view, 0)
             drawScene(mvp, f.ex, f.ey, f.ez)
         }
-        GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        Gl.glDisable(Gl.GL_SCISSOR_TEST)
+        Gl.glBindFramebuffer(Gl.GL_FRAMEBUFFER, 0)
     }
 
     /**
@@ -363,30 +362,30 @@ class CityCctv {
     fun draw(sceneMvp: FloatArray, night: Float) {
         val buf = quadBuf ?: return
         if (prog == 0 || quadVerts == 0) return
-        GLES20.glUseProgram(prog)
-        GLES20.glUniformMatrix4fv(uMVP, 1, false, sceneMvp, 0)
-        GLES20.glUniform1f(uTime, (System.nanoTime() / 1_000_000L % 100_000L) * 0.001f)
-        GLES20.glUniform1f(uNight, night.coerceIn(0f, 1f))
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex)
-        GLES20.glUniform1i(uTex, 0)
+        Gl.glUseProgram(prog)
+        Gl.glUniformMatrix4fv(uMVP, 1, false, sceneMvp, 0)
+        Gl.glUniform1f(uTime, (nowMillis() * 1_000_000L / 1_000_000L % 100_000L) * 0.001f)
+        Gl.glUniform1f(uNight, night.coerceIn(0f, 1f))
+        Gl.glActiveTexture(Gl.GL_TEXTURE0)
+        Gl.glBindTexture(Gl.GL_TEXTURE_2D, tex)
+        Gl.glUniform1i(uTex, 0)
 
         val stride = 7 * 4
         buf.position(0)
-        GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, stride, buf)
-        GLES20.glEnableVertexAttribArray(aPos)
+        Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, stride, buf)
+        Gl.glEnableVertexAttribArray(aPos)
         buf.position(3)
-        GLES20.glVertexAttribPointer(aAtlas, 2, GLES20.GL_FLOAT, false, stride, buf)
-        GLES20.glEnableVertexAttribArray(aAtlas)
+        Gl.glVertexAttribPointer(aAtlas, 2, Gl.GL_FLOAT, false, stride, buf)
+        Gl.glEnableVertexAttribArray(aAtlas)
         buf.position(5)
-        GLES20.glVertexAttribPointer(aCell, 2, GLES20.GL_FLOAT, false, stride, buf)
-        GLES20.glEnableVertexAttribArray(aCell)
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, quadVerts)
+        Gl.glVertexAttribPointer(aCell, 2, Gl.GL_FLOAT, false, stride, buf)
+        Gl.glEnableVertexAttribArray(aCell)
+        Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, quadVerts)
 
         // The scene shader only has attribute 0; leaving these enabled with client
         // pointers into our buffer is how you get a garbage draw two frames later.
-        GLES20.glDisableVertexAttribArray(aAtlas)
-        GLES20.glDisableVertexAttribArray(aCell)
+        Gl.glDisableVertexAttribArray(aAtlas)
+        Gl.glDisableVertexAttribArray(aCell)
         buf.position(0)
     }
 
@@ -442,29 +441,29 @@ class CityCctv {
         }""".trimIndent()
 
     private fun buildProg(): Int {
-        val v = comp(GLES20.GL_VERTEX_SHADER, VS)
-        val f = comp(GLES20.GL_FRAGMENT_SHADER, FS)
+        val v = comp(Gl.GL_VERTEX_SHADER, VS)
+        val f = comp(Gl.GL_FRAGMENT_SHADER, FS)
         if (v == 0 || f == 0) return 0
-        val p = GLES20.glCreateProgram()
-        GLES20.glAttachShader(p, v); GLES20.glAttachShader(p, f); GLES20.glLinkProgram(p)
+        val p = Gl.glCreateProgram()
+        Gl.glAttachShader(p, v); Gl.glAttachShader(p, f); Gl.glLinkProgram(p)
         val ok = IntArray(1)
-        GLES20.glGetProgramiv(p, GLES20.GL_LINK_STATUS, ok, 0)
+        Gl.glGetProgramiv(p, Gl.GL_LINK_STATUS, ok, 0)
         if (ok[0] == 0) {
-            android.util.Log.w("CityGL", "CCTV link failed: " + GLES20.glGetProgramInfoLog(p))
-            GLES20.glDeleteProgram(p)
+            logWarn("CityGL", "CCTV link failed: " + Gl.glGetProgramInfoLog(p))
+            Gl.glDeleteProgram(p)
             return 0
         }
         return p
     }
 
     private fun comp(type: Int, src: String): Int {
-        val sh = GLES20.glCreateShader(type)
-        GLES20.glShaderSource(sh, src); GLES20.glCompileShader(sh)
+        val sh = Gl.glCreateShader(type)
+        Gl.glShaderSource(sh, src); Gl.glCompileShader(sh)
         val ok = IntArray(1)
-        GLES20.glGetShaderiv(sh, GLES20.GL_COMPILE_STATUS, ok, 0)
+        Gl.glGetShaderiv(sh, Gl.GL_COMPILE_STATUS, ok, 0)
         if (ok[0] == 0) {
-            android.util.Log.w("CityGL", "CCTV shader failed: " + GLES20.glGetShaderInfoLog(sh))
-            GLES20.glDeleteShader(sh)
+            logWarn("CityGL", "CCTV shader failed: " + Gl.glGetShaderInfoLog(sh))
+            Gl.glDeleteShader(sh)
             return 0
         }
         return sh

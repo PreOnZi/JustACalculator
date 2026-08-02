@@ -30,6 +30,13 @@ expect class GlFloatBuffer {
 
     /** Releases the pinned memory. Using the buffer afterwards is undefined. */
     fun dispose()
+
+    /** Absolute indexed read — does not move the position. */
+    fun get(index: Int): Float
+
+    /** Absolute indexed write — does not move the position. */
+    fun put(index: Int, value: Float): GlFloatBuffer
+
 }
 
 /** Allocates an empty buffer of [capacity] floats. */

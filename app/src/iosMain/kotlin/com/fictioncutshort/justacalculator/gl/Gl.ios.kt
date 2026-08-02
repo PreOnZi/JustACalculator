@@ -259,4 +259,22 @@ actual object Gl {
         else platform.gles3.glGetShaderInfoLog(obj.toUInt(), len.value, null, buf)
         buf.toKString()
     }
+    actual fun glTexImage2DRgba(width: Int, height: Int, pixels: ByteArray) {
+        pixels.usePinned { pinned ->
+            platform.gles3.glTexImage2D(
+                platform.gles3.GL_TEXTURE_2D.toUInt(), 0,
+                platform.gles3.GL_RGBA.toInt(), width, height, 0,
+                platform.gles3.GL_RGBA.toUInt(), platform.gles3.GL_UNSIGNED_BYTE.toUInt(),
+                pinned.addressOf(0),
+            )
+        }
+    }
+
+    actual fun glTexImage2DEmpty(internalFormat: Int, width: Int, height: Int, format: Int, type: Int) {
+        platform.gles3.glTexImage2D(
+            platform.gles3.GL_TEXTURE_2D.toUInt(), 0, internalFormat, width, height, 0,
+            format.toUInt(), type.toUInt(), null,
+        )
+    }
+
 }
