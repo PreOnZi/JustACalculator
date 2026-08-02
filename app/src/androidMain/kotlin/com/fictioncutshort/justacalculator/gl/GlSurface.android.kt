@@ -6,6 +6,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -17,10 +20,23 @@ actual fun PlatformGlSurface(
 ) {
     val view = remember { arrayOfNulls<GLSurfaceView>(1) }
 
-    // GLSurfaceView needs its render thread paused with the composition,
-    // otherwise it keeps drawing behind an overlay and burns battery.
-    DisposableEffect(Unit) {
-        onDispose { view[0]?.onPause() }
+    // GLSurfaceView's render thread must be paused with the app, not just with
+    // the composition — backgrounding does not detach the view, so without this
+    // it keeps drawing (and burning battery) behind the home screen.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> view[0]?.onPause()
+                Lifecycle.Event.ON_RESUME -> view[0]?.onResume()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            view[0]?.onPause()
+        }
     }
 
     AndroidView(

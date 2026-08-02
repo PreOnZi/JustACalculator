@@ -277,4 +277,12 @@ actual object Gl {
         )
     }
 
+    actual fun glBufferDataInts(target: Int, data: IntArray, usage: Int) {
+        data.usePinned { pinned ->
+            platform.gles3.glBufferData(
+                target.toUInt(), (data.size * 4).convert(), pinned.addressOf(0), usage.toUInt(),
+            )
+        }
+    }
+
 }

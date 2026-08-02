@@ -128,4 +128,7 @@ expect object Gl {
     /** Allocates an uninitialised 2D texture — used for render targets. */
     fun glTexImage2DEmpty(internalFormat: Int, width: Int, height: Int, format: Int, type: Int)
 
+    /** Uploads element indices. Separate from the float path — indices are Ints. */
+    fun glBufferDataInts(target: Int, data: IntArray, usage: Int)
+
 }

@@ -135,4 +135,12 @@ actual object Gl {
         )
     }
 
+    actual fun glBufferDataInts(target: Int, data: IntArray, usage: Int) {
+        val buf = java.nio.ByteBuffer.allocateDirect(data.size * 4)
+            .order(java.nio.ByteOrder.nativeOrder())
+            .asIntBuffer()
+            .apply { put(data); position(0) }
+        GLES30.glBufferData(target, data.size * 4, buf, usage)
+    }
+
 }

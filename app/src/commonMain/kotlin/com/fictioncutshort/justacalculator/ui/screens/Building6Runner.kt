@@ -1,18 +1,27 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.gl.throttleRenderThread
+import com.fictioncutshort.justacalculator.platform.PlatformLock
+import com.fictioncutshort.justacalculator.gl.toGlBuffer
+import com.fictioncutshort.justacalculator.platform.AppContext
+import com.fictioncutshort.justacalculator.gl.uploadTextureFromAsset
+import com.fictioncutshort.justacalculator.gl.glFloatBuffer
+import com.fictioncutshort.justacalculator.gl.PlatformGlSurface
+import com.fictioncutshort.justacalculator.platform.openPrefs
+import kotlin.concurrent.Volatile
+import com.fictioncutshort.justacalculator.platform.nowMillis
+import com.fictioncutshort.justacalculator.platform.currentAppContext
+import com.fictioncutshort.justacalculator.platform.readContactNames
+import com.fictioncutshort.justacalculator.platform.createSoundEffectPool
+import com.fictioncutshort.justacalculator.platform.readLines
+import com.fictioncutshort.justacalculator.gl.GlRenderer
+import com.fictioncutshort.justacalculator.gl.GlFloatBuffer
+import com.fictioncutshort.justacalculator.gl.Gl
 import com.fictioncutshort.justacalculator.platform.Assets
 import com.fictioncutshort.justacalculator.platform.createSoundPlayer
 import com.fictioncutshort.justacalculator.platform.Sounds
 import com.fictioncutshort.justacalculator.platform.SoundPlayer
-import android.Manifest
-import android.content.Context
-import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
-import android.opengl.GLES30
-import android.opengl.GLSurfaceView
-import android.opengl.GLUtils
 import com.fictioncutshort.justacalculator.gl.Matrix
-import android.provider.ContactsContract
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -48,25 +57,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.runtime.DisposableEffect
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import android.media.AudioAttributes
-import android.media.SoundPool
-import com.fictioncutshort.justacalculator.R
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.nio.FloatBuffer
-import javax.microedition.khronos.egl.EGLConfig
-import javax.microedition.khronos.opengles.GL10
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  BUILDING 6 — minimal runner sandbox.
@@ -83,7 +78,7 @@ import javax.microedition.khronos.opengles.GL10
 
 @Composable
 fun Building6Runner(onComplete: () -> Unit, onExit: () -> Unit) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     val renderer = remember {
         RunnerRenderer(context).apply {
             // Seed the saved run BEFORE the course is built, so buildTileLayout
@@ -105,17 +100,12 @@ fun Building6Runner(onComplete: () -> Unit, onExit: () -> Unit) {
     }
 
     // ── Sound ─────────────────────────────────────────────────────────────────
-    val soundPool = remember {
-        SoundPool.Builder().setMaxStreams(8)
-            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_GAME)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
-            .build()
-    }
-    val sJump = remember { soundPool.load(context.assets.openFd(Sounds.path("jump").orEmpty()), 1) }
-    val sCoin = remember { soundPool.load(context.assets.openFd(Sounds.path("coin").orEmpty()), 1) }
-    val sFight = remember { soundPool.load(context.assets.openFd(Sounds.path("fight").orEmpty()), 1) }
-    val sPush = remember { soundPool.load(context.assets.openFd(Sounds.path("stonepushing").orEmpty()), 1) }
-    val sEn5 = remember { soundPool.load(context.assets.openFd(Sounds.path("en5").orEmpty()), 1) }
+    val soundPool = remember { createSoundEffectPool(maxStreams = 8) }
+    val sJump = remember { soundPool.load(Sounds.path("jump").orEmpty()) }
+    val sCoin = remember { soundPool.load(Sounds.path("coin").orEmpty()) }
+    val sFight = remember { soundPool.load(Sounds.path("fight").orEmpty()) }
+    val sPush = remember { soundPool.load(Sounds.path("stonepushing").orEmpty()) }
+    val sEn5 = remember { soundPool.load(Sounds.path("en5").orEmpty()) }
     val runPlayer = remember { createSoundPlayer(Sounds.path("run").orEmpty())?.apply { setLooping(true); setVolume(0.1f, 0.1f) } }
     val pushPlayer = remember { createSoundPlayer(Sounds.path("stonepushing").orEmpty())?.apply { setLooping(true); setVolume(0.2f, 0.2f) } }
     val fightPlayer = remember { createSoundPlayer(Sounds.path("fight").orEmpty())?.apply { setLooping(true); setVolume(0.15f, 0.15f) } }
@@ -178,14 +168,14 @@ fun Building6Runner(onComplete: () -> Unit, onExit: () -> Unit) {
         var left = true
         while (true) {
             delay(if (left) 500 else 750)
-            chatBubbles.add(left to (55 + (Math.random() * 85).toInt()))
+            chatBubbles.add(left to (55 + (kotlin.random.Random.nextDouble() * 85).toInt()))
             if (chatBubbles.size > 6) chatBubbles.removeAt(0)
             left = !left
         }
     }
     var paused by remember { mutableStateOf(false) }
     var gameStarted by remember { mutableStateOf(false) }
-    val hintPrefs = remember { context.getSharedPreferences("building6", Context.MODE_PRIVATE) }
+    val hintPrefs = remember { context.openPrefs("building6") }
     var hintsSeen by remember { mutableStateOf(hintPrefs.getBoolean("hints_seen", false)) }
     LaunchedEffect(gameStarted) {
         if (gameStarted && !hintsSeen) {
@@ -203,11 +193,11 @@ fun Building6Runner(onComplete: () -> Unit, onExit: () -> Unit) {
             withFrameNanos { }
             // sound: one-shots on counter change, the run sound looping while running
             // all quiet — just a little extra dimension, not loud
-            if (renderer.jumpSfx != pJump) { pJump = renderer.jumpSfx; soundPool.play(sJump, 0.12f, 0.12f, 1, 0, 1f) }
-            if (renderer.coinSfx != pCoin) { pCoin = renderer.coinSfx; soundPool.play(sCoin, 0.11f, 0.11f, 1, 0, 1f) }
-            if (renderer.fightSfx != pFight) { pFight = renderer.fightSfx; soundPool.play(sFight, 0.15f, 0.15f, 1, 0, 1f) }
-            if (renderer.pushSfx != pPush) { pPush = renderer.pushSfx; soundPool.play(sPush, 0.15f, 0.15f, 1, 0, 1f) }
-            if (renderer.msgPopupSfx != pMsg) { pMsg = renderer.msgPopupSfx; soundPool.play(sEn5, 0.13f, 0.13f, 1, 0, 1f) }
+            if (renderer.jumpSfx != pJump) { pJump = renderer.jumpSfx; soundPool.play(sJump, 0.12f) }
+            if (renderer.coinSfx != pCoin) { pCoin = renderer.coinSfx; soundPool.play(sCoin, 0.11f) }
+            if (renderer.fightSfx != pFight) { pFight = renderer.fightSfx; soundPool.play(sFight, 0.15f) }
+            if (renderer.pushSfx != pPush) { pPush = renderer.pushSfx; soundPool.play(sPush, 0.15f) }
+            if (renderer.msgPopupSfx != pMsg) { pMsg = renderer.msgPopupSfx; soundPool.play(sEn5, 0.13f) }
             // looping sounds (all silenced while paused): run / phone ring / on-the-phone / texting
             val pd = renderer.paused
             loop(runPlayer, renderer.runningSfx && !pd)
@@ -268,35 +258,13 @@ fun Building6Runner(onComplete: () -> Unit, onExit: () -> Unit) {
         val boxW = maxWidth
         val boxH = maxHeight
 
-        // One GLSurfaceView, kept across recompositions, with its EGL context preserved so
-        // backgrounding the app does NOT rebuild the course / wipe your progress.
-        val glView = remember {
-            GLSurfaceView(context).apply {
-                setEGLContextClientVersion(3)
-                preserveEGLContextOnPause = true
-                setRenderer(renderer)
-                renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
-            }
-        }
-        // Pause/resume the render thread with the app lifecycle (minimise → freeze, not lose).
-        val lifecycleOwner = LocalLifecycleOwner.current
-        DisposableEffect(lifecycleOwner) {
-            val obs = LifecycleEventObserver { _, event ->
-                when (event) {
-                    Lifecycle.Event.ON_PAUSE -> glView.onPause()
-                    Lifecycle.Event.ON_RESUME -> glView.onResume()
-                    else -> {}
-                }
-            }
-            lifecycleOwner.lifecycle.addObserver(obs)
-            onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
-        }
-        AndroidView(
+        PlatformGlSurface(
+            renderer = renderer,
+            contextVersion = 3,
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) { detectTapGestures { renderer.jump() } }
                 .pointerInput(Unit) { detectDragGestures { _, drag -> renderer.steer(drag.x) } },
-            factory = { glView },
         )
 
         // Helper name tags floating above their heads (projected from the renderer).
@@ -684,31 +652,15 @@ private fun DialogButton(label: String, enabled: Boolean, accent: Color, onClick
 private val RUNNER_FALLBACK_NAMES = listOf(
     "Mum", "Dad", "Sam", "Alex", "Jordan", "Charlie", "Robin", "Jamie", "Casey", "Riley",
 )
-private fun loadRunnerHelperNames(context: Context): List<String> {
-    val granted = ContextCompat.checkSelfPermission(
-        context, Manifest.permission.READ_CONTACTS,
-    ) == PackageManager.PERMISSION_GRANTED
-    if (!granted) return RUNNER_FALLBACK_NAMES
-    val out = ArrayList<String>()
-    try {
-        context.contentResolver.query(
-            ContactsContract.Contacts.CONTENT_URI,
-            arrayOf(ContactsContract.Contacts.DISPLAY_NAME),
-            null, null, ContactsContract.Contacts.DISPLAY_NAME + " ASC",
-        )?.use { c ->
-            val col = c.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME)
-            while (c.moveToNext() && out.size < 50) {
-                if (col >= 0) c.getString(col)?.let { if (it.isNotBlank()) out.add(it.trim()) }
-            }
-        }
-    } catch (_: Throwable) { }
-    return if (out.isEmpty()) RUNNER_FALLBACK_NAMES else out.shuffled()
+private fun loadRunnerHelperNames(context: AppContext): List<String> {
+    val names = readContactNames(50)
+    return if (names.isEmpty()) RUNNER_FALLBACK_NAMES else names.shuffled()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  RENDERER
 // ═══════════════════════════════════════════════════════════════════════════════
-private class RunnerRenderer(private val context: Context) : GLSurfaceView.Renderer {
+private class RunnerRenderer(private val context: AppContext) : GlRenderer {
 
     // ── Geometry handles ──────────────────────────────────────────────────────
     private class SkinnedMesh(val vao: Int, val indexCount: Int, val color: FloatArray)
@@ -719,7 +671,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
     private var flatProg = 0
     private var texProg = 0
     private var boneUbo = 0
-    private lateinit var boneBuffer: FloatBuffer
+    private lateinit var boneBuffer: GlFloatBuffer
 
     private var sVP = 0; private var sModel = 0; private var sColor = 0
     private var fVP = 0; private var fModel = 0; private var fColor = 0
@@ -912,8 +864,23 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
 
     // Dialog buttons fire on the UI thread but mutate state the GL thread iterates (helpers,
     // runState…). Queue them and run on the GL thread at the top of update() to avoid crashes.
-    private val pending = java.util.concurrent.ConcurrentLinkedQueue<() -> Unit>()
-    private fun drainPending() { while (true) { (pending.poll() ?: return)() } }
+    // Filled from the UI thread, drained on the render thread. Kotlin has no
+    // common concurrent queue, so a plain list under a lock stands in for
+    // ConcurrentLinkedQueue.
+    private val pendingLock = PlatformLock()
+    private val pending = mutableListOf<() -> Unit>()
+
+    private fun postPending(action: () -> Unit) {
+        pendingLock.withLock { pending.add(action) }
+    }
+
+    private fun drainPending() {
+        val batch = pendingLock.withLock {
+            if (pending.isEmpty()) return@withLock emptyList()
+            pending.toList().also { pending.clear() }
+        }
+        batch.forEach { it() }
+    }
 
     // ── Scripted obstacles: the TOLL + the HILL boulder + summoned helpers ────────
     private enum class RunState {
@@ -1181,14 +1148,14 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
     class ScreenLabel(val text: String, val xFrac: Float, val yFrac: Float)
     @Volatile var labels: List<ScreenLabel> = emptyList()
 
-    fun payToll() = pending.add(::doPayToll)
+    fun payToll() = postPending(::doPayToll)
     private fun doPayToll() {
         if (runState != RunState.TOLL_PROMPT || !canPayToll) return
         coinCount = (coinCount - tollAmount).coerceAtLeast(0)
         resolveToll()
     }
 
-    fun requestHelp() = pending.add(::doRequestHelp)
+    fun requestHelp() = postPending(::doRequestHelp)
     private fun doRequestHelp() {
         if (runState != RunState.TOLL_PROMPT) return
         if (helpBlocked()) return                        // reckoning, no friend → reveal "Pay strangers"
@@ -1226,7 +1193,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         floatArrayOf(-1.3f, 1.1f), floatArrayOf(1.3f, 1.1f),   // extra rows for bigger boulders
     )
 
-    fun pushBoulder() = pending.add(::doPushBoulder)
+    fun pushBoulder() = postPending(::doPushBoulder)
     private fun doPushBoulder() {
         if (runState != RunState.HILL_PROMPT) return
         if (arrivedPushers() >= hillNeeded) {
@@ -1241,7 +1208,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
     }
 
     /** Summon another pusher (capped at what the boulder needs) — runs up from behind. */
-    fun requestPush() = pending.add(::doRequestPush)
+    fun requestPush() = postPending(::doRequestPush)
     private fun doRequestPush() {
         if (runState != RunState.HILL_PROMPT) return
         if (helpBlocked()) return
@@ -1269,7 +1236,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
 
     /** Start the brawl. Allies = the player + everyone who arrived; if that MATCHES or beats
      *  the opponents nobody good dies (they win), otherwise the good guys are outnumbered. */
-    fun startFight() = pending.add(::doStartFight)
+    fun startFight() = postPending(::doStartFight)
     private fun doStartFight() {
         if (runState != RunState.FIGHT_PROMPT) return
         val allies = 1 + arrivedFighters()
@@ -1283,7 +1250,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
     }
 
     /** Summon a fighter to your side — runs in from behind, lines up beside the player. */
-    fun requestFighter() = pending.add(::doRequestFighter)
+    fun requestFighter() = postPending(::doRequestFighter)
     private fun doRequestFighter() {
         if (runState != RunState.FIGHT_PROMPT) return
         if (helpBlocked()) return
@@ -1304,7 +1271,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
 
     /** Summon a climber — runs in from behind, then climbs onto the tower / ladder. Shared by
      *  the gap (tower to topple) and the wall (ladder to climb). */
-    fun requestClimber() = pending.add(::doRequestClimber)
+    fun requestClimber() = postPending(::doRequestClimber)
     private fun doRequestClimber() {
         if (runState != RunState.GAP_PROMPT && runState != RunState.WALL_PROMPT) return
         if (helpBlocked()) return
@@ -1329,7 +1296,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
     }
 
     /** Player pressed CLIMB at the wall: go over if the ladder's tall enough, else fall back. */
-    fun proceedWall() = pending.add(::doProceedWall)
+    fun proceedWall() = postPending(::doProceedWall)
     private fun doProceedWall() {
         if (runState != RunState.WALL_PROMPT) return
         wallActive = false
@@ -1343,7 +1310,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
 
     /** Commit: topple the tower across the gap. With no climbers the player just tries (and
      *  falls). Resolution happens in updateGap once the animation finishes. */
-    fun proceedGap() = pending.add(::doProceedGap)
+    fun proceedGap() = postPending(::doProceedGap)
     private fun doProceedGap() {
         if (runState != RunState.GAP_PROMPT) return
         gapActive = false
@@ -1358,7 +1325,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
     }
 
     private fun assetExists(path: String): Boolean =
-        try { context.assets.open(path).close(); true } catch (e: Exception) { false }
+        try { Assets.exists(path) } catch (e: Exception) { false }
 
     // Track pieces now live in grouped subfolders; resolve a bare piece name to its file.
     private val TILE_DIRS = listOf("regular", "obstacles", "forks_branch", "forks_choice", "assets", "")
@@ -1372,12 +1339,12 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+    override fun onSurfaceCreated() {
         // Sky = the bright horizon colour, so distant tiles fade seamlessly into it.
-        GLES30.glClearColor(HORIZON[0], HORIZON[1], HORIZON[2], 1f)
-        GLES30.glEnable(GLES30.GL_DEPTH_TEST)
-        GLES30.glEnable(GLES30.GL_CULL_FACE)
-        GLES30.glCullFace(GLES30.GL_BACK)
+        Gl.glClearColor(HORIZON[0], HORIZON[1], HORIZON[2], 1f)
+        Gl.glEnable(Gl.GL_DEPTH_TEST)
+        Gl.glEnable(Gl.GL_CULL_FACE)
+        Gl.glCullFace(Gl.GL_BACK)
 
         val candidates = listOf(
             "models/stickman4.glb",
@@ -1405,8 +1372,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         for (i in 0 until 4) deathClips[i] = model.clipIndex("death${i + 1}")
         maxDeathDur = (0 until 4).maxOf { model.clipDuration(deathClips[it]) }
         hazDeathDur = model.clipDuration(deathClips[1])
-        boneBuffer = ByteBuffer.allocateDirect(model.jointCount * 16 * 4)
-            .order(ByteOrder.nativeOrder()).asFloatBuffer()
+        boneBuffer = glFloatBuffer(model.jointCount * 16)
 
         buildPrograms()
         buildBoneUbo()
@@ -1459,23 +1425,23 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         respawnBefore(target)
     }
 
-    override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
+    override fun onSurfaceChanged(width: Int, height: Int) {
         viewW = width; viewH = height.coerceAtLeast(1)
-        GLES30.glViewport(0, 0, width, height)
+        Gl.glViewport(0, 0, width, height)
         val aspect = width.toFloat() / viewH
         Matrix.perspectiveM(proj, 0, 55f, aspect, 0.5f, 3000f)
     }
 
     private var lastFrameMs = 0L
-    override fun onDrawFrame(gl: GL10?) {
+    override fun onDrawFrame() {
         // Frame-rate cap (~33 fps) to cut sustained GPU/CPU load (heat + battery).
-        val fMs = android.os.SystemClock.uptimeMillis()
+        val fMs = monotonicMillis()
         val since = fMs - lastFrameMs
         if (lastFrameMs != 0L && since in 0 until 30L) {
-            try { Thread.sleep(30L - since) } catch (_: InterruptedException) {}
+            throttleRenderThread(30L - since)
         }
-        lastFrameMs = android.os.SystemClock.uptimeMillis()
-        val now = System.nanoTime()
+        lastFrameMs = monotonicMillis()
+        val now = nowMillis() * 1_000_000L
         if (lastTimeNs == 0L) lastTimeNs = now
         val dt = ((now - lastTimeNs) / 1_000_000_000.0).toFloat().coerceAtMost(1f / 24f)
         lastTimeNs = now
@@ -1486,7 +1452,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         }
 
         updateHorizon()                   // shift the sky/fog colour by how far you've run
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
+        Gl.glClear(Gl.GL_COLOR_BUFFER_BIT or Gl.GL_DEPTH_BUFFER_BIT)
         setupCamera()
         Matrix.multiplyMM(vp, 0, proj, 0, view, 0)
 
@@ -1505,36 +1471,36 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
     /** The small falling/rolling rocks on the boulder hill (reuse the boulder mesh, small). */
     private fun drawHazBoulders() {
         if (boulderVao == 0 || hazBoulders.isEmpty()) return
-        GLES30.glUseProgram(flatProg)
-        GLES30.glUniformMatrix4fv(fVP, 1, false, vp, 0)
-        GLES30.glUniform3f(fColor, BOULDER_COL[0], BOULDER_COL[1], BOULDER_COL[2])
-        GLES30.glBindVertexArray(boulderVao)
+        Gl.glUseProgram(flatProg)
+        Gl.glUniformMatrix4fv(fVP, 1, false, vp, 0)
+        Gl.glUniform3f(fColor, BOULDER_COL[0], BOULDER_COL[1], BOULDER_COL[2])
+        Gl.glBindVertexArray(boulderVao)
         val s = HAZ_R / boulderLocalR
         for (b in hazBoulders) {
             Matrix.setIdentityM(modelMat, 0)
             Matrix.translateM(modelMat, 0, b.x, b.y, b.z)
             Matrix.rotateM(modelMat, 0, b.spin, 1f, 0f, 0f)
             Matrix.scaleM(modelMat, 0, s, s, s)
-            GLES30.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
-            GLES30.glDrawElements(GLES30.GL_TRIANGLES, boulderVerts, GLES30.GL_UNSIGNED_INT, 0)
+            Gl.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
+            Gl.glDrawElements(Gl.GL_TRIANGLES, boulderVerts, Gl.GL_UNSIGNED_INT, 0)
         }
-        GLES30.glBindVertexArray(0)
+        Gl.glBindVertexArray(0)
     }
 
     /** The hill boulder (until it's pushed into the hut and destroyed). */
     private fun drawBoulder() {
         if (boulderVao == 0 || boulderDestroyed || hillTile == null) return
-        GLES30.glUseProgram(flatProg)
-        GLES30.glUniformMatrix4fv(fVP, 1, false, vp, 0)
-        GLES30.glUniform3f(fColor, BOULDER_COL[0], BOULDER_COL[1], BOULDER_COL[2])
-        GLES30.glBindVertexArray(boulderVao)
+        Gl.glUseProgram(flatProg)
+        Gl.glUniformMatrix4fv(fVP, 1, false, vp, 0)
+        Gl.glUniform3f(fColor, BOULDER_COL[0], BOULDER_COL[1], BOULDER_COL[2])
+        Gl.glBindVertexArray(boulderVao)
         Matrix.setIdentityM(modelMat, 0)
         Matrix.translateM(modelMat, 0, boulderX, boulderY, boulderZ)
         Matrix.rotateM(modelMat, 0, boulderSpin, 1f, 0f, 0f)     // only rolls while moving
         Matrix.scaleM(modelMat, 0, boulderScale, boulderScale, boulderScale)
-        GLES30.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
-        GLES30.glDrawElements(GLES30.GL_TRIANGLES, boulderVerts, GLES30.GL_UNSIGNED_INT, 0)
-        GLES30.glBindVertexArray(0)
+        Gl.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
+        Gl.glDrawElements(Gl.GL_TRIANGLES, boulderVerts, Gl.GL_UNSIGNED_INT, 0)
+        Gl.glBindVertexArray(0)
     }
 
     /** The toll.png decal on the booth's left sign, facing the approaching runner. */
@@ -1542,19 +1508,19 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         if (tollTex == 0 || signVao == 0) return
         val tt = tollTile ?: return
         val cz = (tt.zNear + tt.zFar) * 0.5f + SIGN_Z_OFF
-        GLES30.glUseProgram(texProg)
-        GLES30.glUniformMatrix4fv(tVP, 1, false, vp, 0)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tollTex)
-        GLES30.glUniform1i(tSampler, 0)
+        Gl.glUseProgram(texProg)
+        Gl.glUniformMatrix4fv(tVP, 1, false, vp, 0)
+        Gl.glActiveTexture(Gl.GL_TEXTURE0)
+        Gl.glBindTexture(Gl.GL_TEXTURE_2D, tollTex)
+        Gl.glUniform1i(tSampler, 0)
         Matrix.setIdentityM(modelMat, 0)
         Matrix.translateM(modelMat, 0, SIGN_X, SIGN_Y, cz)
         Matrix.scaleM(modelMat, 0, SIGN_SIZE, SIGN_SIZE, 1f)
-        GLES30.glUniformMatrix4fv(tModel, 1, false, modelMat, 0)
-        GLES30.glBindVertexArray(signVao)
-        GLES30.glDrawElements(GLES30.GL_TRIANGLES, signVerts, GLES30.GL_UNSIGNED_INT, 0)
-        GLES30.glBindVertexArray(0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        Gl.glUniformMatrix4fv(tModel, 1, false, modelMat, 0)
+        Gl.glBindVertexArray(signVao)
+        Gl.glDrawElements(Gl.GL_TRIANGLES, signVerts, Gl.GL_UNSIGNED_INT, 0)
+        Gl.glBindVertexArray(0)
+        Gl.glBindTexture(Gl.GL_TEXTURE_2D, 0)
     }
 
     /** Toll boom: a bar spanning the track just past the booth, hinged on the left stub.
@@ -1566,18 +1532,18 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         // z = zRef − SCALE_Z·localz).
         val bz = tt.zRef - SCALE_Z * BARRIER_LOCAL_Z
         val gy = (groundAt(0f, bz) ?: 0f) + BARRIER_Y
-        GLES30.glUseProgram(flatProg)
-        GLES30.glUniformMatrix4fv(fVP, 1, false, vp, 0)
-        GLES30.glUniform3f(fColor, BARRIER_COL[0], BARRIER_COL[1], BARRIER_COL[2])
-        GLES30.glBindVertexArray(boxVao)
+        Gl.glUseProgram(flatProg)
+        Gl.glUniformMatrix4fv(fVP, 1, false, vp, 0)
+        Gl.glUniform3f(fColor, BARRIER_COL[0], BARRIER_COL[1], BARRIER_COL[2])
+        Gl.glBindVertexArray(boxVao)
 
         Matrix.setIdentityM(modelMat, 0)
         Matrix.translateM(modelMat, 0, BARRIER_PIVOT_X, gy, bz)   // hinge point
         Matrix.rotateM(modelMat, 0, 82f * barrierLift, 0f, 0f, 1f) // lift about Z
         Matrix.scaleM(modelMat, 0, BARRIER_SPAN, 0.22f, 0.22f)     // extends +X from hinge
-        GLES30.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
-        GLES30.glDrawElements(GLES30.GL_TRIANGLES, boxVerts, GLES30.GL_UNSIGNED_INT, 0)
-        GLES30.glBindVertexArray(0)
+        Gl.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
+        Gl.glDrawElements(Gl.GL_TRIANGLES, boxVerts, Gl.GL_UNSIGNED_INT, 0)
+        Gl.glBindVertexArray(0)
     }
 
     /** Load a prop OBJ once into colored sub-meshes (city props keep their .mtl colours;
@@ -1668,8 +1634,8 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
 
     private fun drawProps() {
         if (props.isEmpty()) return
-        GLES30.glUseProgram(flatProg)
-        GLES30.glUniformMatrix4fv(fVP, 1, false, vp, 0)
+        Gl.glUseProgram(flatProg)
+        Gl.glUniformMatrix4fv(fVP, 1, false, vp, 0)
         for (p in props) {
             if (p.mesh == "surround") {
                 if (onDetour) continue                       // surround is for the MAIN track only
@@ -1682,14 +1648,14 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
             if (p.yawDeg != 0f) Matrix.rotateM(modelMat, 0, p.yawDeg, 0f, 1f, 0f)
             if (p.flipZ) Matrix.rotateM(modelMat, 0, 180f, 0f, 1f, 0f)
             Matrix.scaleM(modelMat, 0, p.sx, p.sy, p.sz)
-            GLES30.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
+            Gl.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
             for (part in mesh.parts) {
-                GLES30.glUniform3f(fColor, part.color[0], part.color[1], part.color[2])
-                GLES30.glBindVertexArray(part.vao)
-                GLES30.glDrawElements(GLES30.GL_TRIANGLES, part.count, GLES30.GL_UNSIGNED_INT, 0)
+                Gl.glUniform3f(fColor, part.color[0], part.color[1], part.color[2])
+                Gl.glBindVertexArray(part.vao)
+                Gl.glDrawElements(Gl.GL_TRIANGLES, part.count, Gl.GL_UNSIGNED_INT, 0)
             }
         }
-        GLES30.glBindVertexArray(0)
+        Gl.glBindVertexArray(0)
     }
 
     private fun loadCoinModel() {
@@ -1737,29 +1703,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
 
     /** Load toll.png into a GL texture (once). Leaves tollTex=0 if the asset is missing. */
     private fun loadTollTexture() {
-        val path = "textures/toll.png"
-        if (!assetExists(path)) return
-        val bmp = try { BitmapFactory.decodeStream(context.assets.open(path)) } catch (e: Exception) { null } ?: return
-        val ids = IntArray(1); GLES30.glGenTextures(1, ids, 0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, ids[0])
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, bmp, 0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-        bmp.recycle()
-        tollTex = ids[0]
-
-        // Square quad in the X-Y plane (radius .5) facing +Z (toward the approaching runner).
-        val pos = floatArrayOf(-.5f,-.5f,0f,  .5f,-.5f,0f,  .5f,.5f,0f,   -.5f,-.5f,0f,  .5f,.5f,0f,  -.5f,.5f,0f)
-        val uv  = floatArrayOf( 0f, 1f,       1f, 1f,       1f, 0f,        0f, 1f,       1f, 0f,       0f, 0f)
-        val vao = IntArray(1); GLES30.glGenVertexArrays(1, vao, 0)
-        GLES30.glBindVertexArray(vao[0])
-        attrib(0, pos, 3); attrib(1, uv, 2)
-        elementBuffer(IntArray(pos.size / 3) { it })
-        GLES30.glBindVertexArray(0)
-        signVao = vao[0]; signVerts = pos.size / 3
+        tollTex = uploadTextureFromAsset("textures/toll.png")
     }
 
     /** Occasionally float a short row of coins, spread across the track (centre + sides),
@@ -1789,10 +1733,10 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
 
     private fun drawCoins() {
         if (coinVao == 0) return
-        GLES30.glUseProgram(flatProg)
-        GLES30.glUniformMatrix4fv(fVP, 1, false, vp, 0)
-        GLES30.glUniform3f(fColor, COIN_COL[0], COIN_COL[1], COIN_COL[2])
-        GLES30.glBindVertexArray(coinVao)
+        Gl.glUseProgram(flatProg)
+        Gl.glUniformMatrix4fv(fVP, 1, false, vp, 0)
+        Gl.glUniform3f(fColor, COIN_COL[0], COIN_COL[1], COIN_COL[2])
+        Gl.glBindVertexArray(coinVao)
         val spin = (elapsed * 150f) % 360f
         for (c in coins) {
             if (c.taken) continue
@@ -1801,10 +1745,10 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
             Matrix.translateM(modelMat, 0, c.x, c.y, c.z)
             Matrix.rotateM(modelMat, 0, spin, 0f, 1f, 0f)
             Matrix.scaleM(modelMat, 0, COIN_SCALE, COIN_SCALE, COIN_SCALE)
-            GLES30.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
-            GLES30.glDrawElements(GLES30.GL_TRIANGLES, coinVerts, GLES30.GL_UNSIGNED_INT, 0)
+            Gl.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
+            Gl.glDrawElements(Gl.GL_TRIANGLES, coinVerts, Gl.GL_UNSIGNED_INT, 0)
         }
-        GLES30.glBindVertexArray(0)
+        Gl.glBindVertexArray(0)
     }
 
     // ── Update ─────────────────────────────────────────────────────────────────
@@ -1857,7 +1801,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
 
         // The toll boom eases up once the toll is paid, down otherwise.
         val liftTarget = if (activeTollPaid()) 1f else 0f
-        barrierLift += (liftTarget - barrierLift) * (1f - Math.exp(-dt * 3.5).toFloat())
+        barrierLift += (liftTarget - barrierLift) * (1f - kotlin.math.exp(-dt * 3.5).toFloat())
 
         // Camera anchor chase: follow the player FAST along the heading (so it stays a
         // fixed distance behind) but only SLOWLY sideways. The slow lateral term means a
@@ -1868,11 +1812,11 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         val toX = charX - camX; val toZ = charZ - camZ
         val along = toX * fx + toZ * fz
         val perpX = toX - fx * along; val perpZ = toZ - fz * along
-        val kAlong = 1f - Math.exp(-dt * 6.0).toFloat()
-        val kPerp = 1f - Math.exp(-dt * 1.5).toFloat()
+        val kAlong = 1f - kotlin.math.exp(-dt * 6.0).toFloat()
+        val kPerp = 1f - kotlin.math.exp(-dt * 1.5).toFloat()
         camX += fx * along * kAlong + perpX * kPerp
         camZ += fz * along * kAlong + perpZ * kPerp
-        camHeading += (heading - camHeading) * (1f - Math.exp(-dt * 3.0).toFloat())
+        camHeading += (heading - camHeading) * (1f - kotlin.math.exp(-dt * 3.0).toFloat())
     }
 
     /** Normal running: steer, follow the road's curve, advance, gravity, coins — plus the
@@ -1887,7 +1831,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         val target = roadDirection(onFork)
         val d = target - heading
         if (kotlin.math.abs(d) > HEADING_DEADZONE) {
-            heading += d * (1f - Math.exp(-dt * 2.5).toFloat())
+            heading += d * (1f - kotlin.math.exp(-dt * 2.5).toFloat())
         }
 
         // forward: a WALL ahead holds you; on a FORK a void ahead with a branch holds; else
@@ -2092,7 +2036,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
     private fun rollBoulder(dt: Float, speed: Float) {
         val dz = speed * dt
         boulderZ -= dz
-        boulderSpin += dz / boulderRadiusW * (180f / Math.PI.toFloat())
+        boulderSpin += dz / boulderRadiusW * (180f / kotlin.math.PI.toFloat())
         val g = groundAt(boulderX, boulderZ, boulderY + 3f)   // ride the surface, not the roof
         if (g != null) boulderY = g + boulderRadiusW
         if (boulderY > boulderMaxY) boulderMaxY = boulderY
@@ -2213,7 +2157,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
                     h.x = climbBaseX
                     h.z = lerp(gapNearZ + 0.4f, lieZ, toppleT)
                     h.y = lerp(stackY, lieY, toppleT)
-                    h.pitch = toppleT * (Math.PI.toFloat() / 2f)
+                    h.pitch = toppleT * (kotlin.math.PI.toFloat() / 2f)
                     h.facing = 0f
                 }
                 if (toppleT >= 1f) {
@@ -2296,8 +2240,8 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
             if (hazTimer >= HAZ_INTERVAL) {
                 hazTimer = 0f
                 // Drop at the CREST in a fixed lane; it then rolls the whole way DOWN toward you.
-                val lane = HAZ_LANES[(Math.random() * HAZ_LANES.size).toInt().coerceIn(0, HAZ_LANES.size - 1)]
-                val hz = bouderCrestZ + (Math.random() * 3f).toFloat()
+                val lane = HAZ_LANES[(kotlin.random.Random.nextDouble() * HAZ_LANES.size).toInt().coerceIn(0, HAZ_LANES.size - 1)]
+                val hz = bouderCrestZ + (kotlin.random.Random.nextDouble() * 3f).toFloat()
                 val g = groundAt(lane, hz, 30f)
                 if (g != null) hazBoulders.add(HazBoulder(lane, g + 6f, hz, 0f))
             }
@@ -2313,7 +2257,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
                 b.z += HAZ_ROLL_SPEED * dt                              // roll straight down its lane
                 // sample near the rock's own height so a plateau/roof can't teleport it up/down
                 b.y = (groundAt(b.x, b.z, b.y + 2f) ?: (b.y - HAZ_R)) + HAZ_R
-                b.spin -= HAZ_ROLL_SPEED / HAZ_R * (180f / Math.PI.toFloat()) * dt
+                b.spin -= HAZ_ROLL_SPEED / HAZ_R * (180f / kotlin.math.PI.toFloat()) * dt
             }
             // hit the player? → knock them down (visible impact), then respawn. Only rocks that
             // have LANDED and are near the player count (a rock still in the air can't kill).
@@ -2428,7 +2372,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         finishTimer += dt
         val pz = finishPodiumZ
         val yOff = tiles.firstOrNull { it.piece == "end" }?.yOffset ?: 0f
-        val faceCam = Math.PI.toFloat()                      // face +z toward the camera
+        val faceCam = kotlin.math.PI.toFloat()                      // face +z toward the camera
         val t = (finishTimer / FINISH_WALK).coerceIn(0f, 1f)
         // player → 2nd step (medium, left)
         charX = lerp(finishStartX, STEP_2ND[0], t)
@@ -2491,16 +2435,16 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
     /** Two straight side-tracks the competitors run on, out past the surround buildings. */
     private fun drawCompetitorTracks() {
         if (boxVao == 0 || onDetour) return
-        GLES30.glUseProgram(flatProg)
-        GLES30.glUniformMatrix4fv(fVP, 1, false, vp, 0)
-        GLES30.glUniform3f(fColor, TILE_GREY[0], TILE_GREY[1], TILE_GREY[2])
-        GLES30.glBindVertexArray(boxVao)
+        Gl.glUseProgram(flatProg)
+        Gl.glUniformMatrix4fv(fVP, 1, false, vp, 0)
+        Gl.glUniform3f(fColor, TILE_GREY[0], TILE_GREY[1], TILE_GREY[2])
+        Gl.glBindVertexArray(boxVao)
         for (cx in floatArrayOf(-COMP_X, COMP_X)) {
             Matrix.setIdentityM(modelMat, 0)
             Matrix.translateM(modelMat, 0, cx - 2f, COMP_Y - 0.15f, charZ - 150f)  // box x∈[0,1] → centre it; top at COMP_Y
             Matrix.scaleM(modelMat, 0, 4f, 0.3f, 720f)                            // 4 wide (narrower still), flat, long
-            GLES30.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
-            GLES30.glDrawElements(GLES30.GL_TRIANGLES, boxVerts, GLES30.GL_UNSIGNED_INT, 0)
+            Gl.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
+            Gl.glDrawElements(Gl.GL_TRIANGLES, boxVerts, Gl.GL_UNSIGNED_INT, 0)
         }
         // At the finish, each side lane RISES and bends inward to the winners' step (a ramp).
         if (runState == RunState.FINISH) {
@@ -2511,26 +2455,26 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
                 val ax = laneX; val ay = COMP_Y; val bx = step[0]; val by = step[1] + yOff
                 val dx = bx - ax; val dy = by - ay
                 val len = kotlin.math.sqrt(dx * dx + dy * dy)
-                val ang = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), dx.toDouble())).toFloat()
+                val ang = ((kotlin.math.atan2(dy.toDouble(), dx.toDouble())) * 180.0 / kotlin.math.PI).toFloat()
                 Matrix.setIdentityM(modelMat, 0)
                 Matrix.translateM(modelMat, 0, ax, ay, pz)
                 Matrix.rotateM(modelMat, 0, ang, 0f, 0f, 1f)
                 Matrix.translateM(modelMat, 0, 0f, -0.2f, -3f)          // centre the width, sit under the top
                 Matrix.scaleM(modelMat, 0, len, 0.4f, 6f)              // box extends +x along the ramp
-                GLES30.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
-                GLES30.glDrawElements(GLES30.GL_TRIANGLES, boxVerts, GLES30.GL_UNSIGNED_INT, 0)
+                Gl.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
+                Gl.glDrawElements(Gl.GL_TRIANGLES, boxVerts, Gl.GL_UNSIGNED_INT, 0)
             }
         }
-        GLES30.glBindVertexArray(0)
+        Gl.glBindVertexArray(0)
     }
 
     /** Finish pan-out: a sea of parallel tracks fanning off both sides + into the distance. */
     private fun drawFinishBackdrop() {
         if (runState != RunState.FINISH || camZoom < 0.12f || boxVao == 0) return
-        GLES30.glUseProgram(flatProg)
-        GLES30.glUniformMatrix4fv(fVP, 1, false, vp, 0)
-        GLES30.glUniform3f(fColor, TILE_GREY[0], TILE_GREY[1], TILE_GREY[2])
-        GLES30.glBindVertexArray(boxVao)
+        Gl.glUseProgram(flatProg)
+        Gl.glUniformMatrix4fv(fVP, 1, false, vp, 0)
+        Gl.glUniform3f(fColor, TILE_GREY[0], TILE_GREY[1], TILE_GREY[2])
+        Gl.glBindVertexArray(boxVao)
         val cz = finishPodiumZ
         var lane = 16f
         while (lane < 150f) {                                // many lanes on each side, stepped down
@@ -2539,12 +2483,12 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
                 Matrix.setIdentityM(modelMat, 0)
                 Matrix.translateM(modelMat, 0, sx - 2f, y, cz + 40f)
                 Matrix.scaleM(modelMat, 0, 4f, 0.3f, 520f)
-                GLES30.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
-                GLES30.glDrawElements(GLES30.GL_TRIANGLES, boxVerts, GLES30.GL_UNSIGNED_INT, 0)
+                Gl.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
+                Gl.glDrawElements(Gl.GL_TRIANGLES, boxVerts, Gl.GL_UNSIGNED_INT, 0)
             }
             lane += 13f
         }
-        GLES30.glBindVertexArray(0)
+        Gl.glBindVertexArray(0)
     }
 
     /** Accepted a branch fork → teleport onto its detour; the caller falls in beside you. */
@@ -2559,7 +2503,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
             needTollZ = needTollTile!!.zNear + 0.6f
             val wx = -1.1f
             visitCompanion = Helper(wx, needTollZ, groundAt(wx, needTollZ) ?: 0f, wx, needTollZ,
-                color, name, arrived = true, companion = true, facing = Math.PI.toFloat())
+                color, name, arrived = true, companion = true, facing = kotlin.math.PI.toFloat())
         } else {
             // VISIT: the friend falls in beside you straight away.
             val cx = (charX + 1.8f).coerceIn(-2.5f, 2.5f)
@@ -2588,7 +2532,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
             if (needExcursion && !needPaid) {
                 // Stuck at the toll — stay put, face back toward you until you cover it.
                 c.x = -1.1f; c.z = needTollZ; c.y = groundAt(c.x, c.z) ?: c.y
-                c.facing = Math.PI.toFloat()
+                c.facing = kotlin.math.PI.toFloat()
             } else {
                 // VISIT the whole way, or NEED once the toll's paid → run alongside you, but
                 // HOP gaps / follow the ground instead of running through the air.
@@ -2633,7 +2577,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
             val t = greetTimer / CLIMB_DOWN_T
             ch.x = lerp(COL_X, faceX, t); ch.z = colZ0     // shift to the player-facing face
             ch.y = lerp(COL_TOP_Y, faceGy, t)              // descend from the top to the ground
-            ch.facing = (Math.PI * 0.5).toFloat()          // faces INTO the column → back to the player
+            ch.facing = (kotlin.math.PI * 0.5).toFloat()          // faces INTO the column → back to the player
         } else if (greetTimer < walkEnd) {                 // 2) walk over to the player
             val t = (greetTimer - CLIMB_DOWN_T) / GREET_WALK_T
             ch.x = lerp(faceX, meetX, t); ch.z = lerp(colZ0, meetZ, t)
@@ -3013,7 +2957,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
             val name = seenNames.randomOrNull() ?: helperNames.firstOrNull() ?: "Friend"
             val color = HELPER_COLORS[helperColorIdx % HELPER_COLORS.size]; helperColorIdx++
             columnHelper = Helper(COL_X, cz, COL_TOP_Y, COL_X, cz, color, name,
-                arrived = true, facing = (-Math.PI * 0.5).toFloat(), greeter = true)
+                arrived = true, facing = (-kotlin.math.PI * 0.5).toFloat(), greeter = true)
             helpers.add(columnHelper!!)
         }
     }
@@ -3066,7 +3010,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         val tt = tollTile ?: return
         val cz = (tt.zNear + tt.zFar) * 0.5f
         boothNpc = Helper(4.0f, cz, 0f, 4.0f, cz, CHAR_GREY, "",
-            arrived = true, facing = (-Math.PI * 0.5).toFloat(), isBooth = true, scale = 1.5f)
+            arrived = true, facing = (-kotlin.math.PI * 0.5).toFloat(), isBooth = true, scale = 1.5f)
     }
 
     /** Highest walkable point along the boulder-hill centre (ignoring the high structures). */
@@ -3131,7 +3075,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
             z -= 0.5f
         }
         val cz = (colFront + 6f).coerceIn(rt.zFar + 3f, rt.zNear - 3f)
-        val faceUp = Math.PI.toFloat()                // face +z (toward the player running −z)
+        val faceUp = kotlin.math.PI.toFloat()                // face +z (toward the player running −z)
         ringFoes = 3 + kotlin.math.abs((rt.zNear * 0.17f).toInt()) % 3   // 3..5, varies per ring
         for (i in 0 until ringFoes) {
             val ox = (i - (ringFoes - 1) * 0.5f) * 1.3f
@@ -3195,7 +3139,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
             val ux = w[3] - w[0]; val uy = w[4] - w[1]; val uz = w[5] - w[2]
             val vx = w[6] - w[0]; val vy = w[7] - w[1]; val vz = w[8] - w[2]
             var ny = uz * vx - ux * vz
-            val len = Math.sqrt(((uy * vz - uz * vy) * (uy * vz - uz * vy) +
+            val len = kotlin.math.sqrt(((uy * vz - uz * vy) * (uy * vz - uz * vy) +
                 ny * ny + (ux * vy - uy * vx) * (ux * vy - uy * vx)).toDouble()).toFloat().coerceAtLeast(1e-6f)
             ny /= len
             if (ny > GROUND_NY) for (k in 0 until 9) out.add(w[k])
@@ -3251,7 +3195,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         val verts = ArrayList<FloatArray>()
         val out = LinkedHashMap<String, ArrayList<Float>>()
         var cur = "(root)"
-        context.assets.open(path).bufferedReader().forEachLine { raw ->
+        Assets.readLines(path).forEach { raw ->
             val t = raw.trim()
             when {
                 t.startsWith("v ") -> {
@@ -3283,7 +3227,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
             val ux = pos[i + 3] - pos[i]; val uy = pos[i + 4] - pos[i + 1]; val uz = pos[i + 5] - pos[i + 2]
             val vx = pos[i + 6] - pos[i]; val vy = pos[i + 7] - pos[i + 1]; val vz = pos[i + 8] - pos[i + 2]
             var nx = uy * vz - uz * vy; var ny = uz * vx - ux * vz; var nz = ux * vy - uy * vx
-            val len = Math.sqrt((nx * nx + ny * ny + nz * nz).toDouble()).toFloat().coerceAtLeast(1e-6f)
+            val len = kotlin.math.sqrt((nx * nx + ny * ny + nz * nz).toDouble()).toFloat().coerceAtLeast(1e-6f)
             nx /= len; ny /= len; nz /= len
             for (k in 0 until 3) { nrm[i + k * 3] = nx; nrm[i + k * 3 + 1] = ny; nrm[i + k * 3 + 2] = nz }
             i += 9
@@ -3292,8 +3236,8 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
     }
 
     private fun drawTiles() {
-        GLES30.glUseProgram(flatProg)
-        GLES30.glUniformMatrix4fv(fVP, 1, false, vp, 0)
+        Gl.glUseProgram(flatProg)
+        Gl.glUniformMatrix4fv(fVP, 1, false, vp, 0)
         for (t in tiles) {
             if (t.zFar > charZ + 30f || t.zNear < charZ - 300f) continue
             val piece = tilePieces[t.piece] ?: continue
@@ -3301,21 +3245,21 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
             Matrix.translateM(modelMat, 0, 0f, -TILE_TOP + t.yOffset, t.zRef)
             if (FLIP_Z != t.reversed) Matrix.rotateM(modelMat, 0, 180f, 0f, 1f, 0f)
             Matrix.scaleM(modelMat, 0, SCALE_X, SCALE_Y, SCALE_Z)
-            GLES30.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
-            GLES30.glUniform3f(fColor, t.color[0], t.color[1], t.color[2])
+            Gl.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
+            Gl.glUniform3f(fColor, t.color[0], t.color[1], t.color[2])
             // The finish podium has inward-wound faces (missing front faces) — draw it two-sided.
-            if (t.piece == "end") GLES30.glDisable(GLES30.GL_CULL_FACE)
-            GLES30.glBindVertexArray(piece.vao)
-            GLES30.glDrawElements(GLES30.GL_TRIANGLES, piece.vertCount, GLES30.GL_UNSIGNED_INT, 0)
+            if (t.piece == "end") Gl.glDisable(Gl.GL_CULL_FACE)
+            Gl.glBindVertexArray(piece.vao)
+            Gl.glDrawElements(Gl.GL_TRIANGLES, piece.vertCount, Gl.GL_UNSIGNED_INT, 0)
             // Coloured sub-parts (toll sign: red rim / white face / black text) share the transform.
             for (part in tileParts[t.piece] ?: emptyList()) {
-                GLES30.glUniform3f(fColor, part.color[0], part.color[1], part.color[2])
-                GLES30.glBindVertexArray(part.vao)
-                GLES30.glDrawElements(GLES30.GL_TRIANGLES, part.vertCount, GLES30.GL_UNSIGNED_INT, 0)
+                Gl.glUniform3f(fColor, part.color[0], part.color[1], part.color[2])
+                Gl.glBindVertexArray(part.vao)
+                Gl.glDrawElements(Gl.GL_TRIANGLES, part.vertCount, Gl.GL_UNSIGNED_INT, 0)
             }
-            if (t.piece == "end") GLES30.glEnable(GLES30.GL_CULL_FACE)
+            if (t.piece == "end") Gl.glEnable(Gl.GL_CULL_FACE)
         }
-        GLES30.glBindVertexArray(0)
+        Gl.glBindVertexArray(0)
     }
 
     // Animation clock: the run cycle is sped up so it matches how fast the camera moves.
@@ -3324,9 +3268,9 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
 
     // ── Draw the character (skinned) ─────────────────────────────────────────────
     private fun drawCharacter() {
-        GLES30.glUseProgram(skinProg)
-        GLES30.glUniformMatrix4fv(sVP, 1, false, vp, 0)
-        GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, 0, boneUbo)
+        Gl.glUseProgram(skinProg)
+        Gl.glUniformMatrix4fv(sVP, 1, false, vp, 0)
+        Gl.glBindBufferBase(Gl.GL_UNIFORM_BUFFER, 0, boneUbo)
 
         // Fight death → death; brawling → boxing; sizing up the mob → fight-idle; shoving the
         // boulder → push; head-shake → refuse; reading a dialog / watching → idle; else run/jump.
@@ -3354,21 +3298,21 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         }
         val bones = model.jointMatrices(clip, phase)
         boneBuffer.clear(); boneBuffer.put(bones); boneBuffer.position(0)
-        GLES30.glBindBuffer(GLES30.GL_UNIFORM_BUFFER, boneUbo)
-        GLES30.glBufferSubData(GLES30.GL_UNIFORM_BUFFER, 0, bones.size * 4, boneBuffer)
+        Gl.glBindBuffer(Gl.GL_UNIFORM_BUFFER, boneUbo)
+        Gl.glBufferSubData(Gl.GL_UNIFORM_BUFFER, 0, bones.size * 4, boneBuffer)
 
         Matrix.setIdentityM(modelMat, 0)
         Matrix.translateM(modelMat, 0, charX, footOffset + charY, charZ)
-        Matrix.rotateM(modelMat, 0, 180f - Math.toDegrees(heading.toDouble()).toFloat(), 0f, 1f, 0f)
+        Matrix.rotateM(modelMat, 0, 180f - ((heading.toDouble()) * 180.0 / kotlin.math.PI).toFloat(), 0f, 1f, 0f)
         Matrix.scaleM(modelMat, 0, modelScale, modelScale, modelScale)
-        GLES30.glUniformMatrix4fv(sModel, 1, false, modelMat, 0)
+        Gl.glUniformMatrix4fv(sModel, 1, false, modelMat, 0)
 
         for (m in skinnedMeshes) {
-            GLES30.glUniform3f(sColor, CHAR_GREY[0], CHAR_GREY[1], CHAR_GREY[2])
-            GLES30.glBindVertexArray(m.vao)
-            GLES30.glDrawElements(GLES30.GL_TRIANGLES, m.indexCount, GLES30.GL_UNSIGNED_INT, 0)
+            Gl.glUniform3f(sColor, CHAR_GREY[0], CHAR_GREY[1], CHAR_GREY[2])
+            Gl.glBindVertexArray(m.vao)
+            Gl.glDrawElements(Gl.GL_TRIANGLES, m.indexCount, Gl.GL_UNSIGNED_INT, 0)
         }
-        GLES30.glBindVertexArray(0)
+        Gl.glBindVertexArray(0)
     }
 
     /** Helper runners + the toll-booth attendant: same skinned mesh as the player, tinted.
@@ -3382,9 +3326,9 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         if (runState == RunState.FINISH) toDraw.addAll(backdropRunners)   // the pan-out crowd
         if (toDraw.isEmpty()) return
 
-        GLES30.glUseProgram(skinProg)
-        GLES30.glUniformMatrix4fv(sVP, 1, false, vp, 0)
-        GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, 0, boneUbo)
+        Gl.glUseProgram(skinProg)
+        Gl.glUniformMatrix4fv(sVP, 1, false, vp, 0)
+        Gl.glBindBufferBase(Gl.GL_UNIFORM_BUFFER, 0, boneUbo)
 
         for (h in toDraw) {
             // Death → death; fight → box; opponents/arrived allies size up in fight-idle;
@@ -3414,24 +3358,24 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
             val phase = if (h.dying) minOf(deathElapsed(), model.clipDuration(clip) - 0.03f) else animPhase(clip)
             val bones = model.jointMatrices(clip, phase)
             boneBuffer.clear(); boneBuffer.put(bones); boneBuffer.position(0)
-            GLES30.glBindBuffer(GLES30.GL_UNIFORM_BUFFER, boneUbo)
-            GLES30.glBufferSubData(GLES30.GL_UNIFORM_BUFFER, 0, bones.size * 4, boneBuffer)
+            Gl.glBindBuffer(Gl.GL_UNIFORM_BUFFER, boneUbo)
+            Gl.glBufferSubData(Gl.GL_UNIFORM_BUFFER, 0, bones.size * 4, boneBuffer)
 
             Matrix.setIdentityM(modelMat, 0)
             Matrix.translateM(modelMat, 0, h.x, footOffset + h.y, h.z)
-            Matrix.rotateM(modelMat, 0, 180f - Math.toDegrees(h.facing.toDouble()).toFloat(), 0f, 1f, 0f)
-            if (h.pitch != 0f) Matrix.rotateM(modelMat, 0, Math.toDegrees(h.pitch.toDouble()).toFloat(), 1f, 0f, 0f)
+            Matrix.rotateM(modelMat, 0, 180f - ((h.facing.toDouble()) * 180.0 / kotlin.math.PI).toFloat(), 0f, 1f, 0f)
+            if (h.pitch != 0f) Matrix.rotateM(modelMat, 0, ((h.pitch.toDouble()) * 180.0 / kotlin.math.PI).toFloat(), 1f, 0f, 0f)
             val ms = modelScale * h.scale
             Matrix.scaleM(modelMat, 0, ms, ms, ms)
-            GLES30.glUniformMatrix4fv(sModel, 1, false, modelMat, 0)
+            Gl.glUniformMatrix4fv(sModel, 1, false, modelMat, 0)
 
             for (m in skinnedMeshes) {
-                GLES30.glUniform3f(sColor, h.color[0], h.color[1], h.color[2])
-                GLES30.glBindVertexArray(m.vao)
-                GLES30.glDrawElements(GLES30.GL_TRIANGLES, m.indexCount, GLES30.GL_UNSIGNED_INT, 0)
+                Gl.glUniform3f(sColor, h.color[0], h.color[1], h.color[2])
+                Gl.glBindVertexArray(m.vao)
+                Gl.glDrawElements(Gl.GL_TRIANGLES, m.indexCount, Gl.GL_UNSIGNED_INT, 0)
             }
         }
-        GLES30.glBindVertexArray(0)
+        Gl.glBindVertexArray(0)
         drawHelperCoins()
     }
 
@@ -3455,18 +3399,18 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
                 cx = h.x; cy = h.y + chest; cz = h.z
             }
             if (!started) {
-                GLES30.glUseProgram(flatProg)
-                GLES30.glUniformMatrix4fv(fVP, 1, false, vp, 0)
-                GLES30.glUniform3f(fColor, COIN_COL[0], COIN_COL[1], COIN_COL[2])
-                GLES30.glBindVertexArray(coinVao)
+                Gl.glUseProgram(flatProg)
+                Gl.glUniformMatrix4fv(fVP, 1, false, vp, 0)
+                Gl.glUniform3f(fColor, COIN_COL[0], COIN_COL[1], COIN_COL[2])
+                Gl.glBindVertexArray(coinVao)
                 started = true
             }
             Matrix.setIdentityM(modelMat, 0)
             Matrix.translateM(modelMat, 0, cx, cy, cz)
             Matrix.rotateM(modelMat, 0, spin, 0f, 1f, 0f)
             Matrix.scaleM(modelMat, 0, COIN_SCALE, COIN_SCALE, COIN_SCALE)
-            GLES30.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
-            GLES30.glDrawElements(GLES30.GL_TRIANGLES, coinVerts, GLES30.GL_UNSIGNED_INT, 0)
+            Gl.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
+            Gl.glDrawElements(Gl.GL_TRIANGLES, coinVerts, Gl.GL_UNSIGNED_INT, 0)
         }
         // NEED toll: you automatically hand a coin to the requester (player → companion).
         if (runState == RunState.NEED_PAY && needPayZip in 0f..1f) {
@@ -3477,41 +3421,41 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
             val cy = (charY + chest) + ((ty + chest) - (charY + chest)) * t
             val cz = charZ + (tz - charZ) * t
             if (!started) {
-                GLES30.glUseProgram(flatProg)
-                GLES30.glUniformMatrix4fv(fVP, 1, false, vp, 0)
-                GLES30.glUniform3f(fColor, COIN_COL[0], COIN_COL[1], COIN_COL[2])
-                GLES30.glBindVertexArray(coinVao)
+                Gl.glUseProgram(flatProg)
+                Gl.glUniformMatrix4fv(fVP, 1, false, vp, 0)
+                Gl.glUniform3f(fColor, COIN_COL[0], COIN_COL[1], COIN_COL[2])
+                Gl.glBindVertexArray(coinVao)
                 started = true
             }
             Matrix.setIdentityM(modelMat, 0)
             Matrix.translateM(modelMat, 0, cx, cy, cz)
             Matrix.rotateM(modelMat, 0, spin, 0f, 1f, 0f)
             Matrix.scaleM(modelMat, 0, COIN_SCALE, COIN_SCALE, COIN_SCALE)
-            GLES30.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
-            GLES30.glDrawElements(GLES30.GL_TRIANGLES, coinVerts, GLES30.GL_UNSIGNED_INT, 0)
+            Gl.glUniformMatrix4fv(fModel, 1, false, modelMat, 0)
+            Gl.glDrawElements(Gl.GL_TRIANGLES, coinVerts, Gl.GL_UNSIGNED_INT, 0)
         }
-        if (started) GLES30.glBindVertexArray(0)
+        if (started) Gl.glBindVertexArray(0)
     }
 
     // ── GL helpers ──────────────────────────────────────────────────────────────
     private fun buildBoneUbo() {
-        val ids = IntArray(1); GLES30.glGenBuffers(1, ids, 0); boneUbo = ids[0]
-        GLES30.glBindBuffer(GLES30.GL_UNIFORM_BUFFER, boneUbo)
-        GLES30.glBufferData(GLES30.GL_UNIFORM_BUFFER, model.jointCount * 16 * 4, null, GLES30.GL_DYNAMIC_DRAW)
-        val block = GLES30.glGetUniformBlockIndex(skinProg, "JointBlock")
-        GLES30.glUniformBlockBinding(skinProg, block, 0)
+        val ids = IntArray(1); Gl.glGenBuffers(1, ids, 0); boneUbo = ids[0]
+        Gl.glBindBuffer(Gl.GL_UNIFORM_BUFFER, boneUbo)
+        Gl.glBufferData(Gl.GL_UNIFORM_BUFFER, model.jointCount * 16 * 4, null, Gl.GL_DYNAMIC_DRAW)
+        val block = Gl.glGetUniformBlockIndex(skinProg, "JointBlock")
+        Gl.glUniformBlockBinding(skinProg, block, 0)
     }
 
     private fun uploadCharacterMeshes() {
         for (p in model.primitives) {
-            val vao = IntArray(1); GLES30.glGenVertexArrays(1, vao, 0)
-            GLES30.glBindVertexArray(vao[0])
+            val vao = IntArray(1); Gl.glGenVertexArrays(1, vao, 0)
+            Gl.glBindVertexArray(vao[0])
             attrib(0, p.positions, 3)
             attrib(1, p.normals, 3)
             attrib(2, p.joints, 4)
             attrib(3, p.weights, 4)
             elementBuffer(p.indices)
-            GLES30.glBindVertexArray(0)
+            Gl.glBindVertexArray(0)
             skinnedMeshes.add(SkinnedMesh(vao[0], p.indices.size, p.baseColor))
         }
     }
@@ -3558,29 +3502,25 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
     }
 
     private fun attrib(loc: Int, data: FloatArray, comps: Int) {
-        val ids = IntArray(1); GLES30.glGenBuffers(1, ids, 0)
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, ids[0])
-        val buf = ByteBuffer.allocateDirect(data.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
-        buf.put(data); buf.position(0)
-        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, data.size * 4, buf, GLES30.GL_STATIC_DRAW)
-        GLES30.glEnableVertexAttribArray(loc)
-        GLES30.glVertexAttribPointer(loc, comps, GLES30.GL_FLOAT, false, 0, 0)
+        val ids = IntArray(1); Gl.glGenBuffers(1, ids, 0)
+        Gl.glBindBuffer(Gl.GL_ARRAY_BUFFER, ids[0])
+        Gl.glBufferData(Gl.GL_ARRAY_BUFFER, data.size * 4, data.toGlBuffer(), Gl.GL_STATIC_DRAW)
+        Gl.glEnableVertexAttribArray(loc)
+        Gl.glVertexAttribPointerOffset(loc, comps, Gl.GL_FLOAT, false, 0, 0)
     }
 
     private fun elementBuffer(idx: IntArray) {
-        val ids = IntArray(1); GLES30.glGenBuffers(1, ids, 0)
-        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, ids[0])
-        val buf = ByteBuffer.allocateDirect(idx.size * 4).order(ByteOrder.nativeOrder()).asIntBuffer()
-        buf.put(idx); buf.position(0)
-        GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, idx.size * 4, buf, GLES30.GL_STATIC_DRAW)
+        val ids = IntArray(1); Gl.glGenBuffers(1, ids, 0)
+        Gl.glBindBuffer(Gl.GL_ELEMENT_ARRAY_BUFFER, ids[0])
+        Gl.glBufferDataInts(Gl.GL_ELEMENT_ARRAY_BUFFER, idx, Gl.GL_STATIC_DRAW)
     }
 
     private fun makeVao(pos: FloatArray, nrm: FloatArray): Int {
         val idx = IntArray(pos.size / 3) { it }
-        val vao = IntArray(1); GLES30.glGenVertexArrays(1, vao, 0)
-        GLES30.glBindVertexArray(vao[0])
+        val vao = IntArray(1); Gl.glGenVertexArrays(1, vao, 0)
+        Gl.glBindVertexArray(vao[0])
         attrib(0, pos, 3); attrib(1, nrm, 3); elementBuffer(idx)
-        GLES30.glBindVertexArray(0)
+        Gl.glBindVertexArray(0)
         return vao[0]
     }
 
@@ -3638,15 +3578,15 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         """.trimIndent()
 
         skinProg = linkProgram(skinVert, frag)
-        sVP = GLES30.glGetUniformLocation(skinProg, "uVP")
-        sModel = GLES30.glGetUniformLocation(skinProg, "uModel")
-        sColor = GLES30.glGetUniformLocation(skinProg, "uColor")
+        sVP = Gl.glGetUniformLocation(skinProg, "uVP")
+        sModel = Gl.glGetUniformLocation(skinProg, "uModel")
+        sColor = Gl.glGetUniformLocation(skinProg, "uColor")
         setFogUniforms(skinProg)
 
         flatProg = linkProgram(flatVert, frag)
-        fVP = GLES30.glGetUniformLocation(flatProg, "uVP")
-        fModel = GLES30.glGetUniformLocation(flatProg, "uModel")
-        fColor = GLES30.glGetUniformLocation(flatProg, "uColor")
+        fVP = Gl.glGetUniformLocation(flatProg, "uVP")
+        fModel = Gl.glGetUniformLocation(flatProg, "uModel")
+        fColor = Gl.glGetUniformLocation(flatProg, "uColor")
         setFogUniforms(flatProg)
 
         // Textured decal program (toll.png on the sign) — alpha-tested, fog-faded.
@@ -3677,18 +3617,18 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
             }
         """.trimIndent()
         texProg = linkProgram(texVert, texFrag)
-        tVP = GLES30.glGetUniformLocation(texProg, "uVP")
-        tModel = GLES30.glGetUniformLocation(texProg, "uModel")
-        tSampler = GLES30.glGetUniformLocation(texProg, "uTex")
+        tVP = Gl.glGetUniformLocation(texProg, "uVP")
+        tModel = Gl.glGetUniformLocation(texProg, "uModel")
+        tSampler = Gl.glGetUniformLocation(texProg, "uTex")
         setFogUniforms(texProg)
     }
 
     /** The fog distance range is constant; the horizon COLOUR shifts by stage (updateHorizon). */
     private fun setFogUniforms(prog: Int) {
-        GLES30.glUseProgram(prog)
-        GLES30.glUniform3f(GLES30.glGetUniformLocation(prog, "uHorizon"), curHorizon[0], curHorizon[1], curHorizon[2])
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(prog, "uFogNear"), FOG_NEAR)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(prog, "uFogFar"), FOG_FAR)
+        Gl.glUseProgram(prog)
+        Gl.glUniform3f(Gl.glGetUniformLocation(prog, "uHorizon"), curHorizon[0], curHorizon[1], curHorizon[2])
+        Gl.glUniform1f(Gl.glGetUniformLocation(prog, "uFogNear"), FOG_NEAR)
+        Gl.glUniform1f(Gl.glGetUniformLocation(prog, "uFogFar"), FOG_FAR)
     }
 
     // Sky/fog colour eases from yellow (start) toward red-orange (finish) as a progress cue.
@@ -3697,28 +3637,28 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         val span = tileStartZ - farZ
         val prog = if (span > 1f) ((tileStartZ - charZ) / span).coerceIn(0f, 1f) else 0f
         for (i in 0..2) curHorizon[i] = HORIZON[i] + (HORIZON_END[i] - HORIZON[i]) * prog
-        GLES30.glClearColor(curHorizon[0], curHorizon[1], curHorizon[2], 1f)
+        Gl.glClearColor(curHorizon[0], curHorizon[1], curHorizon[2], 1f)
         for (p in intArrayOf(skinProg, flatProg, texProg)) {
             if (p == 0) continue
-            GLES30.glUseProgram(p)
-            GLES30.glUniform3f(GLES30.glGetUniformLocation(p, "uHorizon"), curHorizon[0], curHorizon[1], curHorizon[2])
+            Gl.glUseProgram(p)
+            Gl.glUniform3f(Gl.glGetUniformLocation(p, "uHorizon"), curHorizon[0], curHorizon[1], curHorizon[2])
         }
     }
 
     private fun linkProgram(vs: String, fs: String): Int {
-        val v = compile(GLES30.GL_VERTEX_SHADER, vs)
-        val f = compile(GLES30.GL_FRAGMENT_SHADER, fs)
-        val p = GLES30.glCreateProgram()
-        GLES30.glAttachShader(p, v); GLES30.glAttachShader(p, f); GLES30.glLinkProgram(p)
-        val ok = IntArray(1); GLES30.glGetProgramiv(p, GLES30.GL_LINK_STATUS, ok, 0)
-        if (ok[0] == 0) throw RuntimeException("link: " + GLES30.glGetProgramInfoLog(p))
+        val v = compile(Gl.GL_VERTEX_SHADER, vs)
+        val f = compile(Gl.GL_FRAGMENT_SHADER, fs)
+        val p = Gl.glCreateProgram()
+        Gl.glAttachShader(p, v); Gl.glAttachShader(p, f); Gl.glLinkProgram(p)
+        val ok = IntArray(1); Gl.glGetProgramiv(p, Gl.GL_LINK_STATUS, ok, 0)
+        if (ok[0] == 0) throw RuntimeException("link: " + Gl.glGetProgramInfoLog(p))
         return p
     }
 
     private fun compile(type: Int, src: String): Int {
-        val s = GLES30.glCreateShader(type); GLES30.glShaderSource(s, src); GLES30.glCompileShader(s)
-        val ok = IntArray(1); GLES30.glGetShaderiv(s, GLES30.GL_COMPILE_STATUS, ok, 0)
-        if (ok[0] == 0) throw RuntimeException("compile: " + GLES30.glGetShaderInfoLog(s) + "\n" + src)
+        val s = Gl.glCreateShader(type); Gl.glShaderSource(s, src); Gl.glCompileShader(s)
+        val ok = IntArray(1); Gl.glGetShaderiv(s, Gl.GL_COMPILE_STATUS, ok, 0)
+        if (ok[0] == 0) throw RuntimeException("compile: " + Gl.glGetShaderInfoLog(s) + "\n" + src)
         return s
     }
 
@@ -3743,3 +3683,8 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
         )
     }
 }
+
+/** Monotonic milliseconds — was SystemClock.uptimeMillis(). */
+private val runnerClockStart = kotlin.time.TimeSource.Monotonic.markNow()
+
+private fun monotonicMillis(): Long = runnerClockStart.elapsedNow().inWholeMilliseconds
