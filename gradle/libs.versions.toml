@@ -10,6 +10,8 @@ coroutines = "1.11.0"
 # Pinned to 3.4.0: 3.5.0 is compiled by Kotlin 2.4 and publishes klibs with ABI
 # 2.4.0, which the Kotlin 2.3.0 compiler here refuses to consume.
 coil = "3.4.0"
+# Multiplatform JSON, for the glTF/GLB parser.
+serializationJson = "1.9.0"
 # Multiplatform lifecycle/viewmodel (org.jetbrains.androidx.lifecycle), the
 # common-code stand-in for androidx.lifecycle. Held at 2.9.x: 2.10+ requires
 # AGP 9.1 / compileSdk 37, which this project is not on yet.
@@ -24,6 +26,7 @@ composeBom = "2026.01.00"
 benchmarkTraceprocessor = "1.4.1"
 
 [libraries]
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serializationJson" }
 coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
 coil-svg = { group = "io.coil-kt.coil3", name = "coil-svg", version.ref = "coil" }
 coil-network-ktor = { group = "io.coil-kt.coil3", name = "coil-network-ktor3", version.ref = "coil" }

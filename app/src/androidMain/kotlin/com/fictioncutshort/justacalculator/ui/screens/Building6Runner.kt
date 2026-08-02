@@ -1385,7 +1385,7 @@ private class RunnerRenderer(private val context: Context) : GLSurfaceView.Rende
             "models/character.glb",
         )
         val path = candidates.firstOrNull { assetExists(it) } ?: "models/character.glb"
-        model = GltfSkinnedModel.load(context.assets, path)
+        model = GltfSkinnedModel.load(path)
         runClip = model.clipIndex("run")
         idleClip = model.clipIndex("idle")
         jumpClip = model.clipIndex("jump")

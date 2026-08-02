@@ -1,10 +1,9 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
-import android.content.res.AssetManager
+import com.fictioncutshort.justacalculator.platform.Assets
+import com.fictioncutshort.justacalculator.gl.JsonObj
+import com.fictioncutshort.justacalculator.gl.LittleEndian
 import com.fictioncutshort.justacalculator.gl.Matrix
-import org.json.JSONObject
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  GLTF / GLB SKINNED MODEL  (Building 6 — 3D crowd-runner)
@@ -70,9 +69,9 @@ class GltfSkinnedModel private constructor(
     fun jointMatrices(clipIdx: Int, timeSec: Float): FloatArray {
         // 1. reset every node to its base pose
         for (n in 0 until nodeCount) {
-            System.arraycopy(baseT[n], 0, curT[n], 0, 3)
-            System.arraycopy(baseR[n], 0, curR[n], 0, 4)
-            System.arraycopy(baseS[n], 0, curS[n], 0, 3)
+            baseT[n].copyInto(curT[n], 0, 0, 0 + 3)
+            baseR[n].copyInto(curR[n], 0, 0, 0 + 4)
+            baseS[n].copyInto(curS[n], 0, 0, 0 + 3)
         }
         // 2. apply the clip's channels at this time
         val clip = clips[clipIdx]
@@ -88,7 +87,7 @@ class GltfSkinnedModel private constructor(
         // 3. local matrices
         for (n in 0 until nodeCount) {
             if (hasMatrix[n]) {
-                System.arraycopy(baseMatrix[n]!!, 0, local[n], 0, 16)
+                baseMatrix[n]!!.copyInto(local[n], 0, 0, 0 + 16)
             } else {
                 composeTRS(local[n], curT[n], curR[n], curS[n])
             }
@@ -96,7 +95,7 @@ class GltfSkinnedModel private constructor(
         // 4. global matrices (parents already processed thanks to `order`)
         for (n in order) {
             val p = parent[n]
-            if (p < 0) System.arraycopy(local[n], 0, global[n], 0, 16)
+            if (p < 0) local[n].copyInto(global[n], 0, 0, 0 + 16)
             else Matrix.multiplyMM(global[n], 0, global[p], 0, local[n], 0)
         }
         // 5. skinning matrices = meshInvGlobal * jointGlobal * inverseBind
@@ -134,17 +133,14 @@ class GltfSkinnedModel private constructor(
 
     companion object {
         // ── Loading ──────────────────────────────────────────────────────────
-        fun load(assets: AssetManager, path: String): GltfSkinnedModel {
-            val bytes = assets.open(path).use { it.readBytes() }
-            val bb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-            bb.int /* magic */; bb.int /* version */; bb.int /* length */
-            val jsonLen = bb.int; bb.int /* JSON type */
-            val jsonBytes = ByteArray(jsonLen); bb.get(jsonBytes)
-            val json = JSONObject(String(jsonBytes, Charsets.UTF_8))
-            bb.int /* BIN length */; bb.int /* BIN type */
-            val binStart = bb.position()
-            val bin = ByteBuffer.wrap(bytes, binStart, bytes.size - binStart)
-                .slice().order(ByteOrder.LITTLE_ENDIAN)
+        fun load(path: String): GltfSkinnedModel {
+            val bytes = Assets.readBytes(path)
+            val bb = LittleEndian(bytes)
+            bb.nextInt() /* magic */; bb.nextInt() /* version */; bb.nextInt() /* length */
+            val jsonLen = bb.nextInt(); bb.nextInt() /* JSON type */
+            val json = JsonObj.parse(bb.nextBytes(jsonLen).decodeToString())
+            bb.nextInt() /* BIN length */; bb.nextInt() /* BIN type */
+            val bin = bb.slice()
 
             val accessors = json.getJSONArray("accessors")
             val views = json.getJSONArray("bufferViews")
@@ -174,8 +170,8 @@ class GltfSkinnedModel private constructor(
                             5125 -> (bin.getInt(o).toLong() and 0xFFFFFFFFL).toFloat()
                             5123 -> (bin.getShort(o).toInt() and 0xFFFF).toFloat()
                             5122 -> bin.getShort(o).toFloat()
-                            5121 -> (bin.get(o).toInt() and 0xFF).toFloat()
-                            5120 -> bin.get(o).toFloat()
+                            5121 -> (bin.getByte(o).toInt() and 0xFF).toFloat()
+                            5120 -> bin.getByte(o).toFloat()
                             else -> 0f
                         }
                         if (normalized) v = when (ct) {
@@ -348,15 +344,15 @@ class GltfSkinnedModel private constructor(
                 dst[0] = ax + (nbx - ax) * t; dst[1] = ay + (nby - ay) * t
                 dst[2] = az + (nbz - az) * t; dst[3] = aw + (nbw - aw) * t
             } else {
-                val theta0 = Math.acos(dot.toDouble())
+                val theta0 = kotlin.math.acos(dot.toDouble())
                 val theta = theta0 * t
-                val sin0 = Math.sin(theta0)
-                val s0 = (Math.sin(theta0 - theta) / sin0).toFloat()
-                val s1 = (Math.sin(theta) / sin0).toFloat()
+                val sin0 = kotlin.math.sin(theta0)
+                val s0 = (kotlin.math.sin(theta0 - theta) / sin0).toFloat()
+                val s1 = (kotlin.math.sin(theta) / sin0).toFloat()
                 dst[0] = ax * s0 + nbx * s1; dst[1] = ay * s0 + nby * s1
                 dst[2] = az * s0 + nbz * s1; dst[3] = aw * s0 + nbw * s1
             }
-            val len = Math.sqrt((dst[0] * dst[0] + dst[1] * dst[1] + dst[2] * dst[2] + dst[3] * dst[3]).toDouble()).toFloat()
+            val len = kotlin.math.sqrt((dst[0] * dst[0] + dst[1] * dst[1] + dst[2] * dst[2] + dst[3] * dst[3]).toDouble()).toFloat()
             if (len > 1e-6f) { dst[0] /= len; dst[1] /= len; dst[2] /= len; dst[3] /= len }
         }
     }

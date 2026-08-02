@@ -198,18 +198,18 @@ its real implementation lands; nothing at the call site changes.
    | Calculatorcityview (3.9k) | ⬜ **fully converted; blocked only on 9 screen refs** |
    | Building6Runner (3.7k, GLES 3.0), Door4Room (1.8k) | ⬜ |
    | ModelBitmap | ⬜ offscreen EGL pbuffer; seamed as `rememberModelIcon` |
-   | GltfSkinnedModel | ⬜ **not a GL conversion** — see below |
+   | GltfSkinnedModel | ✅ commonMain — GLB parser rewritten |
 
-   **GltfSkinnedModel is a parser, not a renderer.** Its GL calls convert with
-   the recipe, but it also parses the GLB container by hand: `java.nio.ByteBuffer`
-   with `LITTLE_ENDIAN` for the binary header and chunk offsets (11 sites), and
-   `org.json.JSONObject` for the glTF JSON (30 sites). Neither exists in common
-   code, and `kotlinx.serialization` is not yet a dependency. Porting it means:
-   add kotlinx-serialization-json, write a small little-endian reader over
-   `ByteArray`, then convert the 30 JSON accessors. Budget it as its own task
-   rather than as part of Building6Runner.
+   **GltfSkinnedModel needed a parser rewrite, not the GL recipe.** Two shared
+   helpers came out of it, both reusable:
 
-   Building6Runner depends on it, so that file is blocked behind this.
+   - `gl/LittleEndian.kt` — little-endian reads over a `ByteArray`, replacing
+     `java.nio.ByteBuffer.order(LITTLE_ENDIAN)`. Fixed-endian on purpose: glTF
+     is little-endian regardless of host, so native order would happen to work
+     on both current targets and break on a big-endian one.
+   - `gl/Json.kt` — a `JsonObj`/`JsonArr` work-alike over
+     kotlinx-serialization, mirroring the `org.json` method names so the ~30
+     call sites ported unchanged. Same trick as the `Prefs` seam.
 
    **Calculatorcityview has no Android or JVM APIs left in it.** The joystick is
    Compose `pointerInput`, vibration/prefs/time/orientation are seamed, and the

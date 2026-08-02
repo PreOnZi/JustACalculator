@@ -44,6 +44,7 @@ kotlin {
             // Coil 3 — multiplatform image loading (SVG icons from assets).
             implementation(libs.coil.compose)
             implementation(libs.coil.svg)
+            implementation(libs.kotlinx.serialization.json)
         }
 
         androidMain.dependencies {
