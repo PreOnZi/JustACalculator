@@ -193,7 +193,23 @@ its real implementation lands; nothing at the call site changes.
    | `gl/GlBuffer.kt` — `java.nio.FloatBuffer` → direct buffer / pinned array | ✅ shared, 7 tests |
    | `gl/Gl.kt` — 63 calls + 44 constants | ✅ shared, both platforms compile |
    | `PlatformGlSurface` — `GLSurfaceView` → `GLKView`/`EAGL` + `CADisplayLink` | ✅ shared, both compile |
-   | the 8 renderers themselves | ⬜ next — mechanical |
+   | the 8 renderers themselves | ⬜ next — conversion proven on Building8Casino |
+
+   **The conversion recipe**, validated end to end on `Building8Casino` (40 GL
+   calls, 513 lines) — it compiled for iOS with only two unrelated UI
+   dependencies left:
+   1. `GLES20.` / `GLES30.` → `Gl.`
+   2. `ByteBuffer.allocateDirect(x.size * 4)…asFloatBuffer()` → `x.toGlBuffer()`,
+      `FloatBuffer` → `GlFloatBuffer`
+   3. `GLSurfaceView.Renderer` → `GlRenderer`; drop the `GL10?`/`EGLConfig?`
+      parameters from the three overrides
+   4. the `AndroidView { GLSurfaceView(...) }` block → `PlatformGlSurface(renderer, modifier)`
+   5. `@Volatile` → `kotlin.concurrent.Volatile` (the JVM one is not multiplatform)
+   6. `System.nanoTime()` → `nowMillis() * 1_000_000L`
+
+   Building8Casino is converted and stays in `androidMain` only because it calls
+   `CityJoystick` (Calculatorcityview) and `ArcadeBrowser` (Building8Games). It
+   moves for free once those do.
 
    **Two behavioural differences the surface host cannot hide**, worth knowing
    before the renderers move:

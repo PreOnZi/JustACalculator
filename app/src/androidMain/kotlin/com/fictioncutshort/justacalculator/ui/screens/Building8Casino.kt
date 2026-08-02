@@ -1,8 +1,13 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
-import android.content.Context
-import android.opengl.GLES20
-import android.opengl.GLSurfaceView
+import com.fictioncutshort.justacalculator.platform.nowMillis
+import kotlin.concurrent.Volatile
+import com.fictioncutshort.justacalculator.platform.currentAppContext
+import com.fictioncutshort.justacalculator.gl.PlatformGlSurface
+import com.fictioncutshort.justacalculator.gl.GlRenderer
+import com.fictioncutshort.justacalculator.gl.GlFloatBuffer
+import com.fictioncutshort.justacalculator.gl.Gl
+import com.fictioncutshort.justacalculator.gl.toGlBuffer
 import com.fictioncutshort.justacalculator.gl.Matrix
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -17,19 +22,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.fictioncutshort.justacalculator.logic.Currency
 import com.fictioncutshort.justacalculator.logic.CurrencyStore
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.nio.FloatBuffer
-import javax.microedition.khronos.egl.EGLConfig
-import javax.microedition.khronos.opengles.GL10
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.sin
@@ -54,8 +52,8 @@ fun Building8Casino(
     onComplete: () -> Unit = {},
     onExit: () -> Unit = {},
 ) {
-    val context = LocalContext.current
-    val renderer = remember { CasinoRoomRenderer(context) }
+    val context = currentAppContext()
+    val renderer = remember { CasinoRoomRenderer() }
 
     // null = walking the 3D room; "browser" = the arcade screen (games) is open.
     // WHICH games have been played, and what is left, is already persistent - the
@@ -84,16 +82,9 @@ fun Building8Casino(
 
     Box(modifier.fillMaxSize().background(Color(0xFFF2F5FF))) {
         // ── 3D room ───────────────────────────────────────────────────────────
-        AndroidView(
-            factory = { ctx ->
-                GLSurfaceView(ctx).apply {
-                    setEGLContextClientVersion(2)
-                    preserveEGLContextOnPause = true
-                    setRenderer(renderer)
-                    renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
-                }
-            },
-            modifier = Modifier.fillMaxSize()
+        PlatformGlSurface(
+            renderer = renderer,
+            modifier = Modifier.fillMaxSize(),
         )
 
         // ── Walking HUD (hidden while an overlay is up) ─────────────────────────
@@ -165,7 +156,7 @@ fun Building8Casino(
 // the single joystick: X turns, Y walks forward/back.
 // ═════════════════════════════════════════════════════════════════════════════
 
-class CasinoRoomRenderer(private val context: Context) : GLSurfaceView.Renderer {
+class CasinoRoomRenderer : GlRenderer {
 
     // Input from the Compose joystick (X = yaw, Y = forward/back; up = forward).
     @Volatile var joyX = 0f
@@ -174,7 +165,7 @@ class CasinoRoomRenderer(private val context: Context) : GLSurfaceView.Renderer 
     @Volatile var nearArcade = false
 
     private data class Mesh(val r: Float, val g: Float, val b: Float,
-                            val emissive: Float, val buf: FloatBuffer, val count: Int)
+                            val emissive: Float, val buf: GlFloatBuffer, val count: Int)
 
     private val meshes = ArrayList<Mesh>()
 
@@ -217,10 +208,10 @@ class CasinoRoomRenderer(private val context: Context) : GLSurfaceView.Renderer 
     private val doorMeshes = ArrayList<Mesh>()
     private var buildingDoor = false   // routes addMesh into doorMeshes
 
-    override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        GLES20.glClearColor(0.93f, 0.95f, 1f, 1f)
-        GLES20.glEnable(GLES20.GL_DEPTH_TEST)
-        GLES20.glDisable(GLES20.GL_CULL_FACE)   // interior — both sides visible
+    override fun onSurfaceCreated() {
+        Gl.glClearColor(0.93f, 0.95f, 1f, 1f)
+        Gl.glEnable(Gl.GL_DEPTH_TEST)
+        Gl.glDisable(Gl.GL_CULL_FACE)   // interior — both sides visible
         buildProgram()
         meshes.clear(); doorMeshes.clear()
         buildRoom()
@@ -231,20 +222,20 @@ class CasinoRoomRenderer(private val context: Context) : GLSurfaceView.Renderer 
         yaw = kotlin.math.atan2(arcadeX - pX, -(arcadeZ - pZ))
     }
 
-    override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
-        GLES20.glViewport(0, 0, width, height.coerceAtLeast(1))
+    override fun onSurfaceChanged(width: Int, height: Int) {
+        Gl.glViewport(0, 0, width, height.coerceAtLeast(1))
         val aspect = width.toFloat() / height.coerceAtLeast(1)
         Matrix.perspectiveM(proj, 0, 60f, aspect, 0.1f, 100f)
     }
 
-    override fun onDrawFrame(gl: GL10?) {
-        val now = System.nanoTime()
+    override fun onDrawFrame() {
+        val now = nowMillis() * 1_000_000L
         if (lastNs == 0L) lastNs = now
         val dt = ((now - lastNs) / 1_000_000_000.0).toFloat().coerceAtMost(0.05f)
         lastNs = now
         step(dt)
 
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+        Gl.glClear(Gl.GL_COLOR_BUFFER_BIT or Gl.GL_DEPTH_BUFFER_BIT)
 
         val fwdX = sin(yaw); val fwdZ = -cos(yaw)
         Matrix.setLookAtM(view, 0, pX, EYE, pZ, pX + fwdX, EYE, pZ + fwdZ, 0f, 1f, 0f)
@@ -275,20 +266,20 @@ class CasinoRoomRenderer(private val context: Context) : GLSurfaceView.Renderer 
             } else playShow = false
         } else playShow = false
 
-        GLES20.glUseProgram(prog)
-        GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
-        GLES20.glUniformMatrix4fv(uModel, 1, false, ident, 0)
+        Gl.glUseProgram(prog)
+        Gl.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
+        Gl.glUniformMatrix4fv(uModel, 1, false, ident, 0)
         val toDraw = if (showDoor) meshes.asSequence() + doorMeshes.asSequence() else meshes.asSequence()
         for (m in toDraw) {
-            GLES20.glUniform3f(uColor, m.r, m.g, m.b)
-            GLES20.glUniform1f(uEmis, m.emissive)
+            Gl.glUniform3f(uColor, m.r, m.g, m.b)
+            Gl.glUniform1f(uEmis, m.emissive)
             m.buf.position(0)
-            GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 6 * 4, m.buf)
-            GLES20.glEnableVertexAttribArray(aPos)
+            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 6 * 4, m.buf)
+            Gl.glEnableVertexAttribArray(aPos)
             m.buf.position(3)
-            GLES20.glVertexAttribPointer(aNrm, 3, GLES20.GL_FLOAT, false, 6 * 4, m.buf)
-            GLES20.glEnableVertexAttribArray(aNrm)
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, m.count)
+            Gl.glVertexAttribPointer(aNrm, 3, Gl.GL_FLOAT, false, 6 * 4, m.buf)
+            Gl.glEnableVertexAttribArray(aNrm)
+            Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, m.count)
         }
     }
 
@@ -416,12 +407,11 @@ class CasinoRoomRenderer(private val context: Context) : GLSurfaceView.Renderer 
         }
         vert(x0, y0, z0); vert(x1, y1, z1); vert(x2, y2, z2)
         vert(x0, y0, z0); vert(x2, y2, z2); vert(x3, y3, z3)
-        val buf = ByteBuffer.allocateDirect(d.size * 4).order(ByteOrder.nativeOrder())
-            .asFloatBuffer().apply { put(d); position(0) }
+        val buf = d.toGlBuffer()
         addMesh(r, g, b, emis, buf, 6)
     }
 
-    private fun addMesh(r: Float, g: Float, b: Float, emis: Float, buf: FloatBuffer, count: Int) {
+    private fun addMesh(r: Float, g: Float, b: Float, emis: Float, buf: GlFloatBuffer, count: Int) {
         (if (buildingDoor) doorMeshes else meshes).add(Mesh(r, g, b, emis, buf, count))
     }
 
@@ -441,7 +431,7 @@ class CasinoRoomRenderer(private val context: Context) : GLSurfaceView.Renderer 
     }
 
     /** Positions → interleaved (pos+flat normal) buffer; returns (buffer, vertCount). */
-    private fun interleave(verts: FloatArray): Pair<FloatBuffer, Int>? {
+    private fun interleave(verts: FloatArray): Pair<GlFloatBuffer, Int>? {
         val triCount = verts.size / 9
         if (triCount == 0) return null
         val out = FloatArray(triCount * 3 * 6)
@@ -463,8 +453,7 @@ class CasinoRoomRenderer(private val context: Context) : GLSurfaceView.Renderer 
             }
             t++
         }
-        val buf = ByteBuffer.allocateDirect(out.size * 4).order(ByteOrder.nativeOrder())
-            .asFloatBuffer().apply { put(out); position(0) }
+        val buf = out.toGlBuffer()
         return buf to triCount * 3
     }
 
@@ -494,20 +483,20 @@ class CasinoRoomRenderer(private val context: Context) : GLSurfaceView.Renderer 
                 gl_FragColor = vec4(col, 1.0);
             }
         """.trimIndent()
-        val v = GLES20.glCreateShader(GLES20.GL_VERTEX_SHADER).also {
-            GLES20.glShaderSource(it, vs); GLES20.glCompileShader(it)
+        val v = Gl.glCreateShader(Gl.GL_VERTEX_SHADER).also {
+            Gl.glShaderSource(it, vs); Gl.glCompileShader(it)
         }
-        val f = GLES20.glCreateShader(GLES20.GL_FRAGMENT_SHADER).also {
-            GLES20.glShaderSource(it, fs); GLES20.glCompileShader(it)
+        val f = Gl.glCreateShader(Gl.GL_FRAGMENT_SHADER).also {
+            Gl.glShaderSource(it, fs); Gl.glCompileShader(it)
         }
-        prog = GLES20.glCreateProgram().also {
-            GLES20.glAttachShader(it, v); GLES20.glAttachShader(it, f); GLES20.glLinkProgram(it)
+        prog = Gl.glCreateProgram().also {
+            Gl.glAttachShader(it, v); Gl.glAttachShader(it, f); Gl.glLinkProgram(it)
         }
-        aPos = GLES20.glGetAttribLocation(prog, "aPos")
-        aNrm = GLES20.glGetAttribLocation(prog, "aNormal")
-        uMVP = GLES20.glGetUniformLocation(prog, "uMVP")
-        uModel = GLES20.glGetUniformLocation(prog, "uModel")
-        uColor = GLES20.glGetUniformLocation(prog, "uColor")
-        uEmis = GLES20.glGetUniformLocation(prog, "uEmissive")
+        aPos = Gl.glGetAttribLocation(prog, "aPos")
+        aNrm = Gl.glGetAttribLocation(prog, "aNormal")
+        uMVP = Gl.glGetUniformLocation(prog, "uMVP")
+        uModel = Gl.glGetUniformLocation(prog, "uModel")
+        uColor = Gl.glGetUniformLocation(prog, "uColor")
+        uEmis = Gl.glGetUniformLocation(prog, "uEmissive")
     }
 }
