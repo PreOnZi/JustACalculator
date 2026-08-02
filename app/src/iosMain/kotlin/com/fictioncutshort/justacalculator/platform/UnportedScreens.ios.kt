@@ -92,3 +92,28 @@ actual fun rememberModelIcon(
     colorGamma: Float,
     fitSpan: Float,
 ): ImageBitmap? = null
+
+@Composable
+actual fun PlatformModelViewer(modelFile: String, modifier: Modifier) {
+    NotPortedYet(
+        title = "3D model viewer",
+        detail = "SceneView/Filament has no iOS counterpart yet.",
+        onSkip = {},
+    )
+}
+
+@Composable
+actual fun PlatformDoor4Room(modifier: Modifier, onComplete: () -> Unit) =
+    NotPortedYet("Building 4", "GL door room with a camera-fed texture.", onComplete)
+
+@Composable
+actual fun PlatformBuilding5Map(onComplete: () -> Unit, onExit: () -> Unit) =
+    NotPortedYet("Building 5", "Needs MapKit in place of osmdroid.", onComplete)
+
+@Composable
+actual fun PlatformBuilding6Runner(onComplete: () -> Unit, onExit: () -> Unit) =
+    NotPortedYet("Building 6", "GLES 3.0 runner — next in the GL queue.", onComplete)
+
+@Composable
+actual fun PlatformBuilding7VanityRoom(modifier: Modifier, onComplete: () -> Unit) =
+    NotPortedYet("Building 7", "Needs AVFoundation + Vision face landmarks.", onComplete)

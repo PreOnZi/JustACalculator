@@ -1,6 +1,8 @@
 package com.fictioncutshort.justacalculator.gl
 
+import androidx.compose.ui.graphics.ImageBitmap
 import com.fictioncutshort.justacalculator.platform.Assets
+import org.jetbrains.compose.resources.decodeToImageBitmap
 
 /** A decoded image as tightly-packed RGBA8888 rows, top row first. */
 class DecodedImage(val width: Int, val height: Int, val rgba: ByteArray)
@@ -34,3 +36,15 @@ fun uploadTextureFromAsset(path: String): Int {
 
 /** True if [path] resolves to a bundled asset. */
 fun textureAssetExists(path: String): Boolean = Assets.exists(path)
+
+/**
+ * Decodes a bundled image straight to a Compose [ImageBitmap], for 2D sprites
+ * that are drawn rather than uploaded to GL.
+ *
+ * Uses Compose Resources' own decoder, which is multiplatform, rather than the
+ * RGBA path above — that one exists for GL texture upload and would mean
+ * re-encoding here.
+ */
+fun loadImageBitmapAsset(path: String): ImageBitmap? = runCatching {
+    Assets.readBytes(path).decodeToImageBitmap()
+}.getOrNull()

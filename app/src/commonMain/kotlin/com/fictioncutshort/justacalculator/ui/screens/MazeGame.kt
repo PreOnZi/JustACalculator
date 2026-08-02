@@ -1,10 +1,12 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
-import android.content.Context
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
+import com.fictioncutshort.justacalculator.gl.loadImageBitmapAsset
+import com.fictioncutshort.justacalculator.platform.nowMillis
+import com.fictioncutshort.justacalculator.platform.currentAppContext
+import com.fictioncutshort.justacalculator.platform.LockOrientationWhileVisible
+import com.fictioncutshort.justacalculator.platform.isTiltAvailable
+import com.fictioncutshort.justacalculator.platform.rememberDeviceTilt
+import com.fictioncutshort.justacalculator.platform.PlatformModelViewer
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -26,12 +28,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import android.app.Activity
-import android.content.pm.ActivityInfo
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -42,15 +41,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.*
 import kotlin.random.Random
-import io.github.sceneview.Scene
-import io.github.sceneview.math.Position
-import io.github.sceneview.math.Rotation
-import io.github.sceneview.node.ModelNode
-import io.github.sceneview.rememberCameraNode
-import io.github.sceneview.rememberEngine
-import io.github.sceneview.rememberMainLightNode
-import io.github.sceneview.rememberModelLoader
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.Image
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.draw.clip
@@ -951,7 +941,7 @@ private fun KeyExamineOverlay(
 
 @Composable
 fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
-    val context = LocalContext.current
+    val context = currentAppContext()
 
     // No runtime permissions are needed for the maze; left to the phase-1
     // narrative and the specific buildings that actually use the underlying
@@ -1038,7 +1028,7 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
     // Persistent across rebuilds: which decoy slots (id % 16) have been collected
     val globalCollectedDecoySlots = remember { mutableStateOf(emptySet<Int>()) }
 
-    val chaosRng = remember { Random(System.currentTimeMillis()) }
+    val chaosRng = remember { Random(nowMillis()) }
 
     // ── SceneView lifecycle guard ─────────────────────────────────────────────
     // Set to false before onComplete() so all Scene composables unmount cleanly
@@ -1046,72 +1036,20 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
     // a frame is still rendering).
     var sceneEnabled by remember { mutableStateOf(true) }
 
-    // ── Shared SceneView engine (lives for the whole game session) ───────────
-    // Created here so it is never destroyed during study→game or game→examine
-    // transitions. Both KeyStudyIntro and KeyExamineOverlay receive a lambda
-    // that closes over these values — no composable owns or destroys the engine.
-    val sceneEngine        = rememberEngine()
-    val sceneModelLoader   = rememberModelLoader(sceneEngine)
-    val sceneCameraNode    = rememberCameraNode(sceneEngine) { position = Position(z = 3.5f) }
-    val sceneMainLightNode = rememberMainLightNode(sceneEngine)
-    // Composable slot: renders a 3D model using the shared engine.
-    // When sceneEnabled is false, renders nothing (safe engine teardown path).
+    // 3D model viewer, behind a seam — SceneView is Android-only.
     val sceneContent: @Composable (modelFile: String, modifier: Modifier) -> Unit =
         { modelFile, mod ->
-            if (sceneEnabled) {
-                val modelNode = remember(modelFile) {
-                    ModelNode(
-                        modelInstance = sceneModelLoader.createModelInstance(modelFile),
-                        scaleToUnits  = 2.0f,
-                    ).apply { isEditable = true; rotation = Rotation(x = 15f, y = -25f) }
-                }
-                Scene(
-                    modifier      = mod,
-                    engine        = sceneEngine,
-                    modelLoader   = sceneModelLoader,
-                    cameraNode    = sceneCameraNode,
-                    mainLightNode = sceneMainLightNode,
-                    childNodes    = remember(modelFile) { listOf(modelNode) },
-                )
-            }
+            if (sceneEnabled) PlatformModelViewer(modelFile, mod)
         }
 
-    // Sensor
-    val sensorManager = remember { context.getSystemService(Context.SENSOR_SERVICE) as SensorManager }
-    val tiltSensor = remember {
-        sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
-            ?: sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-    }
-    val hasGyro = tiltSensor != null
+    // Tilt, behind a seam: rotation-vector sensor on Android, CoreMotion on iOS.
+    val hasGyro = remember { isTiltAvailable() }
+    val tilt = rememberDeviceTilt()
+    gyroTiltX = tilt.x * 0.30f
+    gyroTiltY = tilt.y * 0.30f
 
-    DisposableEffect(Unit) {
-        val activity = context as? Activity
-        val prev = activity?.requestedOrientation
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
-        onDispose { activity?.requestedOrientation = prev ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
-    }
+    LockOrientationWhileVisible()
 
-    DisposableEffect(Unit) {
-        if (tiltSensor == null) return@DisposableEffect onDispose {}
-        val listener = object : SensorEventListener {
-            private val alpha = 0.20f
-            private val rotMat = FloatArray(9); private val orientation = FloatArray(3)
-            private fun dz(v: Float) = if (abs(v) < 0.06f) 0f else v
-            override fun onSensorChanged(e: SensorEvent) {
-                SensorManager.getRotationMatrixFromVector(rotMat, e.values)
-                SensorManager.getOrientation(rotMat, orientation)
-                val maxA = (Math.PI / 6.0).toFloat()
-                val rawC = dz((orientation[2] / maxA).coerceIn(-1f, 1f))
-                val rawR = dz((-orientation[1] / maxA).coerceIn(-1f, 1f))
-                gyroC = gyroC * (1f - alpha) + rawC * alpha
-                gyroR = gyroR * (1f - alpha) + rawR * alpha
-                gyroTiltX = gyroC * 0.30f; gyroTiltY = gyroR * 0.30f
-            }
-            override fun onAccuracyChanged(s: Sensor, a: Int) {}
-        }
-        sensorManager.registerListener(listener, tiltSensor, SensorManager.SENSOR_DELAY_GAME)
-        onDispose { sensorManager.unregisterListener(listener) }
-    }
 
     // ── Intro sequence (starts only after key study is dismissed) ────────────
     LaunchedEffect(keyStudyDone) {
@@ -1342,10 +1280,10 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
                 DECOY_KEY_APPEARANCES.mapNotNull { it.spriteFile }).distinct()
         for (path in paths) {
             runCatching {
-                val bmp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    context.assets.open(path).use { android.graphics.BitmapFactory.decodeStream(it) }
-                }.asImageBitmap()
-                spriteBitmaps[path] = bmp
+                val bmp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    loadImageBitmapAsset(path)
+                }
+                if (bmp != null) spriteBitmaps[path] = bmp
             }
         }
     }
@@ -1788,18 +1726,17 @@ private fun ArticleQuizOverlay(
     onCorrect: () -> Unit,
     onWrong: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val path = "articles/%02d.png".format(quiz.articleNum)
+    val context = currentAppContext()
+    val path = "articles/" + quiz.articleNum.toString().padStart(2, '0') + ".png"
 
     var bitmap by remember(quiz.articleNum) {
         mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
     }
     LaunchedEffect(quiz.articleNum) {
         runCatching {
-            val bmp = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                context.assets.open(path).use { android.graphics.BitmapFactory.decodeStream(it) }
-            }.asImageBitmap()
-            bitmap = bmp
+            bitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                loadImageBitmapAsset(path)
+            }
         }
     }
 

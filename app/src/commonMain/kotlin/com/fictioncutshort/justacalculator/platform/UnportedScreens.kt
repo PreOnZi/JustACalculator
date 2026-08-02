@@ -1,6 +1,7 @@
 package com.fictioncutshort.justacalculator.platform
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import com.fictioncutshort.justacalculator.data.Chapter
 
@@ -63,3 +64,33 @@ expect fun rememberModelIcon(
     colorGamma: Float = 1f,
     fitSpan: Float = 1.7f,
 ): ImageBitmap?
+
+/**
+ * An interactive 3D model viewer — the key the player turns over and inspects.
+ *
+ * Android uses SceneView (Filament). There is no iOS equivalent, and the app's
+ * own GL layer draws scenes rather than single inspectable models, so iOS shows
+ * a labelled placeholder for now.
+ */
+@Composable
+expect fun PlatformModelViewer(modelFile: String, modifier: Modifier = Modifier)
+
+// ── Building interiors ───────────────────────────────────────────────────────
+// Four rooms still Android-only, each for a different reason. They are seamed
+// rather than blocking the city itself, which is otherwise fully shared.
+
+/** Building 4's door room — GLES 2.0 plus a camera-fed external texture. */
+@Composable
+expect fun PlatformDoor4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {})
+
+/** Building 5's map — osmdroid; iOS wants MapKit or raster OSM tiles. */
+@Composable
+expect fun PlatformBuilding5Map(onComplete: () -> Unit, onExit: () -> Unit)
+
+/** Building 6's endless runner — GLES 3.0 with VAOs and uniform blocks. */
+@Composable
+expect fun PlatformBuilding6Runner(onComplete: () -> Unit, onExit: () -> Unit)
+
+/** Building 7's vanity room — CameraX plus ML Kit face landmarks. */
+@Composable
+expect fun PlatformBuilding7VanityRoom(modifier: Modifier = Modifier, onComplete: () -> Unit = {})

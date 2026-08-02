@@ -1,6 +1,7 @@
 package com.fictioncutshort.justacalculator.platform
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import com.fictioncutshort.justacalculator.data.Chapter
 import com.fictioncutshort.justacalculator.logic.TalkAudioHandler
@@ -62,3 +63,24 @@ actual fun rememberModelIcon(
 ): ImageBitmap? = com.fictioncutshort.justacalculator.ui.screens.rememberModelBitmap(
     objPath, mtlPath, sizePx, tilt, turn, colorGamma, fitSpan,
 )
+
+@Composable
+actual fun PlatformModelViewer(modelFile: String, modifier: Modifier) {
+    com.fictioncutshort.justacalculator.ui.screens.SceneViewModel(modelFile, modifier)
+}
+
+@Composable
+actual fun PlatformDoor4Room(modifier: Modifier, onComplete: () -> Unit) =
+    com.fictioncutshort.justacalculator.ui.screens.Door4Room(modifier, onComplete)
+
+@Composable
+actual fun PlatformBuilding5Map(onComplete: () -> Unit, onExit: () -> Unit) =
+    com.fictioncutshort.justacalculator.ui.screens.Building5Map(onComplete, onExit)
+
+@Composable
+actual fun PlatformBuilding6Runner(onComplete: () -> Unit, onExit: () -> Unit) =
+    com.fictioncutshort.justacalculator.ui.screens.Building6Runner(onComplete, onExit)
+
+@Composable
+actual fun PlatformBuilding7VanityRoom(modifier: Modifier, onComplete: () -> Unit) =
+    com.fictioncutshort.justacalculator.ui.screens.Building7VanityRoom(modifier, onComplete)
