@@ -195,15 +195,23 @@ its real implementation lands; nothing at the call site changes.
    | `PlatformGlSurface` — `GLSurfaceView` → `GLKView`/`EAGL` + `CADisplayLink` | ✅ shared, both compile |
    | Cityglrenderer (4.6k) + CityCctv | ✅ commonMain |
    | Building8Casino | ✅ converted, waits on the city UI |
-   | Calculatorcityview (3.9k) | ⬜ needs a touch rewrite — see below |
+   | Calculatorcityview (3.9k) | ⬜ **fully converted; blocked only on 9 screen refs** |
    | Building6Runner (3.7k, GLES 3.0), Door4Room (1.8k) | ⬜ |
    | ModelBitmap, GltfSkinnedModel | ⬜ |
 
-   **Calculatorcityview is not a mechanical conversion.** It subclasses a View
-   and overrides `onTouchEvent(MotionEvent)` to drive the camera. That has to be
-   rewritten as a Compose `pointerInput` modifier, which is multiplatform but is
-   a rework rather than a prefix swap. Everything else in the file (orientation
-   lock, vibration, time, context) is already seamed.
+   **Calculatorcityview has no Android or JVM APIs left in it.** The joystick is
+   Compose `pointerInput`, vibration/prefs/time/orientation are seamed, and the
+   `java.util` uses are gone. Moving it to commonMain currently fails on exactly
+   **nine unresolved references**, all to screens it launches:
+
+       CityDebugMenu, CityLotteryPopup, DebugPasswordGate, FlappyBirdGame,
+       LowVolumeWarning, MazeGame, TankGame, TowerDefenseGame,
+       rememberCurrencyIcon
+
+   It is the city hub, so it moves only once those do — or once they are stubbed
+   behind `UnportedScreens.kt` the way the ad-card stack is. Several of them
+   (FlappyBirdGame, LowVolumeWarning, CityLotteryPopup) look close to portable
+   already.
 
    **Known gap:** `throttleRenderThread` is a no-op on iOS, so the deliberate
    post-Building-4 frame stutter is Android-only until the display link's

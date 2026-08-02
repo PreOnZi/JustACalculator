@@ -1,13 +1,18 @@
 package com.fictioncutshort.justacalculator.logic
 
+import kotlin.concurrent.Volatile
+import com.fictioncutshort.justacalculator.platform.applicationScope
+import com.fictioncutshort.justacalculator.platform.AppContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
 import com.fictioncutshort.justacalculator.platform.createSoundPlayer
 import com.fictioncutshort.justacalculator.platform.Sounds
 import com.fictioncutshort.justacalculator.platform.SoundPlayer
-import android.content.Context
-import android.media.audiofx.Equalizer
-import android.os.Handler
-import android.os.Looper
-import com.fictioncutshort.justacalculator.R
 
 /**
  * VoiceoverManager.kt
@@ -32,13 +37,14 @@ import com.fictioncutshort.justacalculator.R
  */
 object VoiceoverManager {
 
-    private var appContext: Context? = null
-    private val main = Handler(Looper.getMainLooper())
+    private var appContext: AppContext? = null
+    // Replaces the old Handler(Looper.getMainLooper()); the stutter and the
+    // queue pump both need to touch the player from the main thread.
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private var voPlayer: SoundPlayer? = null
     private var radioPlayer: SoundPlayer? = null
-    private var eq: Equalizer? = null
-    private var stutterRunnable: Runnable? = null
+    private var stutterJob: Job? = null
 
     // Cues never cut each other — a play() while one is sounding queues behind it
     // and starts when the current clip ends, so narration can't overlap.
@@ -54,8 +60,8 @@ object VoiceoverManager {
     /** True after building 4 / before building 3 is finished: playback stutters. */
     @Volatile var glitchMode: Boolean = false
 
-    fun init(context: Context) {
-        appContext = context.applicationContext
+    fun init(context: AppContext) {
+        appContext = context.applicationScope()
     }
 
     /**
@@ -189,35 +195,32 @@ object VoiceoverManager {
         stopRadio()
     }
 
-    // The "CCTV camera speaker" muffle was removed — every cue now plays clean and
-    // at a consistent volume. releaseEq is kept as a harmless no-op (eq stays null).
-    private fun releaseEq() {
-        eq?.let { runCatching { it.release() } }
-        eq = null
-    }
+    // The "CCTV camera speaker" muffle was removed — every cue now plays clean
+    // and at a consistent volume. The Equalizer it used is gone with it; this
+    // remains as a no-op so the call sites stay readable as "stop any effect".
+    private fun releaseEq() = Unit
 
     // ── Glitch / stutter ───────────────────────────────────────────────────
     private fun startStutter(mp: SoundPlayer) {
         clearStutter()
-        val r = object : Runnable {
-            override fun run() {
-                val p = voPlayer ?: return
-                if (p !== mp) return
+        stutterJob = scope.launch {
+            while (isActive) {
+                delay((350..900).random().toLong())
+                val p = voPlayer ?: return@launch
+                if (p !== mp) return@launch
                 runCatching {
                     if (p.isPlaying) {
                         p.pause()
-                        main.postDelayed({ runCatching { if (voPlayer === p) p.start() } }, (40..110).random().toLong())
+                        delay((40..110).random().toLong())
+                        if (voPlayer === p) p.start()
                     }
                 }
-                main.postDelayed(this, (350..900).random().toLong())
             }
         }
-        stutterRunnable = r
-        main.postDelayed(r, (350..900).random().toLong())
     }
 
     private fun clearStutter() {
-        stutterRunnable?.let { main.removeCallbacks(it) }
-        stutterRunnable = null
+        stutterJob?.cancel()
+        stutterJob = null
     }
 }

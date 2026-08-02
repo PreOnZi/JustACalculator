@@ -1,5 +1,6 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.platform.currentTimeOfDay
 import com.fictioncutshort.justacalculator.platform.Prefs
 import com.fictioncutshort.justacalculator.platform.AppContext
 import com.fictioncutshort.justacalculator.platform.openPrefs
@@ -42,7 +43,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.fictioncutshort.justacalculator.R
 import com.fictioncutshort.justacalculator.logic.Currency
 import com.fictioncutshort.justacalculator.logic.CurrencyStore
 import kotlinx.coroutines.coroutineScope
@@ -678,9 +678,9 @@ fun CalculatorCityView(
     // "LEAVE" suppresses the prompt until the player steps away and comes back.
     var gunPromptDismissed by remember { mutableStateOf(false) }
     // FIRE taps queued from the button; drained by the game loop (cross-thread).
-    val pendingShots  = remember { java.util.concurrent.atomic.AtomicInteger(0) }
+    val pendingShots  = remember { PendingShots() }
     // Live projectiles: [x, y, z, vx, vy, vz, life]. Mutated only by the loop.
-    val gunProjectiles = remember { java.util.ArrayList<FloatArray>() }
+    val gunProjectiles = remember { mutableListOf<FloatArray>() }
     LaunchedEffect(gunGrabbed) { renderer.gunGrabbed = gunGrabbed }
     LaunchedEffect(gunGrabbed, gunHeld) { renderer.gunHeld = gunGrabbed && gunHeld }
     LaunchedEffect(monsterKilled) {
@@ -968,7 +968,7 @@ fun CalculatorCityView(
             val inX = (rbx - apX); val inZ = (rbz - apZ)
             val inL = sqrt(inX * inX + inZ * inZ).coerceAtLeast(0.001f)
             val dirX = inX / inL; val dirZ = inZ / inL
-            val targetYaw = Math.toDegrees(atan2(dirX.toDouble(), -dirZ.toDouble())).toFloat()
+            val targetYaw = (atan2(dirX.toDouble(), -dirZ.toDouble()) * 180.0 / kotlin.math.PI).toFloat()
             fun propAt(x: Float, z: Float) = renderer.radPropFootprints.any {
                 x > it[0] - it[2] - 14f && x < it[0] + it[2] + 14f &&
                 z > it[1] - it[3] - 14f && z < it[1] + it[3] + 14f
@@ -1361,7 +1361,7 @@ fun CalculatorCityView(
         // Yaw so the model's single-faced front leads the travel vector. The
         // offset is auto-measured from the mesh (renderer.monsterFaceYawOffsetDeg).
         fun faceDir(vx: Float, vz: Float): Float =
-            Math.toDegrees(atan2(vx.toDouble(), vz.toDouble())).toFloat() +
+            (atan2(vx.toDouble(), vz.toDouble()) * 180.0 / kotlin.math.PI).toFloat() +
                 renderer.monsterFaceYawOffsetDeg
         fun frand(a: Float, b: Float): Float = a + (kotlin.random.Random.nextDouble() * (b - a)).toFloat()
         fun buzz(ms: Long) = vibrate(context, ms, amplitude = 200)
@@ -1510,7 +1510,7 @@ fun CalculatorCityView(
                     val rdx = tx - rbxC; val rdz = tz - rbzC
                     val rd2 = rdx * rdx + rdz * rdz
                     if (radDoorOpen) {
-                        val degs = Math.toDegrees(atan2(rdz.toDouble(), rdx.toDouble())).toFloat()
+                        val degs = (atan2(rdz.toDouble(), rdx.toDouble()) * 180.0 / kotlin.math.PI).toFloat()
                         val off = abs(((degs - RAD_DOOR_DEG + 540f) % 360f) - 180f)
                         val throughDoorway = off < RAD_DOOR_HALF_DEG
                         if (rd2 < RAD_R * RAD_R && rd2 > RAD_WALL_INNER * RAD_WALL_INNER &&
@@ -1844,7 +1844,7 @@ fun CalculatorCityView(
                                 // fixed ~3 swings regardless of how far it started.
                                 val progress = ((dartStartDist - d) /
                                     (dartStartDist - 85f).coerceAtLeast(1f)).coerceIn(0f, 1f)
-                                val weave = sin((progress * 3f * Math.PI).toFloat())
+                                val weave = sin((progress * 3f * kotlin.math.PI).toFloat())
                                 val amp = 120f * (1f - progress * 0.7f)
                                 val tgx = pX + perpX * weave * amp
                                 val tgz = pZ + perpZ * weave * amp
@@ -3433,9 +3433,8 @@ private fun RiddleDialog(
                 val hh = d.take(2).toIntOrNull()
                 val mm = d.drop(2).take(2).toIntOrNull()
                 if (d.length >= 4 && hh != null && mm != null && hh in 0..23 && mm in 0..59) {
-                    val cal = java.util.Calendar.getInstance()
-                    val nowMin = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 +
-                        cal.get(java.util.Calendar.MINUTE)
+                    val now = currentTimeOfDay()
+                    val nowMin = now.hour * 60 + now.minute
                     val ansMin = hh * 60 + mm
                     var diff = kotlin.math.abs(nowMin - ansMin)
                     diff = minOf(diff, 24 * 60 - diff)   // wrap across midnight
@@ -3863,3 +3862,17 @@ private fun MiniKeyboard(allowMinus: Boolean, onKey: (String) -> Unit) {
 
 private fun easeInOut(t: Float) = if (t < 0.5f) 2 * t * t else 1f - (-2 * t + 2f).let { it * it } / 2f
 private fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t
+
+/**
+ * Replaces java.util.concurrent.atomic.AtomicInteger. The shot counter is only
+ * read and written from the render loop, so the atomicity was never load-bearing
+ * — but the API is kept so the call sites read the same.
+ */
+private class PendingShots {
+    private var value = 0
+    fun get(): Int = value
+    fun set(v: Int) { value = v }
+    fun incrementAndGet(): Int = ++value
+    fun decrementAndGet(): Int = --value
+    fun getAndSet(v: Int): Int = value.also { value = v }
+}
