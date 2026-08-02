@@ -1,14 +1,23 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.platform.readContactNames
+import com.fictioncutshort.justacalculator.util.vibrate
+import com.fictioncutshort.justacalculator.platform.Prefs
+import com.fictioncutshort.justacalculator.platform.openPrefs
+import org.jetbrains.compose.resources.DrawableResource
+import com.fictioncutshort.justacalculator.platform.openAppStoreListing
+import com.fictioncutshort.justacalculator.platform.AppContext
+import com.fictioncutshort.justacalculator.resources.social04
+import com.fictioncutshort.justacalculator.resources.social03
+import com.fictioncutshort.justacalculator.resources.social02
+import com.fictioncutshort.justacalculator.resources.social01
+import com.fictioncutshort.justacalculator.resources.Res
+import com.fictioncutshort.justacalculator.platform.nowMillis
+import com.fictioncutshort.justacalculator.platform.currentAppContext
+import com.fictioncutshort.justacalculator.platform.savedSelfiePaths
+import com.fictioncutshort.justacalculator.platform.PlatformVideoPlayer
 import com.fictioncutshort.justacalculator.platform.Sounds
 import com.fictioncutshort.justacalculator.platform.Assets
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.os.Build
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.os.VibratorManager
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -56,7 +65,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -64,9 +72,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import coil3.compose.AsyncImage
-import com.fictioncutshort.justacalculator.R
 import com.fictioncutshort.justacalculator.ui.components.DonationLandingPage
 import kotlinx.coroutines.delay
 
@@ -125,8 +131,8 @@ private val ALL_APP_NAMES = (GRID_APPS + DOCK_APPS).map { it.name }.toSet()
  */
 @Composable
 fun TankGame(onComplete: () -> Unit) {
-    val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+    val context = currentAppContext()
+    val prefs = remember { context.openPrefs(PREFS_NAME) }
 
     // Persistent giftcards balance (the building's economy).
     var giftcards by remember { mutableIntStateOf(prefs.getInt(KEY_GIFTCARDS, 0)) }
@@ -301,11 +307,7 @@ fun TankGame(onComplete: () -> Unit) {
             DonationLandingPage(
                 onDismiss = { donationOpen = false },
                 onDonate = {
-                    val intent = Intent(
-                        Intent.ACTION_VIEW,
-                        Uri.parse("https://play.google.com/store/apps/details?id=com.fictioncutshort.justacalculator")
-                    )
-                    try { context.startActivity(intent) } catch (_: Throwable) {}
+                    openAppStoreListing(context)
                 }
             )
         }
@@ -455,18 +457,18 @@ private data class InstaPostData(val name: String, val image: Any?, val caption:
 
 @Composable
 private fun AppSocialInstagram() {
-    val context = LocalContext.current
+    val context = currentAppContext()
     // Innergram_official reuses one of the player's Building-7 selfies.
-    val vanityPic = remember { loadVanityCapturePaths(context, 1).firstOrNull()?.let { java.io.File(it) } }
+    val vanityPic = remember { savedSelfiePaths(1).firstOrNull()?.let { it } }
     val posts = remember(vanityPic) {
         listOf(
-            InstaPostData("MarytheInfluencer", R.drawable.social02,
+            InstaPostData("MarytheInfluencer", Res.drawable.social02,
                 "I have always struggled with my hair. Too thin, too short. but Gracy changed all that. Find out more in the comments!"),
-            InstaPostData("SexyMan", R.drawable.social01,
+            InstaPostData("SexyMan", Res.drawable.social01,
                 "Whatever the haters tell you, double it and pay it forward. You can afford it, thank to me! Link in bio."),
             InstaPostData("Innergram_official", vanityPic,
                 "New features and connections await in the Innergram 5.8 update. Let's get social!"),
-            InstaPostData("MarytheInfluencer", R.drawable.social03,
+            InstaPostData("MarytheInfluencer", Res.drawable.social03,
                 "Just ya girl taking a shower and thanking God for laFal, who have been saving my hair for literal years!"),
         )
     }
@@ -528,13 +530,13 @@ private fun InstaPost(name: String, image: Any?, caption: String) {
 // ── TukTak feed ───────────────────────────────────────────────────────────────
 // Exactly one of imageRes / videoRes is set. The video autoplays looping WITH
 // sound (the obnoxious social-feed effect).
-private data class TukPostData(val name: String, val imageRes: Int?, val videoRes: String?, val caption: String)
+private data class TukPostData(val name: String, val imageRes: DrawableResource?, val videoRes: String?, val caption: String)
 
 @Composable
 private fun AppSocialTikTok() {
     val posts = remember {
         listOf(
-            TukPostData("MarytheInfluencer", R.drawable.social04, null,
+            TukPostData("MarytheInfluencer", Res.drawable.social04, null,
                 "Feeling sparkly with my Mucy earrings, Guli necklace and the most gorgeous Fuki shoulder chains! See my link below."),
             TukPostData("SexyMan", null, "socialvid01", "LINK"),
         )
@@ -587,20 +589,7 @@ private fun AppSocialTikTok() {
 // Looping, audible full-bleed video card for TukTak.
 @Composable
 private fun TukTakVideo(res: String, modifier: Modifier = Modifier) {
-    AndroidView(
-        modifier = modifier,
-        factory = { ctx ->
-            android.widget.VideoView(ctx).apply {
-                setVideoURI(Uri.parse(Assets.uri(Sounds.path(res).orEmpty())))
-                setOnPreparedListener { mp ->
-                    mp.setLooping(true)
-                    mp.setVolume(1f, 1f)
-                    start()
-                }
-            }
-        },
-        onRelease = { it.stopPlayback() }
-    )
+    PlatformVideoPlayer(assetPath = Sounds.path(res).orEmpty(), modifier = modifier)
 }
 // Dumbazon product. `margin` is how many giftcards the price always sits ABOVE
 // the player's balance — different per phone, so each stays just out of reach.
@@ -1464,26 +1453,11 @@ private val CONTACT_FALLBACK_NAMES = listOf(
     "Sophie", "Marcus", "Hannah", "Tom (Pub Quiz)", "Aunt Karen",
     "Dr. Patel", "Landlord", "Plumber Steve"
 )
-private fun loadPhoneContactNames(context: Context): List<String> {
-    val granted = androidx.core.content.ContextCompat.checkSelfPermission(
-        context, android.Manifest.permission.READ_CONTACTS
-    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-    if (!granted) return CONTACT_FALLBACK_NAMES
-    val out = LinkedHashSet<String>()
-    runCatching {
-        context.contentResolver.query(
-            android.provider.ContactsContract.Contacts.CONTENT_URI,
-            arrayOf(android.provider.ContactsContract.Contacts.DISPLAY_NAME),
-            null, null,
-            android.provider.ContactsContract.Contacts.DISPLAY_NAME + " ASC"
-        )?.use { c ->
-            val col = c.getColumnIndex(android.provider.ContactsContract.Contacts.DISPLAY_NAME)
-            while (c.moveToNext() && out.size < 60) {
-                if (col >= 0) c.getString(col)?.trim()?.let { if (it.isNotEmpty()) out.add(it) }
-            }
-        }
-    }
-    return if (out.isEmpty()) CONTACT_FALLBACK_NAMES else out.toList()
+private fun loadPhoneContactNames(): List<String> {
+    val real = readContactNames()
+    // Falls back to invented names when access was refused, so the phone book
+    // still reads as a phone book.
+    return real.ifEmpty { CONTACT_FALLBACK_NAMES }
 }
 
 @Composable
@@ -1492,12 +1466,12 @@ private fun AppContacts(addGiftcards: (Int) -> Unit) {
     // the giftcard-farm ones) pays out some giftcards and replies with a canned
     // "we'll be in touch" line.
     data class CRow(val name: String, val isAd: Boolean)
-    val context = LocalContext.current
+    val context = currentAppContext()
     var rows by remember { mutableStateOf<List<CRow>>(emptyList()) }
     LaunchedEffect(Unit) {
         // The player's own people, so the ads sitting between them land. Falls back
         // to invented names when there's no contacts access (or an empty phonebook).
-        val plain = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { loadPhoneContactNames(context) }
+        val plain = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { loadPhoneContactNames() }
             .map { CRow(it, isAd = false) }
         val ads = listOf(
             "The Insurance Lawyer", "The Teeth Doctor", "The Best Car Recovery",
@@ -1926,25 +1900,15 @@ private fun SmileyFace(modifier: Modifier = Modifier) {
 // then onDone() returns the user to whatever was underneath.
 @Composable
 private fun VirusOverlay(onDone: () -> Unit) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     LaunchedEffect(Unit) {
-        val vib: Vibrator? = try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
-            else @Suppress("DEPRECATION") (context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator)
-        } catch (_: Throwable) { null }
-        val end = System.currentTimeMillis() + 5_000L
-        while (System.currentTimeMillis() < end) {
+        val end = nowMillis() + 5_000L
+        while (nowMillis() < end) {
             try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    vib?.vibrate(VibrationEffect.createOneShot((40..160).random().toLong(), (40..255).random()))
-                } else {
-                    @Suppress("DEPRECATION") vib?.vibrate((40..160).random().toLong())
-                }
+                vibrate(context, (40..160).random().toLong(), (40..255).random())
             } catch (_: Throwable) {}
             delay((60..150).random().toLong())
         }
-        try { vib?.cancel() } catch (_: Throwable) {}
         onDone()
     }
     // The screen just goes black — no flicker, no text — while it vibrates.
