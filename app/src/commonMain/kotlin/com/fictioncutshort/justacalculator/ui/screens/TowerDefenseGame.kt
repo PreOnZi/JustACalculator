@@ -1,10 +1,22 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.platform.nowMillis
+import com.fictioncutshort.justacalculator.platform.screenMetrics
+import com.fictioncutshort.justacalculator.resources.td_tower2
+import com.fictioncutshort.justacalculator.resources.td_tower
+import com.fictioncutshort.justacalculator.resources.td_enemy5
+import com.fictioncutshort.justacalculator.resources.td_enemy4
+import com.fictioncutshort.justacalculator.resources.td_enemy3
+import com.fictioncutshort.justacalculator.resources.td_enemy2
+import com.fictioncutshort.justacalculator.resources.td_enemy1
+import com.fictioncutshort.justacalculator.resources.td_brain3
+import com.fictioncutshort.justacalculator.resources.td_brain2
+import com.fictioncutshort.justacalculator.resources.td_brain1
+import com.fictioncutshort.justacalculator.resources.Res
+import org.jetbrains.compose.resources.imageResource
+import com.fictioncutshort.justacalculator.platform.currentAppContext
+import com.fictioncutshort.justacalculator.platform.createSoundEffectPool
 import com.fictioncutshort.justacalculator.platform.Sounds
-import android.annotation.SuppressLint
-import android.graphics.BitmapFactory
-import android.media.AudioAttributes
-import android.media.SoundPool
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,19 +33,15 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.fictioncutshort.justacalculator.R
 import kotlinx.coroutines.delay
 import kotlin.math.*
 
@@ -261,7 +269,7 @@ fun TowerDefenseGame(onComplete: () -> Unit) {
     // No runtime permissions are needed for tower-defense — keep the system
     // permission dialog out of the entry flow so it only appears in the
     // buildings / phase-1 beats that actually use the underlying APIs.
-    val context        = LocalContext.current
+    val context        = currentAppContext()
     // Resume where the player left off: which level, how far they'd got, and the
     // lives/gold they were holding. A tower-defence run is long enough that losing
     // it to a backgrounded app is a real loss. Enemies and towers on the board are
@@ -316,7 +324,6 @@ fun TowerDefenseGame(onComplete: () -> Unit) {
 
 // ── Level screen ──────────────────────────────────────────────────────────────
 
-@SuppressLint("UnusedBoxWithConstraintsScope")
 @Composable
 private fun TDLevelScreen(
     def: LevelDef, levelNum: Int,
@@ -329,32 +336,22 @@ private fun TDLevelScreen(
     onWin: (reached: Int, gold: Int) -> Unit, onLose: (reached: Int, gold: Int) -> Unit
 ) {
     // ── Sprite loading ────────────────────────────────────────────────────────
-    val ctx = LocalContext.current
-    val res = ctx.resources
-    val brain1Img = remember { BitmapFactory.decodeResource(res, R.drawable.td_brain1).asImageBitmap() }
-    val brain2Img = remember { BitmapFactory.decodeResource(res, R.drawable.td_brain2).asImageBitmap() }
-    val brain3Img = remember { BitmapFactory.decodeResource(res, R.drawable.td_brain3).asImageBitmap() }
-    val enemy1Img = remember { BitmapFactory.decodeResource(res, R.drawable.td_enemy1).asImageBitmap() }
-    val enemy2Img = remember { BitmapFactory.decodeResource(res, R.drawable.td_enemy2).asImageBitmap() }
-    val enemy3Img = remember { BitmapFactory.decodeResource(res, R.drawable.td_enemy3).asImageBitmap() }
-    val enemy4Img = remember { BitmapFactory.decodeResource(res, R.drawable.td_enemy4).asImageBitmap() }
-    val enemy5Img = remember { BitmapFactory.decodeResource(res, R.drawable.td_enemy5).asImageBitmap() }
-    val towerImg  = remember { BitmapFactory.decodeResource(res, R.drawable.td_tower).asImageBitmap() }
-    val tower2Img = remember { BitmapFactory.decodeResource(res, R.drawable.td_tower2).asImageBitmap() }
+    val ctx = currentAppContext()
+    val brain1Img = imageResource(Res.drawable.td_brain1)
+    val brain2Img = imageResource(Res.drawable.td_brain2)
+    val brain3Img = imageResource(Res.drawable.td_brain3)
+    val enemy1Img = imageResource(Res.drawable.td_enemy1)
+    val enemy2Img = imageResource(Res.drawable.td_enemy2)
+    val enemy3Img = imageResource(Res.drawable.td_enemy3)
+    val enemy4Img = imageResource(Res.drawable.td_enemy4)
+    val enemy5Img = imageResource(Res.drawable.td_enemy5)
+    val towerImg  = imageResource(Res.drawable.td_tower)
+    val tower2Img = imageResource(Res.drawable.td_tower2)
 
     val enemyImgs = listOf(enemy1Img, enemy2Img, enemy3Img, enemy4Img, enemy5Img)
 
     // ── Sound ─────────────────────────────────────────────────────────────────
-    val soundPool = remember {
-        SoundPool.Builder()
-            .setMaxStreams(16)   // enough concurrent streams to never cut each other off
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_GAME)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
-            ).build()
-    }
+    val soundPool = remember { createSoundEffectPool(maxStreams = 16) }
     // Per-enemy sound pools:
     //   td_enemy1 → en1, en2, en4, en5
     //   td_enemy2 → en3
@@ -369,14 +366,14 @@ private fun TDLevelScreen(
             4 to listOf("en7", "en9", "en10"),
             5 to listOf("en8", "en12")
         ).mapValues { (_, resIds) ->
-            resIds.map { soundPool.load(ctx.assets.openFd(Sounds.path(it).orEmpty()), 1) }
+            resIds.map { soundPool.load(Sounds.path(it).orEmpty()) }
         }
     }
     DisposableEffect(Unit) { onDispose { soundPool.release() } }
 
     fun playEnemySound(enemyType: Int, vol: Float = 1f) {
         val pool = enemySounds[enemyType] ?: return
-        soundPool.play(pool.random(), vol, vol, 1, 0, 1f)
+        soundPool.play(pool.random(), vol)
     }
 
     // ── Game state ────────────────────────────────────────────────────────────
@@ -431,10 +428,10 @@ private fun TDLevelScreen(
 
     // ── Game loop ─────────────────────────────────────────────────────────────
     LaunchedEffect(Unit) {
-        var lastNs = System.nanoTime()
+        var lastNs = nowMillis() * 1_000_000L
         while (phase != TDPhase.WON && phase != TDPhase.LOST) {
             delay(16)
-            val now = System.nanoTime()
+            val now = nowMillis() * 1_000_000L
             val dt  = ((now - lastNs) / 1_000_000_000f).coerceAtMost(0.05f)
             lastNs  = now
             tick++
@@ -574,8 +571,7 @@ private fun TDLevelScreen(
     // levels and leaves the bar looking full while the game plays on.
     val damageFrac = ((def.lives - lives).toFloat() / def.lives.coerceAtLeast(1)).coerceIn(0f, 1f)
     val brainFill = damageFrac
-    val isLandscape = LocalConfiguration.current.orientation ==
-            android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val isLandscape = screenMetrics().isLandscape
 
     // Brain image steps with the same per-level damage fraction (thirds).
     val brainImg = when {
