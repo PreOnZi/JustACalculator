@@ -192,8 +192,18 @@ its real implementation lands; nothing at the call site changes.
    | `gl/Matrix.kt` — the 8 `android.opengl.Matrix` functions | ✅ shared, 11 tests |
    | `gl/GlBuffer.kt` — `java.nio.FloatBuffer` → direct buffer / pinned array | ✅ shared, 7 tests |
    | `gl/Gl.kt` — 63 calls + 44 constants | ✅ shared, both platforms compile |
-   | `PlatformGLSurface` — `GLSurfaceView` → `GLKView`/`EAGL` in `UIKitView` | ⬜ next |
-   | the 8 renderers themselves | ⬜ |
+   | `PlatformGlSurface` — `GLSurfaceView` → `GLKView`/`EAGL` + `CADisplayLink` | ✅ shared, both compile |
+   | the 8 renderers themselves | ⬜ next — mechanical |
+
+   **Two behavioural differences the surface host cannot hide**, worth knowing
+   before the renderers move:
+   - GLKView does not drive itself. GLKViewController normally owns the render
+     loop, and there is no controller when the view is hosted in Compose, so a
+     `CADisplayLink` supplies the equivalent of `RENDERMODE_CONTINUOUSLY`.
+   - GLKView calls its delegate on the **main thread**; GLSurfaceView uses a
+     dedicated render thread. The renderers only touch GL inside their
+     callbacks so this is invisible to them, but a slow frame blocks the UI on
+     iOS in a way it does not on Android.
 
    All 7 files already use the shared `Matrix`. The renderers still call
    `GLES20.`/`GLES30.` directly and construct `java.nio` buffers — swapping both
