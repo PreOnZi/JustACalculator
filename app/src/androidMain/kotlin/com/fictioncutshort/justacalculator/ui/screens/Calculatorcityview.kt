@@ -1,13 +1,12 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.platform.LockOrientationWhileVisible
 import com.fictioncutshort.justacalculator.platform.screenMetrics
 import com.fictioncutshort.justacalculator.gl.PlatformGlSurface
 import com.fictioncutshort.justacalculator.platform.createSoundPlayer
 import com.fictioncutshort.justacalculator.platform.Sounds
 import com.fictioncutshort.justacalculator.platform.SoundPlayer
-import android.app.Activity
 import android.content.Context
-import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.opengl.GLSurfaceView
 import android.os.Build
@@ -489,14 +488,7 @@ fun CalculatorCityView(
     // schedule an ActivityRelaunchItem the way changing to SENSOR_LANDSCAPE does.
     // Reverted to UNSPECIFIED on dispose so the calculator regains free rotation
     // when the user backs out of the city.
-    DisposableEffect(Unit) {
-        val activity = context as? Activity
-        val prev = activity?.requestedOrientation
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
-        onDispose {
-            activity?.requestedOrientation = prev ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        }
-    }
+    LockOrientationWhileVisible()
 
     // Persist intro completion so it doesn't replay on rotation / remount
     val cityPrefs = remember { context.getSharedPreferences("calc_city", android.content.Context.MODE_PRIVATE) }

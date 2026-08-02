@@ -193,7 +193,25 @@ its real implementation lands; nothing at the call site changes.
    | `gl/GlBuffer.kt` — `java.nio.FloatBuffer` → direct buffer / pinned array | ✅ shared, 7 tests |
    | `gl/Gl.kt` — 63 calls + 44 constants | ✅ shared, both platforms compile |
    | `PlatformGlSurface` — `GLSurfaceView` → `GLKView`/`EAGL` + `CADisplayLink` | ✅ shared, both compile |
-   | the 8 renderers themselves | ⬜ next — conversion proven on Building8Casino |
+   | Cityglrenderer (4.6k) + CityCctv | ✅ commonMain |
+   | Building8Casino | ✅ converted, waits on the city UI |
+   | Calculatorcityview (3.9k) | ⬜ needs a touch rewrite — see below |
+   | Building6Runner (3.7k, GLES 3.0), Door4Room (1.8k) | ⬜ |
+   | ModelBitmap, GltfSkinnedModel | ⬜ |
+
+   **Calculatorcityview is not a mechanical conversion.** It subclasses a View
+   and overrides `onTouchEvent(MotionEvent)` to drive the camera. That has to be
+   rewritten as a Compose `pointerInput` modifier, which is multiplatform but is
+   a rework rather than a prefix swap. Everything else in the file (orientation
+   lock, vibration, time, context) is already seamed.
+
+   **Known gap:** `throttleRenderThread` is a no-op on iOS, so the deliberate
+   post-Building-4 frame stutter is Android-only until the display link's
+   `preferredFramesPerSecond` is varied instead.
+
+   **Known gap:** `LockOrientationWhileVisible` sets a flag on iOS that nothing
+   reads yet — the Swift AppDelegate needs to consult `IosOrientationLock` from
+   `supportedInterfaceOrientationsFor`. Until then the city will rotate on iOS.
 
    **The conversion recipe**, validated end to end on `Building8Casino` (40 GL
    calls, 513 lines) — it compiled for iOS with only two unrelated UI
