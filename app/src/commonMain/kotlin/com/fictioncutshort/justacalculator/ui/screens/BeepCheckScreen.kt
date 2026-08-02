@@ -1,5 +1,6 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.platform.currentAppContext
 import com.fictioncutshort.justacalculator.platform.createSoundPlayer
 import com.fictioncutshort.justacalculator.platform.Sounds
 import com.fictioncutshort.justacalculator.platform.SoundPlayer
@@ -26,12 +27,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.fictioncutshort.justacalculator.R
 import com.fictioncutshort.justacalculator.util.AccentOrange
 import com.fictioncutshort.justacalculator.util.CalculatorDisplayFont
 import com.fictioncutshort.justacalculator.util.RetroCream
@@ -48,7 +47,7 @@ import com.fictioncutshort.justacalculator.util.RetroCream
  */
 @Composable
 fun BeepCheckScreen(onConfirmed: () -> Unit) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     var declined by remember { mutableStateOf(false) }
 
     // Loop the beep for as long as this screen is shown.

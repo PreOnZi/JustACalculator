@@ -29,7 +29,6 @@ import com.fictioncutshort.justacalculator.resources.adspexeso_11
 import com.fictioncutshort.justacalculator.resources.adspexeso_10
 import com.fictioncutshort.justacalculator.resources.adspexeso_1
 import com.fictioncutshort.justacalculator.resources.Res
-import com.fictioncutshort.justacalculator.R
 import androidx.compose.animation.core.*
 import org.jetbrains.compose.resources.painterResource
 import androidx.compose.ui.layout.ContentScale
