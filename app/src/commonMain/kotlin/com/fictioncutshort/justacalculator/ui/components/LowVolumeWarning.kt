@@ -1,9 +1,7 @@
 package com.fictioncutshort.justacalculator.ui.components
 
-import android.content.Context
-import android.media.AudioDeviceInfo
-import android.media.AudioManager
-import android.os.Build
+import com.fictioncutshort.justacalculator.platform.nowMillis
+import com.fictioncutshort.justacalculator.platform.AudioOutput
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,7 +24,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -50,21 +47,8 @@ private const val SPEAKER_MIN_FRAC   = 0.22f
 private const val BLUETOOTH_MIN_FRAC  = 0.40f
 private const val RE_ARM_MS           = 60_000L
 
-private fun isBluetoothOut(am: AudioManager): Boolean = runCatching {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-        am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any {
-            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
-            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
-        }
-    } else {
-        @Suppress("DEPRECATION") am.isBluetoothA2dpOn
-    }
-}.getOrDefault(false)
-
 @Composable
 fun LowVolumeWarning() {
-    val context = LocalContext.current
-    val am = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
 
     var show by remember { mutableStateOf(false) }
     // Time we last dismissed; suppresses re-showing until RE_ARM_MS has passed.
@@ -72,13 +56,12 @@ fun LowVolumeWarning() {
 
     LaunchedEffect(Unit) {
         while (true) {
-            val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
-            val frac = am.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / max
+            val frac = AudioOutput.volumeFraction()
             // Bluetooth reads quieter at the same fraction, so it gets a higher bar.
-            val low = frac < (if (isBluetoothOut(am)) BLUETOOTH_MIN_FRAC else SPEAKER_MIN_FRAC)
+            val low = frac < (if (AudioOutput.isWireless()) BLUETOOTH_MIN_FRAC else SPEAKER_MIN_FRAC)
             when {
                 !low            -> show = false
-                low && System.currentTimeMillis() >= mutedUntil -> show = true
+                low && nowMillis() >= mutedUntil -> show = true
             }
             delay(1000)
         }
@@ -119,7 +102,7 @@ fun LowVolumeWarning() {
                             interactionSource = remember { MutableInteractionSource() }
                         ) {
                             show = false
-                            mutedUntil = System.currentTimeMillis() + RE_ARM_MS
+                            mutedUntil = nowMillis() + RE_ARM_MS
                         }
                         .padding(horizontal = 20.dp, vertical = 8.dp)
                 ) {
