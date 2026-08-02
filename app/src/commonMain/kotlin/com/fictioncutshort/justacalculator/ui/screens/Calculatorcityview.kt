@@ -1,7 +1,6 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
 import com.fictioncutshort.justacalculator.platform.PlatformBuilding7VanityRoom
-import com.fictioncutshort.justacalculator.platform.PlatformBuilding6Runner
 import com.fictioncutshort.justacalculator.platform.PlatformBuilding5Map
 import com.fictioncutshort.justacalculator.platform.PlatformDoor4Room
 import com.fictioncutshort.justacalculator.platform.currentTimeOfDay
@@ -2945,7 +2944,7 @@ fun CalculatorCityView(
 
         // ── Building 6 — 3D crowd-runner (prototype; replaces the old 2D mode) ─
         if (showBuilding6Game) {
-            PlatformBuilding6Runner(
+            Building6Runner(
                 onComplete = {
                     showBuilding6Game = false
                     entryProgress++

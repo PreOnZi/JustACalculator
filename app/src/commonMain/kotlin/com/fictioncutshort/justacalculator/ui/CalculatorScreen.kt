@@ -1,5 +1,6 @@
 package com.fictioncutshort.justacalculator.ui
 
+import com.fictioncutshort.justacalculator.ui.screens.AdCardStack
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -62,7 +63,6 @@ import com.fictioncutshort.justacalculator.platform.AppLifecycleEvent
 import com.fictioncutshort.justacalculator.platform.AppPermission
 import com.fictioncutshort.justacalculator.platform.LocalNotifications
 import com.fictioncutshort.justacalculator.platform.OnAppLifecycleEvent
-import com.fictioncutshort.justacalculator.platform.PlatformAdCardStack
 import com.fictioncutshort.justacalculator.platform.PlatformHomeScreenOverlay
 import com.fictioncutshort.justacalculator.platform.createTalkAudioHandler
 import com.fictioncutshort.justacalculator.platform.currentAppContext
@@ -1813,7 +1813,7 @@ fun CalculatorScreen() {
         // composition. City resumes take the startAtCity path above instead.
         val resumeAtPexeso = !current.showCityDirectly &&
             CalculatorActions.loadPhase2Stage() == "pexeso"
-        PlatformAdCardStack(
+        AdCardStack(
             onPexesoComplete = {
                 CalculatorActions.clearShowAdCards()
                 CalculatorActions.clearInCityPhase()
@@ -1962,7 +1962,7 @@ fun CalculatorScreen() {
         if (!current.showDebugMenu) debugUnlocked = false
     }
     if (current.showDebugMenu && !debugUnlocked) {
-        com.fictioncutshort.justacalculator.platform.PlatformDebugPasswordGate(
+        com.fictioncutshort.justacalculator.ui.screens.DebugPasswordGate(
             onUnlock = { debugUnlocked = true },
             onCancel = { CalculatorActions.hideDebugMenu(state) }
         )
