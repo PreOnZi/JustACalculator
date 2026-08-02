@@ -1,5 +1,15 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.platform.formatFixed
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.AnnotatedString
+import com.fictioncutshort.justacalculator.resources.kytka
+import com.fictioncutshort.justacalculator.resources.strom
+import com.fictioncutshort.justacalculator.resources.Res
+import com.fictioncutshort.justacalculator.platform.rememberModelIcon
+import com.fictioncutshort.justacalculator.platform.currentAppContext
 import com.fictioncutshort.justacalculator.platform.Assets
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -23,11 +33,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
-import com.fictioncutshort.justacalculator.R
+import org.jetbrains.compose.resources.painterResource
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -39,7 +47,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -103,7 +110,7 @@ fun RgbBorder(
         val r = cornerRadiusDp.toPx().coerceIn(0f, minOf(w, h) / 2f)
         val straightW = (w - 2f * r).coerceAtLeast(0f)
         val straightH = (h - 2f * r).coerceAtLeast(0f)
-        val arc = (Math.PI.toFloat() / 2f) * r
+        val arc = (kotlin.math.PI.toFloat() / 2f) * r
         val perim = 2f * straightW + 2f * straightH + 4f * arc
         val spacing = dotSpacingDp.toPx().coerceAtLeast(1f)
         val n = (perim / spacing).toInt().coerceAtLeast(4)
@@ -128,7 +135,7 @@ private fun roundedPerimeterPoint(
         if (x < w) return Offset(w - x, h); x -= w
         return Offset(0f, h - x)
     }
-    val half = (Math.PI / 2.0).toFloat()
+    val half = (kotlin.math.PI / 2.0).toFloat()
     var d = d0
     // top edge → TR arc → right edge → BR arc → bottom → BL arc → left → TL arc
     if (d < sw) return Offset(r + d, 0f); d -= sw
@@ -138,7 +145,7 @@ private fun roundedPerimeterPoint(
     if (d < sw) return Offset(w - r - d, h); d -= sw
     if (d < arc) { val a = half + (d / arc) * half; return Offset(r + r * kotlin.math.cos(a), h - r + r * kotlin.math.sin(a)) }; d -= arc
     if (d < sh) return Offset(0f, h - r - d); d -= sh
-    val a = (Math.PI).toFloat() + (d / arc) * half
+    val a = (kotlin.math.PI).toFloat() + (d / arc) * half
     return Offset(r + r * kotlin.math.cos(a), r + r * kotlin.math.sin(a))
 }
 
@@ -294,7 +301,7 @@ private fun MovingGradient(colors: List<Color>, modifier: Modifier = Modifier) {
 
 @Composable
 fun CityLotteryPopup(onDismiss: () -> Unit) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     val numbers = remember { mutableStateListOf(0, 0, 0, 0, 0) }
 
     Box(
@@ -353,7 +360,7 @@ private fun currencyOf(page: String): Currency =
 
 @Composable
 fun ArcadeBrowser(onExitToRoom: () -> Unit, onAllDone: () -> Unit, onGameReturned: () -> Unit) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     // Which page of the arcade they were on. The games themselves need no saving -
     // a game is "played" exactly when its currency hits zero, and balances persist.
     var page by remember { mutableStateOf(com.fictioncutshort.justacalculator.logic.BuildingProgress.getString(context, 8, "page", "home").ifBlank { "home" }) }
@@ -500,7 +507,7 @@ fun ArcadeBrowser(onExitToRoom: () -> Unit, onAllDone: () -> Unit, onGameReturne
 
 @Composable
 private fun BlogHome(refreshKey: Int, onPlay: (String) -> Unit) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     val othersSpent = remember(refreshKey) { CurrencyStore.arcadeGamesDone(context) }
     val played = remember(refreshKey) { CurrencyStore.gamesPlayed(context) }
     val lotterySettled = remember(refreshKey) { CurrencyStore.lotterySettled(context) }
@@ -584,7 +591,7 @@ private enum class CupPhase { PREVIEW, BETTING, SHUFFLING, PICK, REVEAL, OVER }
 
 @Composable
 fun CookieCupsGame(onDone: () -> Unit) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     val start = remember { CurrencyStore.balance(context, Currency.COOKIES) }
     if (start <= 0) { GameOverBlogPage(Currency.COOKIES, onDone); return }
 
@@ -600,10 +607,10 @@ fun CookieCupsGame(onDone: () -> Unit) {
     var pickedCup by remember { mutableIntStateOf(-1) }
 
     // Opaque upside-down cup (tilt 180 → you never see inside), brightened.
-    val cup = rememberModelBitmap("$CASINO_MODELS/cup.obj", "$CASINO_MODELS/cup.mtl",
+    val cup = rememberModelIcon("$CASINO_MODELS/cup.obj", "$CASINO_MODELS/cup.mtl",
         sizePx = 260, tilt = 180f, turn = 18f, colorGamma = 0.5f, fitSpan = 1.4f)
     // The button is a flat red disc — tilt it toward the camera so its face shows.
-    val ball = rememberModelBitmap("$CASINO_MODELS/button.obj", "$CASINO_MODELS/button.mtl",
+    val ball = rememberModelIcon("$CASINO_MODELS/button.obj", "$CASINO_MODELS/button.mtl",
         sizePx = 180, tilt = -72f, turn = 0f, colorGamma = 0.7f)
 
     val lanePx = with(density) { 118.dp.toPx() }
@@ -638,7 +645,7 @@ fun CookieCupsGame(onDone: () -> Unit) {
     }
 
     Box(Modifier.fillMaxSize()) {
-        Image(painterResource(R.drawable.strom), null, Modifier.fillMaxSize().graphicsLayer { alpha = 0.22f },
+        Image(painterResource(Res.drawable.strom), null, Modifier.fillMaxSize().graphicsLayer { alpha = 0.22f },
             contentScale = ContentScale.FillBounds)
 
         Column(Modifier.fillMaxSize().padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -734,7 +741,7 @@ private val SLOT_BLACK = listOf("tetris", "camera", "phone", "message")   // one
 
 @Composable
 fun StarSlotsGame(onDone: () -> Unit) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     val start = remember { CurrencyStore.balance(context, Currency.STARS) }
     if (start <= 0) { GameOverBlogPage(Currency.STARS, onDone); return }
 
@@ -901,21 +908,21 @@ private val BOX_PRIZES = listOf(
 
 @Composable
 fun GiftcardBoxesGame(onDone: () -> Unit) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     val start = remember { CurrencyStore.balance(context, Currency.GIFTCARDS) }
     if (start <= 0) { GameOverBlogPage(Currency.GIFTCARDS, onDone); return }
 
     val costPerBox = remember { (start / 9).coerceAtLeast(1) }
     var meter by remember { mutableIntStateOf(start) }
     val boxes = remember { mutableStateListOf(*Array(9) { -2 }) }   // -2 closed, -1 empty, >=0 prize
-    val closedBox = rememberModelBitmap("$CASINO_MODELS/boxclosed.obj", "$CASINO_MODELS/boxclosed.mtl", sizePx = 200, tilt = -18f)
-    val openBox = rememberModelBitmap("$CASINO_MODELS/boxopen.obj", "$CASINO_MODELS/boxopen.mtl", sizePx = 200, tilt = -18f)
+    val closedBox = rememberModelIcon("$CASINO_MODELS/boxclosed.obj", "$CASINO_MODELS/boxclosed.mtl", sizePx = 200, tilt = -18f)
+    val openBox = rememberModelIcon("$CASINO_MODELS/boxopen.obj", "$CASINO_MODELS/boxopen.mtl", sizePx = 200, tilt = -18f)
     val giftIcon = rememberCurrencyIcon(Currency.GIFTCARDS)
     val outOfCards = meter <= 0
 
     Box(Modifier.fillMaxSize()) {
         // Stretched "Kytka" background.
-        Image(painterResource(R.drawable.kytka), null, Modifier.fillMaxSize().graphicsLayer { alpha = 0.30f },
+        Image(painterResource(Res.drawable.kytka), null, Modifier.fillMaxSize().graphicsLayer { alpha = 0.30f },
             contentScale = ContentScale.FillBounds)
 
         Column(Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 12.dp),
@@ -956,7 +963,7 @@ fun GiftcardBoxesGame(onDone: () -> Unit) {
                                 }
                                 else -> {
                                     val (obj, mtl) = BOX_PRIZES[state]
-                                    val prize = rememberModelBitmap(obj, mtl, sizePx = 140, colorGamma = 0.6f, fitSpan = 1.45f)
+                                    val prize = rememberModelIcon(obj, mtl, sizePx = 140, colorGamma = 0.6f, fitSpan = 1.45f)
                                     openBox?.let { Image(it, null, Modifier.fillMaxSize().align(Alignment.BottomCenter)) }
                                     prize?.let { Image(it, null, Modifier.fillMaxSize(0.6f)) }
                                 }
@@ -990,7 +997,7 @@ private fun candleDate(i: Int): String {
 
 @Composable
 fun KeysHousingGame(onDone: () -> Unit) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     val start = remember { CurrencyStore.balance(context, Currency.KEYS) }
     if (start <= 0) { GameOverBlogPage(Currency.KEYS, onDone); return }
 
@@ -1047,7 +1054,7 @@ fun KeysHousingGame(onDone: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text("PropTrade Pro", color = Color(0xFF0000CC), fontSize = 24.sp, fontWeight = FontWeight.Black,
             fontFamily = COMIC)
-        Text("HOUSING · REAL-TIME  ·  £${"%.1f".format(price)}/share", color = Color(0xFF008000),
+        Text("HOUSING · REAL-TIME  ·  £${formatFixed((price).toDouble(), 1)}/share", color = Color(0xFF008000),
             fontSize = 12.sp, fontFamily = COMIC)
         Spacer(Modifier.height(6.dp))
         CurrencyMeter(Currency.KEYS, meter)
@@ -1060,6 +1067,7 @@ fun KeysHousingGame(onDone: () -> Unit) {
             .background(Color(0xFF0E1428)).border(1.dp, Color(0xFFB0C0E0), RoundedCornerShape(6.dp))) {
             val candleW = 16.dp
             val density = LocalDensity.current
+            val textMeasurer = rememberTextMeasurer()
             Row(Modifier.fillMaxSize().horizontalScroll(scrollState).padding(vertical = 8.dp)) {
                 Canvas(Modifier.width(candleW * candles.size).fillMaxHeight().padding(start = 6.dp, end = 44.dp)) {
                     val w = size.width; val h = size.height * 0.9f
@@ -1073,15 +1081,15 @@ fun KeysHousingGame(onDone: () -> Unit) {
                     val grid = Color(0x18FFFFFF)
                     // Horizontal gridlines.
                     for (k in 0..4) { val gy = h * k / 4f; drawLine(grid, Offset(0f, gy), Offset(w, gy), 1f) }
-                    val paint = android.graphics.Paint().apply {
-                        color = android.graphics.Color.parseColor("#8FA6C8")
-                        textSize = with(density) { 9.sp.toPx() }
-                    }
                     candles.forEachIndexed { i, c ->
                         val cx = slot * (i + 0.5f)
                         if (i % 12 == 0) {
                             drawLine(grid, Offset(cx, 0f), Offset(cx, h), 1f)   // vertical gridline
-                            drawContext.canvas.nativeCanvas.drawText(candleDate(i), cx - 12f, h + 14f, paint)
+                            val label = textMeasurer.measure(
+                                AnnotatedString(candleDate(i)),
+                                TextStyle(fontSize = 9.sp, color = Color(0xFF8FA6C8)),
+                            )
+                            drawText(textLayoutResult = label, topLeft = Offset(cx - 12f, h + 4f))
                         }
                         val up = c.close >= c.open
                         val col = if (up) Color(0xFF26C281) else Color(0xFFE04343)
@@ -1095,9 +1103,9 @@ fun KeysHousingGame(onDone: () -> Unit) {
             // Fixed price axis on the right.
             Column(Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(end = 4.dp, top = 4.dp, bottom = 20.dp),
                 verticalArrangement = Arrangement.SpaceBetween, horizontalAlignment = Alignment.End) {
-                Text("£${"%.0f".format(hi)}", color = Color(0xFF8FA6C8), fontSize = 9.sp)
-                Text("£${"%.0f".format((hi + lo) / 2f)}", color = Color(0xFF8FA6C8), fontSize = 9.sp)
-                Text("£${"%.0f".format(lo)}", color = Color(0xFF8FA6C8), fontSize = 9.sp)
+                Text("£${formatFixed((hi).toDouble(), 0)}", color = Color(0xFF8FA6C8), fontSize = 9.sp)
+                Text("£${formatFixed(((hi + lo) / 2f).toDouble(), 0)}", color = Color(0xFF8FA6C8), fontSize = 9.sp)
+                Text("£${formatFixed((lo).toDouble(), 0)}", color = Color(0xFF8FA6C8), fontSize = 9.sp)
             }
         }
 
@@ -1125,7 +1133,7 @@ fun KeysHousingGame(onDone: () -> Unit) {
 
 @Composable
 fun CoinsLotteryFinale(onDone: () -> Unit) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     val ticket = remember {
         CurrencyStore.lotteryNumbers(context).ifEmpty { List(5) { (0..100).random() } }
             .also { if (!CurrencyStore.lotteryStaked(context)) CurrencyStore.stakeCoins(context, it) }
