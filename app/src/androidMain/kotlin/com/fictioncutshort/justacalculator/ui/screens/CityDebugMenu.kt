@@ -1,6 +1,6 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
-import android.content.SharedPreferences
+import com.fictioncutshort.justacalculator.platform.Prefs
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -65,7 +65,7 @@ import com.fictioncutshort.justacalculator.logic.CurrencyStore
  * next door in the entry order), plus every city-wide change that hangs off
  * those completions.
  *
- * All state lives in the "calc_city" SharedPreferences. Writing here and calling
+ * All state lives in the "calc_city" Prefs. Writing here and calling
  * back through onApply lets the live city re-read it without a restart.
  */
 
@@ -192,7 +192,7 @@ fun DebugPasswordGate(onUnlock: () -> Unit, onCancel: () -> Unit) {
  */
 @Composable
 fun CityDebugMenu(
-    prefs: SharedPreferences,
+    prefs: Prefs,
     onApply: () -> Unit,
     onClose: () -> Unit,
     onJumpToPhase1: ((Chapter) -> Unit)? = null,
@@ -201,7 +201,7 @@ fun CityDebugMenu(
     // Bumped after every write to force this panel to re-read the prefs.
     var rev by remember { mutableIntStateOf(0) }
 
-    fun write(block: SharedPreferences.Editor.() -> Unit) {
+    fun write(block: Prefs.Editor.() -> Unit) {
         prefs.edit().apply(block).apply()
         rev++
         onApply()

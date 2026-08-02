@@ -1,19 +1,21 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.platform.Prefs
+import com.fictioncutshort.justacalculator.platform.AppContext
+import com.fictioncutshort.justacalculator.platform.openPrefs
+import com.fictioncutshort.justacalculator.util.vibrate
+import com.fictioncutshort.justacalculator.platform.currentAppContext
+import kotlin.math.hypot
+import com.fictioncutshort.justacalculator.platform.nowMillis
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitEachGesture
 import com.fictioncutshort.justacalculator.platform.LockOrientationWhileVisible
 import com.fictioncutshort.justacalculator.platform.screenMetrics
 import com.fictioncutshort.justacalculator.gl.PlatformGlSurface
 import com.fictioncutshort.justacalculator.platform.createSoundPlayer
 import com.fictioncutshort.justacalculator.platform.Sounds
 import com.fictioncutshort.justacalculator.platform.SoundPlayer
-import android.content.Context
-import android.content.res.Configuration
-import android.opengl.GLSurfaceView
-import android.os.Build
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.os.VibratorManager
-import android.view.MotionEvent
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -34,15 +36,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.fictioncutshort.justacalculator.R
 import com.fictioncutshort.justacalculator.logic.Currency
 import com.fictioncutshort.justacalculator.logic.CurrencyStore
@@ -292,12 +291,12 @@ private val ENTRY_ORDER = listOf(1, 7, 4, 3, 6, 2, 5, 8, 9)
 // onComplete. The older per-building flags were inconsistent (td_b1_done,
 // building_done_7, and Building 2 had none at all), and "building_done_N" is set
 // merely by WALKING IN, so it can't be used to gate the order.
-private fun isBuildingComplete(prefs: android.content.SharedPreferences, d: Int): Boolean =
+private fun isBuildingComplete(prefs: Prefs, d: Int): Boolean =
     prefs.getBoolean("completed_$d", false)
 
 // The first building in the chain ahead of `digit` that hasn't been finished, or
 // null when `digit` is allowed to be entered.
-private fun missingPrereq(prefs: android.content.SharedPreferences, digit: Int): Int? {
+private fun missingPrereq(prefs: Prefs, digit: Int): Int? {
     val idx = ENTRY_ORDER.indexOf(digit)
     if (idx <= 0) return null                       // not gated, or the first building
     for (i in 0 until idx) {
@@ -309,7 +308,7 @@ private fun missingPrereq(prefs: android.content.SharedPreferences, digit: Int):
 
 // Seeds "completed_N" from the legacy flags so a save in progress isn't reset.
 // Runs once; after this, only onComplete writes these.
-private fun migrateCompletionFlags(prefs: android.content.SharedPreferences) {
+private fun migrateCompletionFlags(prefs: Prefs) {
     if (prefs.getBoolean("completion_migrated", false)) return
     val legacy = mapOf(
         1 to "td_b1_done", 2 to "building_done_2", 3 to "td_b3_done",
@@ -333,17 +332,11 @@ private const val COLLAPSE_STARTS_AT_MS = 30_000L
 // drives the sequence and this is ignored.
 private const val ENDING_VO_PLACEHOLDER_MS = 75_000L
 
-private fun buzzEnding(context: android.content.Context, ms: Long) {
-    try {
-        @Suppress("DEPRECATION")
-        val vib: Vibrator =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
-            else context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-            vib.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
-        else @Suppress("DEPRECATION") vib.vibrate(ms)
-    } catch (_: Throwable) {}
+private fun buzzEnding(context: AppContext, ms: Long) {
+    // The seam already handles the API-level branching this used to do by hand.
+    // DEFAULT_AMPLITUDE has no cross-platform equivalent, so this asks for a
+    // firm buzz rather than the system default.
+    vibrate(context, ms, amplitude = 200)
 }
 
 // Sentinel for the RAD / "mute" button door — Building 10.
@@ -370,7 +363,7 @@ private const val RAD_DOOR_HALF_DEG = 5f
 // The spot the player stands on to be prompted for their rating: straight out
 // from Building 10's doorway, on the line that runs through it to the centre.
 private fun radDoorApproach(bx: Float, bz: Float): Pair<Float, Float> {
-    val a = Math.toRadians(RAD_DOOR_DEG.toDouble())
+    val a = ((RAD_DOOR_DEG.toDouble()) * kotlin.math.PI / 180.0)
     return Pair(bx + (cos(a) * (RAD_R0 + 22f)).toFloat(),
                 bz + (sin(a) * (RAD_R0 + 22f)).toFloat())
 }
@@ -476,12 +469,12 @@ fun CalculatorCityView(
     onJumpToPhase1: ((com.fictioncutshort.justacalculator.data.Chapter) -> Unit)? = null,
 ) {
 
-    val context  = LocalContext.current
+    val context  = currentAppContext()
     val renderer = remember { CityGLRenderer() }
-    val configuration = LocalConfiguration.current
+    val configuration = screenMetrics()
     // Mutable state so the game-loop coroutine always reads the current orientation
-    var isLandscape by remember { mutableStateOf(configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) }
-    SideEffect { isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE }
+    var isLandscape by remember { mutableStateOf(configuration.isLandscape) }
+    SideEffect { isLandscape = configuration.isLandscape }
     // Lock device orientation while the city is on-screen. Setting LOCKED only
     // freezes the *current* orientation — it doesn't request a rotation — so the
     // WindowManager has nothing to reconfigure and (on most devices) won't
@@ -491,7 +484,7 @@ fun CalculatorCityView(
     LockOrientationWhileVisible()
 
     // Persist intro completion so it doesn't replay on rotation / remount
-    val cityPrefs = remember { context.getSharedPreferences("calc_city", android.content.Context.MODE_PRIVATE) }
+    val cityPrefs = remember { context.openPrefs("calc_city") }
     val introAlreadyDone = remember { cityPrefs.getBoolean("intro_done", false) }
     val intro = remember { Animatable(if (introAlreadyDone) 1f else 0f) }
     var introDone by remember { mutableStateOf(introAlreadyDone) }
@@ -627,7 +620,7 @@ fun CalculatorCityView(
     var doorOpeningDigit by remember { mutableStateOf<Int?>(null) }
 
     // ── Building 1 minigame + bridge ──────────────────────────────────────────
-    val prefs = cityPrefs   // alias — same SharedPreferences instance
+    val prefs = cityPrefs   // alias — same Prefs instance
     var towerDefenseCompleted by remember { mutableStateOf(prefs.getBoolean("td_b1_done", false)) }
     // Being inside a building is a PLACE. If the app was killed while one was
     // open, the city reopens it here rather than dropping the player back on the
@@ -911,10 +904,10 @@ fun CalculatorCityView(
         try { vo?.start() } catch (_: Throwable) {}
 
         val fallMs = voMs.coerceAtLeast(6000L)
-        val t0 = System.currentTimeMillis()
+        val t0 = nowMillis()
         var lastBoom = 0L
         while (true) {
-            val e = System.currentTimeMillis() - t0
+            val e = nowMillis() - t0
             val p = (e.toFloat() / fallMs).coerceIn(0f, 1f)
             renderer.collapse = p
 
@@ -1370,19 +1363,8 @@ fun CalculatorCityView(
         fun faceDir(vx: Float, vz: Float): Float =
             Math.toDegrees(atan2(vx.toDouble(), vz.toDouble())).toFloat() +
                 renderer.monsterFaceYawOffsetDeg
-        fun frand(a: Float, b: Float): Float = a + (Math.random() * (b - a)).toFloat()
-        fun buzz(ms: Long) {
-            try {
-                @Suppress("DEPRECATION")
-                val vib: Vibrator =
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                        (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
-                    else context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                    vib.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
-                else @Suppress("DEPRECATION") vib.vibrate(ms)
-            } catch (_: Throwable) {}
-        }
+        fun frand(a: Float, b: Float): Float = a + (kotlin.random.Random.nextDouble() * (b - a)).toFloat()
+        fun buzz(ms: Long) = vibrate(context, ms, amplitude = 200)
         var bridgeDarkOverride = false
         var stuckFrames = 0        // frames spent pushing to walk while pinned in place
         while (true) {
@@ -1429,7 +1411,7 @@ fun CalculatorCityView(
                 val doorSeqActive = doorOpeningDigit != null
                 val controlsLocked = doorSeqActive || monsterLock
                 if (!controlsLocked) camYaw += joyX * 3.0f
-                val cr = Math.toRadians(camYaw.toDouble())
+                val cr = ((camYaw.toDouble()) * kotlin.math.PI / 180.0)
 
                 // Forward/backward from joystick Y (push up = forward)
                 val jFwd = if (controlsLocked) 0f else -joyY
@@ -1586,7 +1568,7 @@ fun CalculatorCityView(
                 // ring of cardinal directions.
                 if (unstuckRequested) {
                     unstuckRequested = false
-                    val ur = Math.toRadians(camYaw.toDouble())
+                    val ur = ((camYaw.toDouble()) * kotlin.math.PI / 180.0)
                     val fX = sin(ur).toFloat();  val fZ = -cos(ur).toFloat()   // forward
                     val rX = cos(ur).toFloat();  val rZ = sin(ur).toFloat()    // right
                     val dirs = arrayOf(
@@ -1640,23 +1622,7 @@ fun CalculatorCityView(
                     inLava = true
                     // Push back out of lava
                     if (isLandscape) pX = LAVA_WEST_X_L + 2f else pZ = LAVA_FRONT_Z + 2f
-                    try {
-                        @Suppress("DEPRECATION")
-                        val vibrator: Vibrator =
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE)
-                                        as VibratorManager).defaultVibrator
-                            } else {
-                                context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-                            }
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            vibrator.vibrate(
-                                VibrationEffect.createOneShot(180, VibrationEffect.DEFAULT_AMPLITUDE))
-                        } else {
-                            @Suppress("DEPRECATION")
-                            vibrator.vibrate(180)
-                        }
-                    } catch (_: Exception) { }
+                    vibrate(context, durationMs = 180, amplitude = 200)
                     // Screen flash sequence
                     flashAlpha = 1f;  delay(90)
                     flashAlpha = 0.3f; delay(70)
@@ -1677,7 +1643,7 @@ fun CalculatorCityView(
 
                 // ── Night-mode monster ────────────────────────────────────────
                 run {
-                    val nowMs = System.currentTimeMillis()
+                    val nowMs = nowMillis()
                     val overlayBusy = showTowerDefense || showMaze || showTankGame || showDoor4 ||
                         showBuilding5Map || showBuilding6Game || showBuilding7Filter ||
                         showBuilding8Casino || showBuilding9Flappy || showCityLottery ||
@@ -1768,7 +1734,7 @@ fun CalculatorCityView(
                         // Player's current view forward (unit) and helpers — the
                         // monster can only land a kill from where the player can see
                         // it, so attacks press in from the front.
-                        val crView = Math.toRadians(camYaw.toDouble())
+                        val crView = ((camYaw.toDouble()) * kotlin.math.PI / 180.0)
                         val fwdVX = sin(crView).toFloat(); val fwdVZ = -cos(crView).toFloat()
                         fun frontX(d: Float) = (pX + fwdVX * d).coerceIn(xBoundsMin, xBoundsMax)
                         fun frontZ(d: Float) = (pZ + fwdVZ * d).coerceIn(zMin, zMax)
@@ -1959,7 +1925,7 @@ fun CalculatorCityView(
                             mState = MS_ROAM; mScale = 13f; mYBob = 0f; freezeMs = 0L
                             monsterLock = false
                             mSpawned = false
-                            hideUntil = System.currentTimeMillis() + 15_000L
+                            hideUntil = nowMillis() + 15_000L
                             catchPhase = 0
                         }
 
@@ -1983,7 +1949,7 @@ fun CalculatorCityView(
                             mState = MS_ROAM; mScale = 13f; mYBob = 0f; freezeMs = 0L
                             monsterLock = false
                             mSpawned = false                 // re-place elsewhere after the hide
-                            hideUntil = System.currentTimeMillis() + 15_000L
+                            hideUntil = nowMillis() + 15_000L
                             catchPhase = 0
                         }
                     }
@@ -1998,7 +1964,7 @@ fun CalculatorCityView(
                         riddleDigit == null && orderBlockedDigit == null && doorOpeningDigit == null) {
                         val toGx = gw[0] - pX; val toGz = gw[2] - pZ
                         val d2 = toGx * toGx + toGz * toGz
-                        val cr = Math.toRadians(camYaw.toDouble())
+                        val cr = ((camYaw.toDouble()) * kotlin.math.PI / 180.0)
                         val fx = sin(cr).toFloat(); val fz = -cos(cr).toFloat()
                         val d = sqrt(d2).coerceAtLeast(0.001f)
                         val facing = (fx * toGx + fz * toGz) / d > 0.60f   // within ~53° of centre
@@ -2017,7 +1983,7 @@ fun CalculatorCityView(
                     if (gunGrabbed && gunHeld && !overlayOpen) {
                         val shots = pendingShots.getAndSet(0)
                         if (shots > 0) {
-                            val cr = Math.toRadians(camYaw.toDouble())
+                            val cr = ((camYaw.toDouble()) * kotlin.math.PI / 180.0)
                             val fx = sin(cr).toFloat(); val fz = -cos(cr).toFloat()
                             repeat(shots.coerceAtMost(MAX_BULLETS)) {
                                 // [x,y,z, vx,vy,vz, unused, spinDeg] — spawn well ahead
@@ -2504,7 +2470,7 @@ fun CalculatorCityView(
     Box(modifier = modifier.fillMaxSize()) {
 
         // Orientation now comes from the composition rather than the factory's
-        // Context, so it also tracks rotation instead of being read once.
+        // AppContext, so it also tracks rotation instead of being read once.
         renderer.isLandscape = screenMetrics().isLandscape
         PlatformGlSurface(
             renderer = renderer,
@@ -2512,7 +2478,7 @@ fun CalculatorCityView(
         )
 
         if (introDone && !showTowerDefense && !forceAerial && doorOpeningDigit == null) {
-            val screenW   = configuration.screenWidthDp
+            val screenW   = configuration.widthDp.value
             val joySize   = (screenW * 0.30f).dp.coerceIn(110.dp, 160.dp)
 
             // Landscape: joystick on right side, vertically centered
@@ -2530,7 +2496,7 @@ fun CalculatorCityView(
                     // Five quick taps on the stick opens the (passcode-gated) debug
                     // menu. The run resets if the taps stop coming, so ordinary
                     // fidgeting can't accumulate into it.
-                    val now = System.currentTimeMillis()
+                    val now = nowMillis()
                     joyTapCount = if (now - joyLastTapMs < 900L) joyTapCount + 1 else 1
                     joyLastTapMs = now
                     if (joyTapCount >= 5) {
@@ -3162,7 +3128,7 @@ fun CalculatorCityView(
 
 @Composable
 private fun CityCurrencyHud(refreshKey: Int, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     val balances = remember(refreshKey) { CurrencyStore.nonZero(context) }
     if (balances.isEmpty()) return
 
@@ -3211,46 +3177,53 @@ fun CityJoystick(
 ) {
     var sx by remember { mutableStateOf(0f) }
     var sy by remember { mutableStateOf(0f) }
-    Box(modifier = modifier.size(joyDp)) {
-        AndroidView(
-            factory = { ctx ->
-                object : android.view.View(ctx) {
-                    // A "tap" is a press that neither lasted nor travelled: that
-                    // keeps the debug shortcut from firing during normal steering,
-                    // where the stick is held and dragged.
-                    var downMs = 0L
-                    var downX = 0f
-                    var downY = 0f
+    Box(
+        modifier = modifier
+            .size(joyDp)
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    // A "tap" is a press that neither lasted nor travelled. That
+                    // keeps the debug shortcut from firing during normal
+                    // steering, where the stick is held and dragged.
+                    val down = awaitFirstDown()
+                    val downMs = nowMillis()
+                    val downPos = down.position
 
-                    override fun onTouchEvent(e: MotionEvent): Boolean {
-                        val cx = width / 2f; val cy = height / 2f
-                        when (e.action) {
-                            MotionEvent.ACTION_DOWN -> {
-                                downMs = System.currentTimeMillis()
-                                downX = e.x; downY = e.y
-                                sx = ((e.x - cx) / cx).coerceIn(-1f, 1f)
-                                sy = ((e.y - cy) / cy).coerceIn(-1f, 1f)
-                                onJoy(sx, sy)
-                            }
-                            MotionEvent.ACTION_MOVE -> {
-                                sx = ((e.x - cx) / cx).coerceIn(-1f, 1f)
-                                sy = ((e.y - cy) / cy).coerceIn(-1f, 1f)
-                                onJoy(sx, sy)
-                            }
-                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                val held = System.currentTimeMillis() - downMs
-                                val moved = kotlin.math.hypot(e.x - downX, e.y - downY)
-                                if (e.action == MotionEvent.ACTION_UP &&
-                                    held < 260L && moved < 24f) onTap()
-                                sx = 0f; sy = 0f; onJoy(0f, 0f)
-                            }
-                        }
-                        return true
+                    fun steer(pos: Offset) {
+                        val cx = size.width / 2f
+                        val cy = size.height / 2f
+                        sx = ((pos.x - cx) / cx).coerceIn(-1f, 1f)
+                        sy = ((pos.y - cy) / cy).coerceIn(-1f, 1f)
+                        onJoy(sx, sy)
                     }
+
+                    steer(downPos)
+                    down.consume()
+
+                    var lastPos = downPos
+                    var cancelled = false
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id }
+                        if (change == null) {
+                            cancelled = true
+                            break
+                        }
+                        lastPos = change.position
+                        if (!change.pressed) break
+                        steer(lastPos)
+                        change.consume()
+                    }
+
+                    val held = nowMillis() - downMs
+                    val moved = hypot(lastPos.x - downPos.x, lastPos.y - downPos.y)
+                    if (!cancelled && held < 260L && moved < 24f) onTap()
+                    sx = 0f
+                    sy = 0f
+                    onJoy(0f, 0f)
                 }
-            },
-            modifier = Modifier.fillMaxSize()
-        )
+            }
+    ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val cx = size.width / 2f; val cy = size.height / 2f
             val or = size.minDimension / 2f
@@ -3472,7 +3445,7 @@ private fun RiddleDialog(
             // OPEN covers the mute button's slider, which is always accepted -
             // the point is what they answered, not whether it was 'right'.
             AnswerType.OPEN,
-            AnswerType.YWDHMS -> onSubmit(Math.round(sliderVal))
+            AnswerType.YWDHMS -> onSubmit(kotlin.math.round(sliderVal).toInt())
         }
     }
 
@@ -3530,7 +3503,7 @@ private fun RiddleDialog(
 
             // Input area — the mute button uses a 1..10 slider, not the keypad.
             if (digit == RAD_DIGIT) {
-                Text("${Math.round(sliderVal)}  /  10", color = Color(0xFF33FF66), fontSize = 34.sp,
+                Text("${kotlin.math.round(sliderVal)}  /  10", color = Color(0xFF33FF66), fontSize = 34.sp,
                     fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                 Spacer(Modifier.height(6.dp))
                 androidx.compose.material3.Slider(
