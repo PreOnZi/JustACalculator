@@ -43,6 +43,9 @@ class JsonObj(private val element: JsonObject) {
     fun getString(key: String): String = element.getValue(key).jsonPrimitive.content
     fun optString(key: String, fallback: String = ""): String =
         (element[key] as? JsonPrimitive)?.content ?: fallback
+
+    fun optDouble(key: String, fallback: Double = 0.0): Double =
+        (element[key] as? JsonPrimitive)?.content?.toDoubleOrNull() ?: fallback
 }
 
 class JsonArr(private val element: JsonArray) {
@@ -52,4 +55,12 @@ class JsonArr(private val element: JsonArray) {
     fun getInt(index: Int): Int = element[index].jsonPrimitive.content.toDouble().toInt()
     fun getDouble(index: Int): Double = element[index].jsonPrimitive.content.toDouble()
     fun getString(index: Int): String = element[index].jsonPrimitive.content
+
+    // Overpass returns heterogeneous elements, so the reader skips what it does
+    // not understand rather than assuming every entry has the same shape.
+    fun optJSONObject(index: Int): JsonObj? =
+        (element.getOrNull(index) as? JsonObject)?.let { JsonObj(it) }
+
+    fun optJSONArray(index: Int): JsonArr? =
+        (element.getOrNull(index) as? JsonArray)?.let { JsonArr(it) }
 }

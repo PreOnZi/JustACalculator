@@ -15,3 +15,14 @@ expect fun openExternalUrl(context: AppContext, url: String): Boolean
  * the Play app is absent), the App Store on iOS.
  */
 expect fun openAppStoreListing(context: AppContext)
+
+/**
+ * Opens the platform's maps app at ([lat], [lon]), with [label] as the pin's
+ * name.
+ *
+ * Separate from [openExternalUrl] because the two platforms take different URL
+ * schemes for this — Android's `geo:` means nothing to iOS — and the story
+ * hands the player a real place to walk to, so silently doing nothing is worse
+ * here than for a link.
+ */
+expect fun openMapsAt(context: AppContext, lat: Double, lon: Double, label: String)

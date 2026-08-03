@@ -1,23 +1,5 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
-import android.Manifest
-import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.graphics.Canvas as AndroidCanvas
-import android.graphics.Color as AndroidColor
-import android.graphics.DashPathEffect
-import android.graphics.Paint
-import android.graphics.Point
-import android.graphics.drawable.BitmapDrawable
-import android.location.Location
-import android.location.LocationListener
-import android.location.LocationManager
-import android.net.Uri
-import android.os.Bundle
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -32,32 +14,30 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
-import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.util.GeoPoint
-import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.Marker
-import org.osmdroid.views.overlay.Overlay
-import org.osmdroid.views.overlay.Polyline
-import org.osmdroid.views.overlay.TilesOverlay
-import java.io.BufferedReader
-import java.io.File
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.URLEncoder
+import com.fictioncutshort.justacalculator.gl.JsonObj
+import com.fictioncutshort.justacalculator.platform.nowMillis
+import com.fictioncutshort.justacalculator.platform.AppContext
+import com.fictioncutshort.justacalculator.platform.AppPermission
+import com.fictioncutshort.justacalculator.platform.GeoPoint
+import com.fictioncutshort.justacalculator.platform.LocationFix
+import com.fictioncutshort.justacalculator.platform.currentAppContext
+import com.fictioncutshort.justacalculator.platform.hasPermission
+import com.fictioncutshort.justacalculator.platform.httpGetText
+import com.fictioncutshort.justacalculator.platform.openMapsAt
+import com.fictioncutshort.justacalculator.platform.rememberPermissionRequest
+import com.fictioncutshort.justacalculator.platform.startLocationUpdates
+import com.fictioncutshort.justacalculator.platform.urlEncode
+import com.fictioncutshort.justacalculator.platform.destinationPoint
+import com.fictioncutshort.justacalculator.platform.distanceToAsDouble
+import com.fictioncutshort.justacalculator.platform.PlatformBuildingMapView
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.random.Random
@@ -122,29 +102,17 @@ private val CON_ORANGE   = Color(0xFFFF6600)
 
 @Composable
 fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
-    val context = LocalContext.current
-
-    // ── osmdroid one-time init ──────────────────────────────────────────────
-    LaunchedEffect(Unit) {
-        val cfg = Configuration.getInstance()
-        cfg.userAgentValue = context.packageName
-        val base = File(context.filesDir, "osmdroid")
-        base.mkdirs()
-        cfg.osmdroidBasePath = base
-        cfg.osmdroidTileCache = File(base, "tiles").also { it.mkdirs() }
-    }
+    val context = currentAppContext()
 
     // ── Safety warning gate ─────────────────────────────────────────────────
     var hasStarted by remember { mutableStateOf(false) }
 
     // ── Permission ──────────────────────────────────────────────────────────
-    var hasLocPerm by remember { mutableStateOf(hasLocationPermission(context)) }
-    val permLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted -> hasLocPerm = granted }
-    LaunchedEffect(Unit) {
-        if (!hasLocPerm) permLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+    var hasLocPerm by remember { mutableStateOf(hasPermission(context, AppPermission.LOCATION)) }
+    val requestLocPerm = rememberPermissionRequest(AppPermission.LOCATION) { granted ->
+        hasLocPerm = granted
     }
+    LaunchedEffect(Unit) { if (!hasLocPerm) requestLocPerm() }
 
     // ── Live location ───────────────────────────────────────────────────────
     // Every fix from both providers used to be taken at face value. NETWORK fixes
@@ -158,39 +126,14 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
     var userAccuracyM by remember { mutableStateOf(0f) }
     DisposableEffect(hasLocPerm) {
         if (!hasLocPerm) return@DisposableEffect onDispose {}
-        val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        var bestFix: Location? = null
-        fun offer(loc: Location) {
-            if (!isBetterLocation(loc, bestFix)) return
-            bestFix = loc
-            userLoc = GeoPoint(loc.latitude, loc.longitude, loc.altitude)
-            userAccuracyM = if (loc.hasAccuracy()) loc.accuracy else 0f
+        var bestFix: LocationFix? = null
+        val updates = startLocationUpdates(GPS_MIN_INTERVAL_MS, GPS_MIN_DIST_M) { fix ->
+            if (!isBetterLocation(fix, bestFix)) return@startLocationUpdates
+            bestFix = fix
+            userLoc = fix.toGeoPoint()
+            userAccuracyM = fix.accuracyM
         }
-        val listener = object : LocationListener {
-            override fun onLocationChanged(loc: Location) = offer(loc)
-            override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-            override fun onProviderEnabled(provider: String) {}
-            override fun onProviderDisabled(provider: String) {}
-        }
-        try {
-            // Seed from whatever is cached, best-first — but through the same
-            // filter, so a stale network fix can't win over a fresh GPS one.
-            lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)?.let(::offer)
-            lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)?.let(::offer)
-            if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                lm.requestLocationUpdates(
-                    LocationManager.GPS_PROVIDER,
-                    GPS_MIN_INTERVAL_MS, GPS_MIN_DIST_M, listener
-                )
-            }
-            if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-                lm.requestLocationUpdates(
-                    LocationManager.NETWORK_PROVIDER,
-                    GPS_MIN_INTERVAL_MS, GPS_MIN_DIST_M, listener
-                )
-            }
-        } catch (_: SecurityException) { /* permission revoked mid-flight */ }
-        onDispose { lm.removeUpdates(listener) }
+        onDispose { updates?.stop() }
     }
 
     // ── Home tracking + departure flag ──────────────────────────────────────
@@ -272,7 +215,7 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
         val loc = userLoc ?: return@LaunchedEffect
         val carry = carryDests
         // As many real ON-ROAD candidates as the area offers, spread around us.
-        val roadPts = withContext(Dispatchers.IO) {
+        val roadPts = withContext(Dispatchers.Default) {
             pickWalkableDestinations(loc, visited, ROAD_CANDIDATES)
         }
         fun nearCarry(p: GeoPoint) = carry.any { it.distanceToAsDouble(p) < MIN_SEPARATION_M }
@@ -340,7 +283,7 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
     LaunchedEffect(activeDest) {
         val d = activeDest ?: return@LaunchedEffect
         val u = userLoc ?: return@LaunchedEffect
-        val pts = withContext(Dispatchers.IO) { fetchWalkingRoute(u, d) }
+        val pts = withContext(Dispatchers.Default) { fetchWalkingRoute(u, d) }
         route = pts ?: emptyList()
     }
 
@@ -382,7 +325,7 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
         if (u == null || currentDests.isEmpty() || completed || captureSpot != null) return@LaunchedEffect
         val reached = currentDests.firstOrNull { u.distanceToAsDouble(it) <= ARRIVAL_RADIUS_M }
         if (reached != null) {
-            val now = System.currentTimeMillis()
+            val now = nowMillis()
             if (arrivedAt == null) arrivedAt = now
             else if (now - arrivedAt!! >= ARRIVAL_DWELL_MS) captureSpot = reached
         } else {
@@ -401,16 +344,17 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
         if (hasStarted) {
             if (!hasLocPerm) {
                 FallbackSketchMap(
-                    onRequestPerm = { permLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) }
+                    onRequestPerm = { requestLocPerm() }
                 )
             } else {
-                BuildingMapView(
+                PlatformBuildingMapView(
                     userLoc = userLoc,
                     userAccuracyM = userAccuracyM,
                     destPoints = currentDests,
                     activeDest = activeDest,
                     route = route,
                     fitTrigger = fitTrigger,
+                    initialZoom = INITIAL_ZOOM,
                     onDestTap = { tapped -> activeDest = tapped }
                 )
             }
@@ -489,17 +433,7 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
                     .background(CON_ORANGE, shape = RoundedCornerShape(3.dp))
                     .border(1.dp, CON_GREEN_D, shape = RoundedCornerShape(3.dp))
                     .clickable {
-                        val uri = Uri.parse(
-                            "geo:${picked.latitude},${picked.longitude}" +
-                            "?q=${picked.latitude},${picked.longitude}(Walk%20here)"
-                        )
-                        runCatching {
-                            context.startActivity(
-                                Intent(Intent.ACTION_VIEW, uri).apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                            )
-                        }
+                        openMapsAt(context, picked.latitude, picked.longitude, "Walk here")
                     }
                     .padding(horizontal = 28.dp, vertical = 12.dp)
             ) {
@@ -563,7 +497,7 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
                             mosaic = mosaic,
                             lat = spot.latitude,
                             lon = spot.longitude,
-                            timeMs = System.currentTimeMillis(),
+                            timeMs = nowMillis(),
                             dominantHz = dominantHz(mosaic)
                         )
                     )
@@ -595,239 +529,6 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
 // MAP VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 
-@Composable
-private fun BuildingMapView(
-    userLoc: GeoPoint?,
-    userAccuracyM: Float,
-    destPoints: List<GeoPoint>,
-    activeDest: GeoPoint?,
-    route: List<GeoPoint>,
-    fitTrigger: Int,
-    onDestTap: (GeoPoint) -> Unit
-) {
-    val refs = remember { MapRefs() }
-
-    AndroidView(
-        factory = { ctx ->
-            MapView(ctx).apply {
-                setTileSource(TileSourceFactory.MAPNIK)
-                overlayManager.tilesOverlay.setColorFilter(TilesOverlay.INVERT_COLORS)
-                setMultiTouchControls(true)
-                isHorizontalMapRepetitionEnabled = false
-                isVerticalMapRepetitionEnabled = false
-                controller.setZoom(INITIAL_ZOOM)
-                userLoc?.let { controller.setCenter(it) }
-            }
-        },
-        modifier = Modifier.fillMaxSize(),
-        update = { mapView ->
-            // Crosshair bitmaps — built once and reused. Two variants: full
-            // brightness for the active (or pre-selection) dests, and faded
-            // for the un-selected siblings once the player has picked one.
-            if (refs.brightBitmap == null) {
-                refs.brightBitmap = makeCrosshairBitmap(108, dim = false)
-                refs.dimBitmap = makeCrosshairBitmap(108, dim = true)
-            }
-
-            // User: pulsing green dot
-            val u = userLoc
-            if (u != null) {
-                val ov = refs.user ?: PulsingDotOverlay().also {
-                    mapView.overlays.add(it)
-                    refs.user = it
-                }
-                ov.pos = u
-                ov.accuracyM = userAccuracyM
-            }
-
-            // Destination crosshairs — sync the marker map with destPoints
-            val wantKeys = destPoints.associateBy(::geoKey)
-            val activeKey = activeDest?.let(::geoKey)
-            val toRemove = refs.dests.keys.toList().filter { it !in wantKeys.keys }
-            for (k in toRemove) refs.dests.remove(k)?.let { mapView.overlays.remove(it) }
-            for ((k, d) in wantKeys) {
-                // Dim only if there IS an active selection AND this isn't it.
-                // Pre-selection (active == null) means all four read identical.
-                val isDim = activeKey != null && k != activeKey
-                val iconBitmap = if (isDim) refs.dimBitmap!! else refs.brightBitmap!!
-                val existing = refs.dests[k]
-                if (existing == null) {
-                    val mk = Marker(mapView).apply {
-                        icon = BitmapDrawable(mapView.context.resources, iconBitmap)
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                        position = d
-                        title = "Walk here"
-                        setOnMarkerClickListener { m, _ ->
-                            onDestTap(m.position)
-                            true
-                        }
-                    }
-                    mapView.overlays.add(mk)
-                    refs.dests[k] = mk
-                } else {
-                    existing.position = d
-                    existing.icon = BitmapDrawable(mapView.context.resources, iconBitmap)
-                }
-            }
-
-            // Route polyline — only drawn after the player has picked a dest.
-            // Solid orange when OSRM returned a route, dashed straight line
-            // while the route is in flight or after a fetch failure.
-            val active = activeDest
-            if (u != null && active != null) {
-                val pts = if (route.isNotEmpty()) route else listOf(u, active)
-                val pl = refs.route ?: Polyline().also {
-                    it.outlinePaint.strokeWidth = 9f
-                    it.outlinePaint.color = AndroidColor.argb(220, 255, 102, 0)
-                    it.outlinePaint.strokeCap = Paint.Cap.ROUND
-                    it.outlinePaint.strokeJoin = Paint.Join.ROUND
-                    mapView.overlays.add(it)
-                    refs.route = it
-                }
-                pl.outlinePaint.pathEffect =
-                    if (route.isEmpty()) DashPathEffect(floatArrayOf(22f, 14f), 0f) else null
-                pl.setPoints(pts)
-            } else if (refs.route != null) {
-                mapView.overlays.remove(refs.route)
-                refs.route = null
-            }
-
-            // Re-frame when the destination set changes. We use setZoom +
-            // setCenter rather than zoomToBoundingBox because the latter
-            // depends on the view having been measured — if it runs before
-            // first layout (which it often does on the very first round) the
-            // computed zoom collapses to ~world view. A fixed close-in zoom
-            // centered on the cluster's midpoint is predictable and always
-            // shows the player + all four dests on screen at INITIAL_ZOOM.
-            if (u != null && destPoints.isNotEmpty() && fitTrigger != refs.lastFit) {
-                refs.lastFit = fitTrigger
-                val all = listOf(u) + destPoints
-                val cLat = all.map { it.latitude }.average()
-                val cLon = all.map { it.longitude }.average()
-                mapView.controller.setZoom(INITIAL_ZOOM)
-                mapView.controller.setCenter(GeoPoint(cLat, cLon))
-            }
-            mapView.invalidate()
-        }
-    )
-}
-
-private class MapRefs {
-    var user: PulsingDotOverlay? = null
-    val dests = mutableMapOf<String, Marker>()
-    var route: Polyline? = null
-    var lastFit: Int = -1
-    var brightBitmap: Bitmap? = null
-    var dimBitmap: Bitmap? = null
-}
-
-private fun geoKey(p: GeoPoint) = "${p.latitude},${p.longitude}"
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CUSTOM OVERLAYS / MARKERS
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Green pulsing dot at [pos], inside a translucent disc the size of the fix's
- * reported accuracy. Self-invalidates the map ~12 fps for the pulse.
- *
- * The disc is the honest part: when the fix is 40 m wide the player can see that
- * it is, instead of watching a confident little dot sit on the wrong side of the
- * street and concluding the game is broken.
- */
-private class PulsingDotOverlay : Overlay() {
-    var pos: GeoPoint? = null
-    var accuracyM: Float = 0f
-    private val dotPaint = Paint().apply {
-        isAntiAlias = true
-        color = AndroidColor.rgb(51, 255, 102)
-    }
-    private val ringPaint = Paint().apply {
-        isAntiAlias = true
-        style = Paint.Style.STROKE
-        strokeWidth = 4f
-        color = AndroidColor.rgb(51, 255, 102)
-    }
-    private val accFill = Paint().apply {
-        isAntiAlias = true
-        color = AndroidColor.argb(38, 51, 255, 102)
-    }
-    private val accEdge = Paint().apply {
-        isAntiAlias = true
-        style = Paint.Style.STROKE
-        strokeWidth = 2f
-        color = AndroidColor.argb(90, 51, 255, 102)
-    }
-    private var phase = 0f
-
-    override fun draw(canvas: AndroidCanvas, mapView: MapView, shadow: Boolean) {
-        if (shadow) return
-        val p = pos ?: return
-        val pt = Point()
-        mapView.projection.toPixels(p, pt)
-
-        // Accuracy disc: project a point that far due north and measure in pixels,
-        // so the circle stays true at any zoom without guessing at a scale factor.
-        if (accuracyM > 1f) {
-            val edge = Point()
-            mapView.projection.toPixels(p.destinationPoint(accuracyM.toDouble(), 0.0), edge)
-            val rPx = hypot((edge.x - pt.x).toFloat(), (edge.y - pt.y).toFloat())
-            if (rPx > 12f) {
-                canvas.drawCircle(pt.x.toFloat(), pt.y.toFloat(), rPx, accFill)
-                canvas.drawCircle(pt.x.toFloat(), pt.y.toFloat(), rPx, accEdge)
-            }
-        }
-
-        phase = (phase + 0.05f) % 1f
-        val pulseR = 14f + phase * 40f
-        ringPaint.alpha = ((1f - phase) * 200f).toInt().coerceIn(0, 255)
-        canvas.drawCircle(pt.x.toFloat(), pt.y.toFloat(), pulseR, ringPaint)
-        canvas.drawCircle(pt.x.toFloat(), pt.y.toFloat(), 10f, dotPaint)
-        dotPaint.color = AndroidColor.WHITE
-        canvas.drawCircle(pt.x.toFloat(), pt.y.toFloat(), 3f, dotPaint)
-        dotPaint.color = AndroidColor.rgb(51, 255, 102)
-        mapView.postInvalidateDelayed(80)
-    }
-}
-
-/**
- * Orange crosshair bitmap for the destination marker — square frame + cross.
- * [dim] = true produces a faded version used for un-selected siblings once the
- * player has picked one of the round's options.
- */
-private fun makeCrosshairBitmap(size: Int, dim: Boolean = false): Bitmap {
-    val bm = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-    val c = AndroidCanvas(bm)
-    val orange = if (dim) AndroidColor.argb(95, 255, 102, 0)
-                 else AndroidColor.rgb(255, 102, 0)
-    val pStroke = Paint().apply {
-        isAntiAlias = true
-        color = orange
-        style = Paint.Style.STROKE
-        strokeWidth = 5f
-        strokeCap = Paint.Cap.SQUARE
-    }
-    val pFill = Paint().apply { isAntiAlias = true; color = orange }
-    val cx = size / 2f; val cy = size / 2f
-    val r1 = size * 0.42f
-    val r2 = size * 0.30f
-    val tick = size * 0.10f
-    val left = cx - r1; val right = cx + r1; val top = cy - r1; val bot = cy + r1
-    c.drawLine(left, top, left + r1 * 0.55f, top, pStroke)
-    c.drawLine(right - r1 * 0.55f, top, right, top, pStroke)
-    c.drawLine(left, bot, left + r1 * 0.55f, bot, pStroke)
-    c.drawLine(right - r1 * 0.55f, bot, right, bot, pStroke)
-    c.drawLine(left, top, left, top + r1 * 0.55f, pStroke)
-    c.drawLine(left, bot, left, bot - r1 * 0.55f, pStroke)
-    c.drawLine(right, top, right, top + r1 * 0.55f, pStroke)
-    c.drawLine(right, bot, right, bot - r1 * 0.55f, pStroke)
-    c.drawLine(cx, cy - r2, cx, cy - r2 + tick * 2, pStroke)
-    c.drawLine(cx, cy + r2, cx, cy + r2 - tick * 2, pStroke)
-    c.drawLine(cx - r2, cy, cx - r2 + tick * 2, cy, pStroke)
-    c.drawLine(cx + r2, cy, cx + r2 - tick * 2, cy, pStroke)
-    c.drawCircle(cx, cy, 5f, pFill)
-    return bm
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DIALOGS
@@ -1055,11 +756,14 @@ private fun FallbackSketchMap(onRequestPerm: () -> Unit) {
  * nothing better — that's the tower-triangulated one that used to teleport the
  * dot across the neighbourhood.
  */
-private fun isBetterLocation(candidate: Location, current: Location?): Boolean {
+/** Identity for a point, so duplicate candidates collapse. */
+private fun geoKey(p: GeoPoint) = "${p.latitude},${p.longitude}"
+
+private fun isBetterLocation(candidate: LocationFix, current: LocationFix?): Boolean {
     if (current == null) return true
-    val accCand = if (candidate.hasAccuracy()) candidate.accuracy else Float.MAX_VALUE
-    val accCurr = if (current.hasAccuracy()) current.accuracy else Float.MAX_VALUE
-    val dt = candidate.time - current.time
+    val accCand = if (candidate.accuracyM > 0f) candidate.accuracyM else Float.MAX_VALUE
+    val accCurr = if (current.accuracyM > 0f) current.accuracyM else Float.MAX_VALUE
+    val dt = candidate.timeMs - current.timeMs
     if (dt > LOC_ANCIENT_MS) return true                          // ours is ancient
     if (dt > LOC_STALE_MS && accCand <= LOC_MAX_ACCURACY_M) return true
     if (dt < 0) return false                                      // older than ours
@@ -1069,23 +773,21 @@ private fun isBetterLocation(candidate: Location, current: Location?): Boolean {
     return dt > 10_000L && accCand <= accCurr * 1.5f
 }
 
-private fun hasLocationPermission(context: Context): Boolean =
-    ContextCompat.checkSelfPermission(
-        context, Manifest.permission.ACCESS_FINE_LOCATION
-    ) == PackageManager.PERMISSION_GRANTED
 
 /**
  * Bearing in degrees [0,360) from [from] to [to]. Used by the spread picker
  * to space chosen dests evenly around the player.
  */
+private const val DEG_TO_RAD = kotlin.math.PI / 180.0
+
 private fun bearingDeg(from: GeoPoint, to: GeoPoint): Double {
-    val phi1 = Math.toRadians(from.latitude)
-    val phi2 = Math.toRadians(to.latitude)
-    val dLambda = Math.toRadians(to.longitude - from.longitude)
+    val phi1 = from.latitude * DEG_TO_RAD
+    val phi2 = to.latitude * DEG_TO_RAD
+    val dLambda = (to.longitude - from.longitude) * DEG_TO_RAD
     val y = kotlin.math.sin(dLambda) * kotlin.math.cos(phi2)
     val x = kotlin.math.cos(phi1) * kotlin.math.sin(phi2) -
             kotlin.math.sin(phi1) * kotlin.math.cos(phi2) * kotlin.math.cos(dLambda)
-    return (Math.toDegrees(kotlin.math.atan2(y, x)) + 360.0) % 360.0
+    return (kotlin.math.atan2(y, x) / DEG_TO_RAD + 360.0) % 360.0
 }
 
 /**
@@ -1093,23 +795,20 @@ private fun bearingDeg(from: GeoPoint, to: GeoPoint): Double {
  * router.project-osrm.org is rate-limited and "not for production" — swap the
  * URL for a self-hosted OSRM or paid GraphHopper before shipping.
  */
+private const val MAP_USER_AGENT = "JustACalculator/1.x (osmdroid)"
+
 private fun fetchWalkingRoute(from: GeoPoint, to: GeoPoint): List<GeoPoint>? {
     return try {
-        val url = URL(
-            "https://router.project-osrm.org/route/v1/foot/" +
-            "${from.longitude},${from.latitude};${to.longitude},${to.latitude}" +
-            "?overview=full&geometries=geojson"
-        )
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            connectTimeout = 8_000
-            readTimeout = 15_000
-            requestMethod = "GET"
-            setRequestProperty("User-Agent", "JustACalculator/1.x (osmdroid)")
-        }
-        val body = conn.inputStream.use {
-            BufferedReader(InputStreamReader(it)).readText()
-        }
-        val routes = JSONObject(body).optJSONArray("routes") ?: return null
+        val body = httpGetText(
+            url = "https://router.project-osrm.org/route/v1/foot/" +
+                "${from.longitude},${from.latitude};${to.longitude},${to.latitude}" +
+                "?overview=full&geometries=geojson",
+            connectTimeoutMs = 8_000,
+            readTimeoutMs = 15_000,
+            userAgent = MAP_USER_AGENT,
+        )?.takeIf { it.status in 200..299 }?.body ?: return null
+
+        val routes = JsonObj.parse(body).optJSONArray("routes") ?: return null
         if (routes.length() == 0) return null
         val coords = routes.getJSONObject(0)
             .getJSONObject("geometry").getJSONArray("coordinates")
@@ -1142,29 +841,19 @@ private val OVERPASS_ENDPOINTS = listOf(
 )
 
 private fun fetchOverpass(query: String): String? {
-    val encoded = URLEncoder.encode(query, "UTF-8")
+    val encoded = urlEncode(query)
     for (endpoint in OVERPASS_ENDPOINTS) {
-        try {
-            val conn = (URL("$endpoint?data=$encoded").openConnection() as HttpURLConnection).apply {
-                connectTimeout = 8_000
-                readTimeout = 20_000
-                requestMethod = "GET"
-                setRequestProperty("User-Agent", "JustACalculator/1.x (osmdroid)")
-            }
-            // 429 (rate limited) and 504 (gateway timeout) are the usual answers
-            // from a busy mirror, and reading inputStream on either throws — which
-            // is exactly the failure that used to vanish. Check, then move on.
-            if (conn.responseCode !in 200..299) {
-                conn.disconnect()
-                continue
-            }
-            val body = conn.inputStream.use {
-                BufferedReader(InputStreamReader(it)).readText()
-            }
-            if (body.isNotBlank()) return body
-        } catch (_: Exception) {
-            // Try the next mirror.
-        }
+        // 429 (rate limited) and 504 (gateway timeout) are the usual answers
+        // from a busy mirror, and reading the body on either used to throw —
+        // which is exactly the failure that vanished. Check, then move on.
+        val response = httpGetText(
+            url = "$endpoint?data=$encoded",
+            connectTimeoutMs = 8_000,
+            readTimeoutMs = 20_000,
+            userAgent = MAP_USER_AGENT,
+        ) ?: continue
+        if (response.status !in 200..299) continue
+        if (response.body.isNotBlank()) return response.body
     }
     return null
 }
@@ -1200,7 +889,7 @@ private fun pickWalkableDestinations(
     /** Collect every way-vertex whose distance from [user] falls in [minD]..[maxD]. */
     fun harvest(minD: Double, maxD: Double) {
         pedestrian.clear(); road.clear()
-        val elements = JSONObject(body ?: return).optJSONArray("elements") ?: return
+        val elements = JsonObj.parse(body ?: return).optJSONArray("elements") ?: return
         for (i in 0 until elements.length()) {
             val el = elements.optJSONObject(i) ?: continue
             val tags = el.optJSONObject("tags") ?: continue
@@ -1286,7 +975,7 @@ private fun angularSep(user: GeoPoint, a: GeoPoint, b: GeoPoint): Double {
 // one record per place: index|lat|lon|timeMs|dominantHz|label|rows|cols|cells...
 // No raw audio is kept, here or anywhere else (see Building5SoundProto).
 
-private fun saveCaptures(context: android.content.Context, list: List<PlaceCapture>) {
+private fun saveCaptures(context: AppContext, list: List<PlaceCapture>) {
     val sb = StringBuilder()
     for (c in list) {
         val cells = c.mosaic.cells
@@ -1306,7 +995,7 @@ private fun saveCaptures(context: android.content.Context, list: List<PlaceCaptu
     com.fictioncutshort.justacalculator.logic.BuildingProgress.putString(context, 5, "captures", sb.toString())
 }
 
-private fun loadCaptures(context: android.content.Context): List<PlaceCapture> {
+private fun loadCaptures(context: AppContext): List<PlaceCapture> {
     val raw = com.fictioncutshort.justacalculator.logic.BuildingProgress.getString(context, 5, "captures")
     if (raw.isBlank()) return emptyList()
     val out = mutableListOf<PlaceCapture>()

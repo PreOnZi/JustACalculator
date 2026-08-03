@@ -27,3 +27,12 @@ actual fun openAppStoreListing(context: AppContext) {
     }
     openExternalUrl(context, "itms-apps://apple.com/app/id$APP_STORE_ID")
 }
+
+actual fun openMapsAt(context: AppContext, lat: Double, lon: Double, label: String) {
+    // maps.apple.com opens Maps directly when it is installed and falls back to
+    // the web otherwise, which `maps://` does not.
+    openExternalUrl(
+        context,
+        "https://maps.apple.com/?ll=$lat,$lon&q=${urlEncode(label)}",
+    )
+}

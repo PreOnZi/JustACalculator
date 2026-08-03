@@ -31,10 +31,6 @@ expect fun PlatformModelViewer(modelFile: String, modifier: Modifier = Modifier)
 @Composable
 expect fun PlatformDoor4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {})
 
-/** Building 5's map — osmdroid; iOS wants MapKit. */
-@Composable
-expect fun PlatformBuilding5Map(onComplete: () -> Unit, onExit: () -> Unit)
-
 /** Building 7's vanity room — CameraX plus ML Kit face landmarks. */
 @Composable
 expect fun PlatformBuilding7VanityRoom(modifier: Modifier = Modifier, onComplete: () -> Unit = {})

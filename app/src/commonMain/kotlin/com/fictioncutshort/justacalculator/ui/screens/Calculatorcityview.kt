@@ -1,7 +1,6 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
 import com.fictioncutshort.justacalculator.platform.PlatformBuilding7VanityRoom
-import com.fictioncutshort.justacalculator.platform.PlatformBuilding5Map
 import com.fictioncutshort.justacalculator.platform.PlatformDoor4Room
 import com.fictioncutshort.justacalculator.platform.currentTimeOfDay
 import com.fictioncutshort.justacalculator.platform.Prefs
@@ -2914,7 +2913,7 @@ fun CalculatorCityView(
 
         // ── Door 5 — real-world walk; sound-scan runs at each arrived spot ────
         if (showBuilding5Map) {
-            PlatformBuilding5Map(
+            Building5Map(
                 onComplete = {
                     showBuilding5Map = false
                     entryProgress++

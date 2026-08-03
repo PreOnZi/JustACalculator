@@ -25,3 +25,15 @@ actual fun openAppStoreListing(context: AppContext) {
         openExternalUrl(context, "https://play.google.com/store/apps/details?id=$pkg")
     }
 }
+
+actual fun openMapsAt(context: AppContext, lat: Double, lon: Double, label: String) {
+    val encoded = urlEncode(label)
+    val uri = android.net.Uri.parse("geo:$lat,$lon?q=$lat,$lon($encoded)")
+    runCatching {
+        context.startActivity(
+            android.content.Intent(android.content.Intent.ACTION_VIEW, uri).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
+    }
+}

@@ -34,10 +34,6 @@ actual fun PlatformDoor4Room(modifier: Modifier, onComplete: () -> Unit) =
     NotPortedYet("Building 4", "GL door room with a camera-fed texture.", onComplete)
 
 @Composable
-actual fun PlatformBuilding5Map(onComplete: () -> Unit, onExit: () -> Unit) =
-    NotPortedYet("Building 5", "Needs MapKit in place of osmdroid.", onComplete)
-
-@Composable
 actual fun PlatformBuilding7VanityRoom(modifier: Modifier, onComplete: () -> Unit) =
     NotPortedYet("Building 7", "Needs AVFoundation + Vision face landmarks.", onComplete)
 

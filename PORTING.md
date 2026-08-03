@@ -170,7 +170,6 @@ and one of those was blocking entry to the whole city.
 | Stub | Waiting on |
 |---|---|
 | `PlatformDoor4Room` | `CVOpenGLESTextureCache` camera texture |
-| `PlatformBuilding5Map` | MapKit |
 | `PlatformBuilding7VanityRoom` | AVFoundation + Vision face landmarks |
 | `PlatformPhoneCameraApp` | AVFoundation capture |
 | `PlatformPhonePicturesApp` | PhotoKit |
@@ -189,11 +188,32 @@ table. What is left, largest first:
 | File | Lines | Needs |
 |---|---|---|
 | `Door4Room` | 1,782 | `GL_TEXTURE_EXTERNAL_OES` + `SurfaceTexture` (26 uses) → `CVOpenGLESTextureCache` |
-| `Building5Map` | 1,341 | osmdroid → MapKit |
 | `Building7VanityRoom` | 1,071 | CameraX + ML Kit → AVFoundation + Vision |
 | `Camerapreview` | 287 | AVFoundation capture |
 | `ModelBitmap` | 285 | offscreen EGL pbuffer |
 | `PhonePicturesApp` | 190 | MediaStore → PhotoKit |
+
+`Building5Map` split at the map surface: the destination picking, the Overpass
+and OSRM queries, and the whole console UI are shared, and only the map view
+itself is platform (`PlatformBuildingMapView`). It needed four new seam pieces —
+`platform/Geo.kt` (a shared `GeoPoint` plus location updates), `platform/Http.kt`,
+`openMapsAt`, and the map view — and two additions to `gl/Json.kt`.
+
+- **The geodesy came with it.** osmdroid's `distanceToAsDouble` and
+  `destinationPoint` are shared code now, on osmdroid's own earth radius so
+  distances match what Android has always computed — the round's 80–120 m
+  destination band is tuned to it. **8 tests** pin the radius, the bearing
+  signs, and that the two functions agree.
+- **`urlEncode` is written out rather than seamed**: `URLEncoder` and
+  `stringByAddingPercentEncoding` disagree about spaces (`+` versus `%20`) and
+  about which punctuation is reserved, and an Overpass query is mostly
+  punctuation.
+- **MapKit has no colour filter**, so where Android inverts OSM's light raster
+  tiles, iOS forces the view's dark appearance — same dark map, legible labels,
+  rather than a photographic negative.
+- **`MKPointAnnotation` has nowhere to hang per-pin state**, so the dim flag
+  rides in `subtitle`, and restyling a pin means removing and re-adding it —
+  the annotation view is only rebuilt on re-add.
 
 `Building5SoundProto` ported the same way `TalkAudioHandler` did — the FFT, the
 band analysis and the mosaic combination were already pure arithmetic. It added
