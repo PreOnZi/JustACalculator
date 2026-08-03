@@ -43,7 +43,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.Image
 import coil3.compose.AsyncImage
-import com.fictioncutshort.justacalculator.R
 import kotlinx.coroutines.delay
 
 /**

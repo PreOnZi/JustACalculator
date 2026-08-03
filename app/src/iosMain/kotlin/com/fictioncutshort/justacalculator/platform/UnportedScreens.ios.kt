@@ -18,11 +18,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
-actual fun PlatformHomeScreenOverlay(
+actual fun PlatformPhoneCameraApp(onClose: () -> Unit) =
+    NotPortedYet("Camera", "Needs the AVFoundation capture port.", onClose)
+
+@Composable
+actual fun PlatformPhonePicturesApp(onClose: () -> Unit) =
+    NotPortedYet("Pictures", "Needs the PhotoKit gallery port.", onClose)
+
+@Composable
+actual fun PlatformPhoneCallScreen(
+    number: String,
     audioHandler: TypingClicker?,
-    onIconClick: (String) -> Unit,
-    onReturnToCalculator: () -> Unit,
-) = NotPortedYet("Phone home screen", "Needs the mic-echo port.", onReturnToCalculator)
+    onHangup: () -> Unit,
+) = NotPortedYet("Call", "Needs the realtime mic-echo port.", onHangup)
 
 @Composable
 actual fun PlatformModelViewer(modelFile: String, modifier: Modifier) =

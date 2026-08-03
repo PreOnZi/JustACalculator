@@ -5,6 +5,9 @@ import platform.Contacts.CNContactFormatterStyle
 import platform.Contacts.CNContactStore
 import platform.Contacts.CNContactFetchRequest
 import platform.Contacts.CNContact
+import platform.Contacts.CNContactPhoneNumbersKey
+import platform.Contacts.CNLabeledValue
+import platform.Contacts.CNPhoneNumber
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.pointed
 import kotlinx.cinterop.value
@@ -32,4 +35,33 @@ actual fun readContactNames(max: Int): List<String> {
         }
     }
     return out.sorted()
+}
+
+@OptIn(ExperimentalForeignApi::class)
+actual fun readContacts(max: Int): List<ContactEntry> {
+    if (!hasPermission(IosAppContext, AppPermission.CONTACTS)) return emptyList()
+    val out = LinkedHashMap<String, ContactEntry>()
+    runCatching {
+        val keys = listOf(
+            CNContactFormatter.descriptorForRequiredKeysForStyle(
+                CNContactFormatterStyle.CNContactFormatterStyleFullName,
+            ),
+            CNContactPhoneNumbersKey,
+        )
+        val request = CNContactFetchRequest(keysToFetch = keys)
+        CNContactStore().enumerateContactsWithFetchRequest(request, null) { contact, stop ->
+            val c = contact as? CNContact
+            val name = c?.let {
+                CNContactFormatter.stringFromContact(it, CNContactFormatterStyle.CNContactFormatterStyleFullName)
+            }?.trim()
+            if (c != null && !name.isNullOrBlank()) {
+                val number = (c.phoneNumbers.firstOrNull() as? CNLabeledValue)
+                    ?.let { (it.value as? CNPhoneNumber)?.stringValue }
+                    .orEmpty()
+                out.getOrPut(name) { ContactEntry(name, number) }
+            }
+            if (out.size >= max) stop?.pointed?.value = true
+        }
+    }
+    return out.values.sortedBy { it.name }
 }

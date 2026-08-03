@@ -157,165 +157,162 @@ is a 57-line Android entry point; `MainViewController` is its iOS counterpart.
 
 The terms/privacy screen and the story timers run on iOS.
 
-Four dependencies are stubbed behind `UnportedScreens.kt` and render a labelled
-"not ported yet" panel on iOS rather than failing silently. Each disappears when
-its real implementation lands; nothing at the call site changes.
+The last Android-only screens are stubbed behind `UnportedScreens.kt` and render
+a labelled "not ported yet" panel on iOS rather than failing silently. Each one
+disappears when its real implementation lands; nothing at the call site changes.
+
+**Delete a seam the moment its dependency ports.** A *missing* seam fails to
+compile and is loud; a *stale* seam compiles fine and quietly keeps showing a
+placeholder for work that is already finished. Three of them went stale at once
+(`PlatformAdCardStack`, `PlatformDebugPasswordGate`, `PlatformBuilding6Runner`)
+and one of those was blocking entry to the whole city.
 
 | Stub | Waiting on |
 |---|---|
-| `PlatformAdCardStack` | the OpenGL city (~12k lines) |
-| `PlatformHomeScreenOverlay` | contacts + mic echo |
-| `PlatformDebugPasswordGate` | the city debug menu |
-| `createTalkAudioHandler` | AVAudioEngine mic echo (no-op on iOS today) |
+| `PlatformDoor4Room` | `CVOpenGLESTextureCache` camera texture |
+| `PlatformBuilding5Map` | MapKit |
+| `PlatformBuilding7VanityRoom` | AVFoundation + Vision face landmarks |
+| `PlatformPhoneCallScreen` | AVAudioEngine mic echo |
+| `PlatformPhoneCameraApp` | AVFoundation capture |
+| `PlatformPhonePicturesApp` | PhotoKit |
 | `PlatformCameraPreview` | AVFoundation capture |
+| `PlatformModelViewer` / `rememberModelIcon` | SceneKit, or offscreen GL |
+| `createTalkAudioHandler` | AVAudioEngine mic echo (no-op on iOS today) |
 
-## Remaining, in dependency order
+## Remaining
 
-1. **Rewrite the ~30 asset call sites** onto the `Assets` seam (the seam and the
-   shared asset tree are done; the call sites in `androidMain` still use
-   `context.assets.open`). Then move `res/raw` audio into the same tree and
-   retire the 72 `R.raw.*` references alongside the audio seam.
-2. **Coil 2 → 3** — 9 files use `coil.compose.AsyncImage`. Coil 2 is Android-only;
-   Coil 3 (`coil3.*`) is multiplatform. Pairs with the asset URI change above.
-3. **Audio** — `MediaPlayer`/`SoundPool` in ~9 files → an `expect` player over
-   `AVAudioPlayer`. Covers the 72 `R.raw` voiceover/SFX references.
-4. **OpenGL ES** (~12k lines, 8 files) — **foundation done, renderers pending.**
+Roughly **46.7k lines are shared**; **8.2k remain in `androidMain`**, of which
+~1.2k are Android actuals that stay there by design. Items 1–3 below (assets,
+Coil 3, audio) are **done**, as is the bulk of item 4.
 
-   Measured surface: **65 distinct `gl*` calls**, **44 `GL_` constants**, **65
-   nio buffer uses**. Note this is *not* all GLES 2.0 — `Building6Runner` uses
-   GLES 3.0 (`glGenVertexArrays`, `glBindBufferBase`, `glUniformBlockBinding`).
-   iOS supports ES 3.0, so it ports, but the seam must cover both. Shaders are
-   GLSL ES 1.00/3.00 and port verbatim.
+The whole story runs on iOS end to end except the seven screens in the stub
+table. What is left, largest first:
 
-   | Layer | State |
-   |---|---|
-   | `gl/Matrix.kt` — the 8 `android.opengl.Matrix` functions | ✅ shared, 11 tests |
-   | `gl/GlBuffer.kt` — `java.nio.FloatBuffer` → direct buffer / pinned array | ✅ shared, 7 tests |
-   | `gl/Gl.kt` — 63 calls + 44 constants | ✅ shared, both platforms compile |
-   | `PlatformGlSurface` — `GLSurfaceView` → `GLKView`/`EAGL` + `CADisplayLink` | ✅ shared, both compile |
-   | Cityglrenderer (4.6k) + CityCctv | ✅ commonMain |
-   | Building8Casino | ✅ converted, waits on the city UI |
-   | Calculatorcityview (3.9k) | ⬜ **fully converted; blocked only on 9 screen refs** |
-   | Building6Runner (3.7k, GLES 3.0), Door4Room (1.8k) | ⬜ |
-   | ModelBitmap | ⬜ offscreen EGL pbuffer; seamed as `rememberModelIcon` |
-   | GltfSkinnedModel | ✅ commonMain — GLB parser rewritten |
+| File | Lines | Needs |
+|---|---|---|
+| `Door4Room` | 1,782 | `GL_TEXTURE_EXTERNAL_OES` + `SurfaceTexture` (26 uses) → `CVOpenGLESTextureCache` |
+| `Building5Map` | 1,341 | osmdroid → MapKit |
+| `Building7VanityRoom` | 1,071 | CameraX + ML Kit → AVFoundation + Vision |
+| `Building5SoundProto` | 964 | AudioRecord/AudioTrack → AVAudioEngine |
+| `TalkAudioHandler` | 334 | realtime mic echo → AVAudioEngine |
+| `PhoneCallScreen` | 313 | follows `TalkAudioHandler` |
+| `Camerapreview` | 287 | AVFoundation capture |
+| `ModelBitmap` | 285 | offscreen EGL pbuffer |
+| `PhonePicturesApp` | 190 | MediaStore → PhotoKit |
 
-   **GltfSkinnedModel needed a parser rewrite, not the GL recipe.** Two shared
-   helpers came out of it, both reusable:
+`Door4Room` is the hardest and deserves its own run: the external-texture path
+is a different API, not a translation of the existing one.
 
-   - `gl/LittleEndian.kt` — little-endian reads over a `ByteArray`, replacing
-     `java.nio.ByteBuffer.order(LITTLE_ENDIAN)`. Fixed-endian on purpose: glTF
-     is little-endian regardless of host, so native order would happen to work
-     on both current targets and break on a big-endian one.
-   - `gl/Json.kt` — a `JsonObj`/`JsonArr` work-alike over
-     kotlinx-serialization, mirroring the `org.json` method names so the ~30
-     call sites ported unchanged. Same trick as the `Prefs` seam.
+### OpenGL ES (~12k lines, 8 files) — **done except `Door4Room`.**
 
-   **Calculatorcityview has no Android or JVM APIs left in it.** The joystick is
-   Compose `pointerInput`, vibration/prefs/time/orientation are seamed, and the
-   `java.util` uses are gone. Moving it to commonMain currently fails on exactly
-   **nine unresolved references**, all to screens it launches:
+Measured surface: **65 distinct `gl*` calls**, **44 `GL_` constants**, **65
+nio buffer uses**. Note this is *not* all GLES 2.0 — `Building6Runner` uses
+GLES 3.0 (`glGenVertexArrays`, `glBindBufferBase`, `glUniformBlockBinding`).
+iOS supports ES 3.0, so it ports, but the seam must cover both. Shaders are
+GLSL ES 1.00/3.00 and port verbatim.
 
-   | Blocker | State |
-   |---|---|
-   | CityDebugMenu + DebugPasswordGate | ✅ commonMain |
-   | FlappyBirdGame | ✅ commonMain |
-   | rememberCurrencyIcon | ⬜ Bitmap + Executors (45 lines) |
-   | LowVolumeWarning | ⬜ AudioManager/AudioDeviceInfo seam (133 lines) |
-   | CityLotteryPopup (in Building8Games) | ⬜ android.graphics (1.2k lines) |
-   | TowerDefenseGame | ⬜ SoundPool + BitmapFactory (1k lines) |
-   | TankGame | ⬜ Intent/Uri/Vibrator/AndroidView (2k lines) |
-   | MazeGame | ⬜ **hardest** — CoreMotion sensors + sceneview (1.9k lines) |
+| Layer | State |
+|---|---|
+| `gl/Matrix.kt` — the 8 `android.opengl.Matrix` functions | ✅ shared, 11 tests |
+| `gl/GlBuffer.kt` — `java.nio.FloatBuffer` → direct buffer / pinned array | ✅ shared, 7 tests |
+| `gl/Gl.kt` — 63 calls + 44 constants | ✅ shared, both platforms compile |
+| `PlatformGlSurface` — `GLSurfaceView` → `GLKView`/`EAGL` + `CADisplayLink` | ✅ shared, both compile |
+| Cityglrenderer (4.6k) + CityCctv | ✅ commonMain |
+| Building8Casino | ✅ commonMain |
+| Calculatorcityview (3.9k) | ✅ commonMain |
+| Building6Runner (3.7k, GLES 3.0) | ✅ commonMain |
+| Door4Room (1.8k) | ⬜ external texture |
+| ModelBitmap | ⬜ offscreen EGL pbuffer; seamed as `rememberModelIcon` |
+| GltfSkinnedModel | ✅ commonMain — GLB parser rewritten |
 
-   It is the city hub, so it moves only once those do — or once they are stubbed
-   behind `UnportedScreens.kt` the way the ad-card stack is. Several of them
-   (FlappyBirdGame, LowVolumeWarning, CityLotteryPopup) look close to portable
-   already.
+**GltfSkinnedModel needed a parser rewrite, not the GL recipe.** Two shared
+helpers came out of it, both reusable:
 
-   **Known gap:** `throttleRenderThread` is a no-op on iOS, so the deliberate
-   post-Building-4 frame stutter is Android-only until the display link's
-   `preferredFramesPerSecond` is varied instead.
+- `gl/LittleEndian.kt` — little-endian reads over a `ByteArray`, replacing
+  `java.nio.ByteBuffer.order(LITTLE_ENDIAN)`. Fixed-endian on purpose: glTF
+  is little-endian regardless of host, so native order would happen to work
+  on both current targets and break on a big-endian one.
+- `gl/Json.kt` — a `JsonObj`/`JsonArr` work-alike over
+  kotlinx-serialization, mirroring the `org.json` method names so the ~30
+  call sites ported unchanged. Same trick as the `Prefs` seam.
 
-   **Known gap:** `LockOrientationWhileVisible` sets a flag on iOS that nothing
-   reads yet — the Swift AppDelegate needs to consult `IosOrientationLock` from
-   `supportedInterfaceOrientationsFor`. Until then the city will rotate on iOS.
+Calculatorcityview — the city hub — is in `commonMain`, and so is everything it
+launches: CityDebugMenu, DebugPasswordGate, FlappyBirdGame, LowVolumeWarning,
+CityLotteryPopup, TowerDefenseGame, TankGame and MazeGame all moved with it.
+MazeGame's sensors run on CoreMotion through the `DeviceTilt` seam.
 
-   **The conversion recipe**, validated end to end on `Building8Casino` (40 GL
-   calls, 513 lines) — it compiled for iOS with only two unrelated UI
-   dependencies left:
-   1. `GLES20.` / `GLES30.` → `Gl.`
-   2. `ByteBuffer.allocateDirect(x.size * 4)…asFloatBuffer()` → `x.toGlBuffer()`,
-      `FloatBuffer` → `GlFloatBuffer`
-   3. `GLSurfaceView.Renderer` → `GlRenderer`; drop the `GL10?`/`EGLConfig?`
-      parameters from the three overrides
-   4. the `AndroidView { GLSurfaceView(...) }` block → `PlatformGlSurface(renderer, modifier)`
-   5. `@Volatile` → `kotlin.concurrent.Volatile` (the JVM one is not multiplatform)
-   6. `System.nanoTime()` → `nowMillis() * 1_000_000L`
+**Known gap:** `throttleRenderThread` is a no-op on iOS, so the deliberate
+post-Building-4 frame stutter is Android-only. Everything else about frame
+pacing now goes through `PlatformGlSurface`'s `targetFps`, which sets the
+display link's `preferredFramesPerSecond` — without that cap the main-thread
+render loop starved the coroutine driving the aerial→city transition and the
+intro hung partway through at >10% CPU.
 
-   Building8Casino is converted and stays in `androidMain` only because it calls
-   `CityJoystick` (Calculatorcityview) and `ArcadeBrowser` (Building8Games). It
-   moves for free once those do.
+**The conversion recipe**, validated end to end on `Building8Casino` (40 GL
+calls, 513 lines) — it compiled for iOS with only two unrelated UI
+dependencies left:
+1. `GLES20.` / `GLES30.` → `Gl.`
+2. `ByteBuffer.allocateDirect(x.size * 4)…asFloatBuffer()` → `x.toGlBuffer()`,
+   `FloatBuffer` → `GlFloatBuffer`
+3. `GLSurfaceView.Renderer` → `GlRenderer`; drop the `GL10?`/`EGLConfig?`
+   parameters from the three overrides
+4. the `AndroidView { GLSurfaceView(...) }` block → `PlatformGlSurface(renderer, modifier)`
+5. `@Volatile` → `kotlin.concurrent.Volatile` (the JVM one is not multiplatform)
+6. `System.nanoTime()` → `nowMillis() * 1_000_000L`
 
-   **Two behavioural differences the surface host cannot hide**, worth knowing
-   before the renderers move:
-   - GLKView does not drive itself. GLKViewController normally owns the render
-     loop, and there is no controller when the view is hosted in Compose, so a
-     `CADisplayLink` supplies the equivalent of `RENDERMODE_CONTINUOUSLY`.
-   - GLKView calls its delegate on the **main thread**; GLSurfaceView uses a
-     dedicated render thread. The renderers only touch GL inside their
-     callbacks so this is invisible to them, but a slow frame blocks the UI on
-     iOS in a way it does not on Android.
+Building8Casino is converted and stays in `androidMain` only because it calls
+`CityJoystick` (Calculatorcityview) and `ArcadeBrowser` (Building8Games). It
+moves for free once those do.
 
-   All 7 files already use the shared `Matrix`. The renderers still call
-   `GLES20.`/`GLES30.` directly and construct `java.nio` buffers — swapping both
-   is mechanical now that `Gl` and `GlFloatBuffer` exist and mirror those APIs.
+**Two behavioural differences the surface host cannot hide**, worth knowing
+before the renderers move:
+- GLKView does not drive itself. GLKViewController normally owns the render
+  loop, and there is no controller when the view is hosted in Compose, so a
+  `CADisplayLink` supplies the equivalent of `RENDERMODE_CONTINUOUSLY`.
+- GLKView calls its delegate on the **main thread**; GLSurfaceView uses a
+  dedicated render thread. The renderers only touch GL inside their
+  callbacks so this is invisible to them, but a slow frame blocks the UI on
+  iOS in a way it does not on Android.
 
-   Two things the `Gl` iOS actual absorbs, so the renderers never see them:
-   inside `actual object Gl`, a bare `glFoo(...)` resolves to `Gl.glFoo` and
-   recurses — every platform call must be written `platform.gles3.glFoo(...)`.
-   And `toCPointer()` needs an explicit type argument
-   (`offset.toLong().toCPointer<ByteVar>()`) for the "read from the bound
-   buffer at this offset" idiom.
+All 7 files already use the shared `Matrix`. The renderers still call
+`GLES20.`/`GLES30.` directly and construct `java.nio` buffers — swapping both
+is mechanical now that `Gl` and `GlFloatBuffer` exist and mirror those APIs.
 
-   **iOS GL binding facts, verified by compiling against them** (each of these
-   would have made a blind wrapper wrong):
+Two things the `Gl` iOS actual absorbs, so the renderers never see them:
+inside `actual object Gl`, a bare `glFoo(...)` resolves to `Gl.glFoo` and
+recurses — every platform call must be written `platform.gles3.glFoo(...)`.
+And `toCPointer()` needs an explicit type argument
+(`offset.toLong().toCPointer<ByteVar>()`) for the "read from the bound
+buffer at this offset" idiom.
 
-   - The Kotlin/Native package is **`platform.gles3`**, *not*
-     `platform.OpenGLES3` as the klib filename suggests. `platform.gles2` and
-     `platform.glescommon` exist alongside it. `EAGL` and `GLKit` are also
-     available, which is what the surface host will need.
-   - **Constants are `Int`, but functions take `UInt`.** `glClear(GL_COLOR_BUFFER_BIT)`
-     does not compile; it needs `.toUInt()`. Android is `Int` throughout, so the
-     shared `Gl` should expose `Int` (matching the existing call sites) and the
-     iOS actual should do the conversion.
-   - `glCreateShader`/`glCreateProgram` return `UInt`, so program and shader
-     handles need converting at the boundary too.
-   - `glGetUniformLocation` accepts a Kotlin `String` directly — no manual
-     null-termination needed.
+**iOS GL binding facts, verified by compiling against them** (each of these
+would have made a blind wrapper wrong):
 
-   The 64 call signatures are enumerated by grepping
-   `GLES\d*\.(gl[A-Za-z0-9]+)\s*\(` across `ui/screens/`.
+- The Kotlin/Native package is **`platform.gles3`**, *not*
+  `platform.OpenGLES3` as the klib filename suggests. `platform.gles2` and
+  `platform.glescommon` exist alongside it. `EAGL` and `GLKit` are also
+  available, which is what the surface host will need.
+- **Constants are `Int`, but functions take `UInt`.** `glClear(GL_COLOR_BUFFER_BIT)`
+  does not compile; it needs `.toUInt()`. Android is `Int` throughout, so the
+  shared `Gl` should expose `Int` (matching the existing call sites) and the
+  iOS actual should do the conversion.
+- `glCreateShader`/`glCreateProgram` return `UInt`, so program and shader
+  handles need converting at the boundary too.
+- `glGetUniformLocation` accepts a Kotlin `String` directly — no manual
+  null-termination needed.
+
+The 64 call signatures are enumerated by grepping
+`GLES\d*\.(gl[A-Za-z0-9]+)\s*\(` across `ui/screens/`.
 
 
-5. **`android.graphics`** — `Bitmap`/`Canvas`/`Paint` in 13 files. Most uses are
-   procedural texture generation and can move to Compose's own `ImageBitmap` +
-   `Canvas`, which are multiplatform.
-6. **Camera + face filters** (`Building7VanityRoom`, `Camerapreview`, `Door4Room`)
-   — CameraX → `AVCaptureSession`; ML Kit face detection → **Vision**
-   (`VNDetectFaceLandmarksRequest`), which is on-device and needs no dependency.
-7. **Map** (`Building5Map`) — osmdroid → MapKit, or keep raster OSM tiles and
-   draw them into a Compose canvas to preserve the exact look.
-8. **Misc services** — WebView → `WKWebView`; contacts → `CNContactStore`;
-   location → `CLLocationManager`; notifications + `AlarmManager` →
-   `UNUserNotificationCenter`; `MediaStore` saves → `PHPhotoLibrary`;
-   sensors (`MazeGame`) → `CoreMotion`; `Toast` → an in-app snackbar.
-9. **`MainActivity.kt`** (2.2k lines) — split into a common `App()` composable
-   plus thin Android/iOS entry points. This is what replaces `PortHarness.kt`
-   and switches the iOS app from a demo to the real game.
-10. **iOS polish** — app icon (`iosApp/iosApp/Assets.xcassets/AppIcon.appiconset`
-    is currently an empty placeholder), launch screen, and a real
-    `DEVELOPMENT_TEAM` in `iosApp/Configuration/Config.xcconfig` for device
-    builds and TestFlight.
+### Still open beyond the screens
+
+- **iOS orientation lock** — `LockOrientationWhileVisible` sets a flag on iOS
+  that nothing reads. The Swift AppDelegate needs to consult `IosOrientationLock`
+  from `supportedInterfaceOrientationsFor`, or the city will rotate on iOS.
+- **iOS polish** — app icon (`iosApp/iosApp/Assets.xcassets/AppIcon.appiconset`
+  is an empty placeholder), launch screen, and a real `DEVELOPMENT_TEAM` in
+  `iosApp/Configuration/Config.xcconfig` for device builds and TestFlight.
 
 ## Notes
 

@@ -10,3 +10,12 @@ package com.fictioncutshort.justacalculator.platform
  * real.
  */
 expect fun readContactNames(max: Int = 60): List<String>
+
+/** A contact as the in-fiction phonebook shows it. */
+data class ContactEntry(val name: String, val number: String)
+
+/**
+ * Names *and* numbers, for the phonebook screen. Empty when permission is
+ * refused; the caller substitutes its own invented entries.
+ */
+expect fun readContacts(max: Int = 80): List<ContactEntry>

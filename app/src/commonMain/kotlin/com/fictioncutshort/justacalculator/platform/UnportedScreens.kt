@@ -15,12 +15,20 @@ import androidx.compose.ui.graphics.ImageBitmap
  * which is exactly what happened to the debug-menu gate.
  */
 
-/** The fake phone home screen (step 1086). Needs TalkAudioHandler. */
+/** The phone's camera app — CameraX; iOS wants AVFoundation. */
 @Composable
-expect fun PlatformHomeScreenOverlay(
+expect fun PlatformPhoneCameraApp(onClose: () -> Unit)
+
+/** The phone's gallery — reads MediaStore; iOS wants PhotoKit. */
+@Composable
+expect fun PlatformPhonePicturesApp(onClose: () -> Unit)
+
+/** The in-call screen — drives the realtime mic echo. */
+@Composable
+expect fun PlatformPhoneCallScreen(
+    number: String,
     audioHandler: TypingClicker?,
-    onIconClick: (String) -> Unit,
-    onReturnToCalculator: () -> Unit,
+    onHangup: () -> Unit,
 )
 
 /** Interactive 3D model viewer — SceneView/Filament, no iOS counterpart. */

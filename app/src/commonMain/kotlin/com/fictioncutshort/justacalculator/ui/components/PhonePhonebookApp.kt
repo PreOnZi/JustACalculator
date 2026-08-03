@@ -1,9 +1,8 @@
 package com.fictioncutshort.justacalculator.ui.components
 
-import android.Manifest
-import android.content.Context
-import android.content.pm.PackageManager
-import android.provider.ContactsContract
+import com.fictioncutshort.justacalculator.platform.AppContext
+import com.fictioncutshort.justacalculator.platform.currentAppContext
+import com.fictioncutshort.justacalculator.platform.readContacts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -32,12 +31,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -85,14 +82,14 @@ fun PhonePhonebookApp(
     onClose: () -> Unit,
     onContactCall: (PhonebookContact) -> Unit
 ) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     var contacts by remember { mutableStateOf<List<PhonebookContact>>(emptyList()) }
     var loaded by remember { mutableStateOf(false) }
     var adReply by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         // The content-resolver query is disk-backed — never on the frame thread.
-        contacts = withContext(Dispatchers.IO) { withAdsInterleaved(loadContactsOrFallback(context)) }
+        contacts = withContext(Dispatchers.Default) { withAdsInterleaved(loadContactsOrFallback(context)) }
         loaded = true
     }
 
@@ -245,58 +242,10 @@ private fun withAdsInterleaved(real: List<PhonebookContact>): List<PhonebookCont
  * the Contacts table (the same one Building 6 reads, which is why the runner's
  * helper names work where this screen didn't) and show the entry without a number.
  */
-private fun loadContactsOrFallback(context: Context): List<PhonebookContact> {
-    val granted = ContextCompat.checkSelfPermission(
-        context, Manifest.permission.READ_CONTACTS
-    ) == PackageManager.PERMISSION_GRANTED
-
-    if (!granted) return FALLBACK_CONTACTS
-
-    val out = LinkedHashMap<String, PhonebookContact>()
-
-    // A contact can hold several numbers; the first one per name is enough here.
-    runCatching {
-        context.contentResolver.query(
-            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-            arrayOf(
-                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-                ContactsContract.CommonDataKinds.Phone.NUMBER
-            ),
-            null, null,
-            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
-        )?.use { c ->
-            val nameCol = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
-            val numCol = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
-            if (nameCol >= 0 && numCol >= 0) {
-                while (c.moveToNext() && out.size < 80) {
-                    val name = c.getString(nameCol)?.trim().orEmpty()
-                    if (name.isEmpty()) continue
-                    val number = c.getString(numCol)?.trim().orEmpty()
-                    out.getOrPut(name) { PhonebookContact(name, number) }
-                }
-            }
-        }
-    }
-
-    if (out.isEmpty()) {
-        runCatching {
-            context.contentResolver.query(
-                ContactsContract.Contacts.CONTENT_URI,
-                arrayOf(ContactsContract.Contacts.DISPLAY_NAME),
-                null, null,
-                ContactsContract.Contacts.DISPLAY_NAME + " ASC"
-            )?.use { c ->
-                val nameCol = c.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME)
-                if (nameCol >= 0) {
-                    while (c.moveToNext() && out.size < 80) {
-                        val name = c.getString(nameCol)?.trim().orEmpty()
-                        if (name.isEmpty()) continue
-                        out.getOrPut(name) { PhonebookContact(name, "no number saved") }
-                    }
-                }
-            }
-        }
-    }
-
-    return if (out.isEmpty()) FALLBACK_CONTACTS else out.values.toList()
+private fun loadContactsOrFallback(context: AppContext): List<PhonebookContact> {
+    val entries = readContacts(80)
+    // Falls back to invented contacts when access was refused, so the phonebook
+    // still reads as a phonebook.
+    return if (entries.isEmpty()) FALLBACK_CONTACTS
+    else entries.map { PhonebookContact(it.name, it.number.ifBlank { "no number saved" }) }
 }

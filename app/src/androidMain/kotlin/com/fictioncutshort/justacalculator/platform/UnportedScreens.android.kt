@@ -4,19 +4,25 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import com.fictioncutshort.justacalculator.logic.TalkAudioHandler
-import com.fictioncutshort.justacalculator.ui.components.HomeScreenOverlay
 
 @Composable
-actual fun PlatformHomeScreenOverlay(
+actual fun PlatformPhoneCameraApp(onClose: () -> Unit) =
+    com.fictioncutshort.justacalculator.ui.components.PhoneCameraApp(onClose)
+
+@Composable
+actual fun PlatformPhonePicturesApp(onClose: () -> Unit) =
+    com.fictioncutshort.justacalculator.ui.components.PhonePicturesApp(onClose)
+
+@Composable
+actual fun PlatformPhoneCallScreen(
+    number: String,
     audioHandler: TypingClicker?,
-    onIconClick: (String) -> Unit,
-    onReturnToCalculator: () -> Unit,
+    onHangup: () -> Unit,
 ) {
-    HomeScreenOverlay(
-        audioHandler = audioHandler as? TalkAudioHandler,
-        onIconClick = onIconClick,
-        onReturnToCalculator = onReturnToCalculator,
-    )
+    // The call screen cannot run without the echo handler; the caller only
+    // reaches here once the phone has one.
+    val handler = audioHandler as? TalkAudioHandler ?: return
+    com.fictioncutshort.justacalculator.ui.components.PhoneCallScreen(number, handler, onHangup)
 }
 
 @Composable

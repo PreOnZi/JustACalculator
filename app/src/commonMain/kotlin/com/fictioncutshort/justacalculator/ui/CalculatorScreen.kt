@@ -63,7 +63,7 @@ import com.fictioncutshort.justacalculator.platform.AppLifecycleEvent
 import com.fictioncutshort.justacalculator.platform.AppPermission
 import com.fictioncutshort.justacalculator.platform.LocalNotifications
 import com.fictioncutshort.justacalculator.platform.OnAppLifecycleEvent
-import com.fictioncutshort.justacalculator.platform.PlatformHomeScreenOverlay
+import com.fictioncutshort.justacalculator.ui.components.HomeScreenOverlay
 import com.fictioncutshort.justacalculator.platform.createTalkAudioHandler
 import com.fictioncutshort.justacalculator.platform.currentAppContext
 import com.fictioncutshort.justacalculator.platform.hasPermission
@@ -1642,7 +1642,7 @@ fun CalculatorScreen() {
     // I need to create the whole thing after all..." (step 1085). Currently
     // static visual layout — interactivity to be wired up later.
     if (current.showHomeScreenOverlay) {
-        PlatformHomeScreenOverlay(
+        HomeScreenOverlay(
             audioHandler = talkAudioHandler,
             onIconClick = { iconName ->
                 logDebug("JustACalc", "HomeScreen icon tapped: $iconName")

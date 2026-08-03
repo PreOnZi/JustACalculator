@@ -1,5 +1,9 @@
 package com.fictioncutshort.justacalculator.ui.components
 
+import com.fictioncutshort.justacalculator.platform.PlatformPhoneCallScreen
+import com.fictioncutshort.justacalculator.platform.PlatformPhonePicturesApp
+import com.fictioncutshort.justacalculator.platform.PlatformPhoneCameraApp
+import com.fictioncutshort.justacalculator.platform.TypingClicker
 import com.fictioncutshort.justacalculator.platform.screenMetrics
 import com.fictioncutshort.justacalculator.platform.currentAppContext
 import com.fictioncutshort.justacalculator.platform.openExternalUrl
@@ -55,8 +59,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
-import com.fictioncutshort.justacalculator.R
-import com.fictioncutshort.justacalculator.logic.TalkAudioHandler
 import com.fictioncutshort.justacalculator.ui.screens.PhoneTetrisApp
 import kotlinx.coroutines.delay
 
@@ -91,7 +93,7 @@ private const val INSTALL_DURATION_MS = 3000
 @Composable
 fun HomeScreenOverlay(
     modifier: Modifier = Modifier,
-    audioHandler: TalkAudioHandler? = null,
+    audioHandler: TypingClicker? = null,
     onIconClick: (String) -> Unit = {},
     onReturnToCalculator: () -> Unit = {}
 ) {
@@ -420,7 +422,7 @@ private fun AppHost(
     appName: String,
     keypadInitialNumber: String,
     dialedNumber: String,
-    audioHandler: TalkAudioHandler?,
+    audioHandler: TypingClicker?,
     onClose: () -> Unit,
     onContactCall: (PhonebookContact) -> Unit,
     onPlaceCall: (String) -> Unit
@@ -495,14 +497,14 @@ private fun AppHost(
         "aggitatedbirds" -> GrowingBirdsPopup(onClose = onClose)
 
         // ─── Functional mini-apps ───────────────────────────────────────────
-        "camera"    -> PhoneCameraApp(onClose = onClose)
+        "camera"    -> PlatformPhoneCameraApp(onClose = onClose)
         "phone"     -> PhoneKeypadApp(
             onClose = onClose,
             initialNumber = keypadInitialNumber,
             onPlaceCall = onPlaceCall
         )
         "phonebook" -> PhonePhonebookApp(onClose = onClose, onContactCall = onContactCall)
-        "pictures"  -> PhonePicturesApp(onClose = onClose)
+        "pictures"  -> PlatformPhonePicturesApp(onClose = onClose)
         "tetris"    -> PhoneTetrisApp(onClose = onClose)
 
         // ─── Fake call screen (magic number only) ───────────────────────────
@@ -512,7 +514,7 @@ private fun AppHost(
             if (audioHandler == null) {
                 LaunchedEffect(Unit) { onClose() }
             } else {
-                PhoneCallScreen(
+                PlatformPhoneCallScreen(
                     number = dialedNumber,
                     audioHandler = audioHandler,
                     onHangup = onClose
