@@ -10,8 +10,15 @@ package com.fictioncutshort.justacalculator.gl
  * so sleeping there would freeze the whole UI, not just the scene. CADisplayLink
  * paces frames instead — see [PlatformGlSurface].
  *
- * This means the deliberate frame *stutter* effects (the post-Building-4 glitch)
- * are currently Android-only. Reproducing them on iOS needs the display link's
- * preferredFramesPerSecond to be varied rather than the thread blocked.
+ * Frame *rate capping* on iOS is handled instead by `PlatformGlSurface`'s
+ * `targetFps`, which sets the display link's preferredFramesPerSecond. That
+ * matters more than it sounds: uncapped, the render loop saturates the main
+ * thread and starves the Compose coroutines driving the city's intro, so the
+ * aerial-to-city transition stops advancing partway through.
+ *
+ * What is still Android-only is the deliberate frame *stutter* (the
+ * post-Building-4 glitch), which varies the delay per frame. Reproducing that
+ * needs preferredFramesPerSecond varied at runtime rather than a blocked
+ * thread.
  */
 expect fun throttleRenderThread(millis: Long)

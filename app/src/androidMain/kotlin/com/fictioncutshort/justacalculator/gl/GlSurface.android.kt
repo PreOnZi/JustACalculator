@@ -17,7 +17,11 @@ actual fun PlatformGlSurface(
     renderer: GlRenderer,
     modifier: Modifier,
     contextVersion: Int,
+    targetFps: Int,
 ) {
+    // targetFps is unused here: GLSurfaceView renders on its own thread and the
+    // renderers pace themselves with throttleRenderThread, which is a real sleep
+    // on Android.
     val view = remember { arrayOfNulls<GLSurfaceView>(1) }
 
     // GLSurfaceView's render thread must be paused with the app, not just with

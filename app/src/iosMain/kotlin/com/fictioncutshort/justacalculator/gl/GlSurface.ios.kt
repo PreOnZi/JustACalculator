@@ -41,6 +41,7 @@ actual fun PlatformGlSurface(
     renderer: GlRenderer,
     modifier: Modifier,
     contextVersion: Int,
+    targetFps: Int,
 ) {
     val holder = remember { GlSurfaceHolder(renderer) }
 
@@ -63,7 +64,7 @@ actual fun PlatformGlSurface(
                 drawableColorFormat = GLKViewDrawableColorFormatRGBA8888
                 drawableDepthFormat = GLKViewDrawableDepthFormat24
                 delegate = holder
-                holder.attach(this, context)
+                holder.attach(this, context, targetFps)
             }
         },
         modifier = modifier,
@@ -88,10 +89,14 @@ private class GlSurfaceHolder(
     private var lastHeight = 0
     private var view: GLKView? = null
 
-    fun attach(view: GLKView, context: EAGLContext) {
+    fun attach(view: GLKView, context: EAGLContext, targetFps: Int) {
         this.view = view
         this.context = context
         displayLink = CADisplayLink.displayLinkWithTarget(this, sel_registerName("tick")).apply {
+            // The only throttle available on iOS. Uncapped, this loop saturates
+            // the main thread and starves the Compose coroutines that drive the
+            // city's intro animation — the transition simply stops advancing.
+            preferredFramesPerSecond = targetFps.toLong()
             addToRunLoop(NSRunLoop.currentRunLoop, NSRunLoopCommonModes)
         }
     }

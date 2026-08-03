@@ -28,10 +28,19 @@ interface GlRenderer {
  *
  * @param contextVersion 2 or 3. Building 6's runner needs ES 3.0 for vertex
  *   array objects and uniform blocks; everything else runs on ES 2.0.
+ * @param targetFps the frame rate to aim for.
+ *
+ *   This is not a hint — on iOS it is the *only* throttle available. GLKView
+ *   draws on the main thread, so a renderer cannot sleep to pace itself
+ *   ([throttleRenderThread] is a deliberate no-op there); left uncapped the
+ *   render loop starves the main dispatcher, which stalls any Compose coroutine
+ *   driving an animation. Android still self-paces inside the renderer, so this
+ *   only sets the display link's preferred rate.
  */
 @Composable
 expect fun PlatformGlSurface(
     renderer: GlRenderer,
     modifier: Modifier = Modifier,
     contextVersion: Int = 2,
+    targetFps: Int = 33,
 )
