@@ -1,6 +1,10 @@
 package com.fictioncutshort.justacalculator.platform
 
 import android.Manifest
+import android.content.Context
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.Build
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -103,4 +107,59 @@ actual fun startMicEcho(
             }
         }
     }.getOrNull()
+}
+
+/**
+ * Prefers the least-processed source available: UNPROCESSED bypasses the
+ * automatic gain and noise suppression that would flatten exactly the ambient
+ * detail the mosaic is measuring, and the built-in mic is pinned so a connected
+ * headset does not become the sensor.
+ */
+private fun openRecorder(sampleRate: Int): AudioRecord? {
+    val minBuf = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, ENCODING)
+    if (minBuf <= 0) return null
+    val bufSize = maxOf(minBuf, sampleRate * 2)
+    val sources = buildList {
+        if (Build.VERSION.SDK_INT >= 24) add(MediaRecorder.AudioSource.UNPROCESSED)
+        add(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+        add(MediaRecorder.AudioSource.MIC)
+    }
+    val builtInMic = if (Build.VERSION.SDK_INT >= 23) {
+        (AppInit.context.getSystemService(Context.AUDIO_SERVICE) as AudioManager)
+            .getDevices(AudioManager.GET_DEVICES_INPUTS)
+            .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+    } else null
+
+    for (src in sources) {
+        try {
+            val rec = AudioRecord(src, sampleRate, AudioFormat.CHANNEL_IN_MONO, ENCODING, bufSize)
+            if (rec.state == AudioRecord.STATE_INITIALIZED) {
+                if (builtInMic != null) rec.setPreferredDevice(builtInMic)
+                return rec
+            }
+            rec.release()
+        } catch (_: Exception) { /* try next source */ }
+    }
+    return null
+}
+
+actual fun recordPcm(seconds: Int, sampleRate: Int): ShortArray? {
+    val rec = openRecorder(sampleRate) ?: return null
+    val total = sampleRate * seconds
+    val out = ShortArray(total)
+    return try {
+        rec.startRecording()
+        var read = 0
+        while (read < total) {
+            val n = rec.read(out, read, total - read)
+            if (n <= 0) break
+            read += n
+        }
+        if (read < total) out.copyOf(read) else out
+    } catch (_: Exception) {
+        null
+    } finally {
+        try { rec.stop() } catch (_: Exception) {}
+        rec.release()
+    }
 }

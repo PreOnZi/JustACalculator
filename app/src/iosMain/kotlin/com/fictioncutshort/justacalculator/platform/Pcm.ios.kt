@@ -1,9 +1,16 @@
 package com.fictioncutshort.justacalculator.platform
 
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.pointed
+import kotlinx.cinterop.value
+import kotlin.concurrent.AtomicInt
+import platform.posix.usleep
 import kotlinx.cinterop.get
 import kotlinx.cinterop.set
 import platform.AVFAudio.AVAudioPCMFormatFloat32
+import platform.AVFAudio.AVAudioConverter
+import platform.AVFAudio.AVAudioConverterInputStatus_HaveData
+import platform.AVFAudio.AVAudioConverterInputStatus_NoDataNow
 import platform.AVFAudio.AVAudioEngine
 import platform.AVFAudio.AVAudioFormat
 import platform.AVFAudio.AVAudioPCMBuffer
@@ -184,5 +191,87 @@ actual fun startMicEcho(
                 engine.stop()
             }
         }
+    }
+}
+
+/**
+ * A fixed-rate capture, which the input node cannot give directly: taps only
+ * deliver the node's own format, so an AVAudioConverter resamples each block to
+ * the rate the caller's analysis assumes.
+ */
+@OptIn(ExperimentalForeignApi::class)
+actual fun recordPcm(seconds: Int, sampleRate: Int): ShortArray? {
+    if (!hasPermission(AppInit.context, AppPermission.MICROPHONE)) return null
+    if (!activateSession(recording = true)) return null
+
+    val engine = AVAudioEngine()
+    val input = engine.inputNode
+    val inputFormat = input.outputFormatForBus(0u)
+    if (inputFormat.sampleRate <= 0.0) return null
+
+    val target = monoFloatFormat(sampleRate) ?: return null
+    val converter = AVAudioConverter(fromFormat = inputFormat, toFormat = target) ?: return null
+
+    val total = sampleRate * seconds
+    val out = ShortArray(total)
+    val filled = AtomicInt(0)
+
+    input.installTapOnBus(0u, 4096u, inputFormat) { buffer, _ ->
+        val pcm = buffer ?: return@installTapOnBus
+        if (filled.value >= total) return@installTapOnBus
+
+        // Ratio-scaled capacity, plus slack for the converter's own latency.
+        val capacity = (pcm.frameLength.toDouble() * sampleRate / inputFormat.sampleRate).toUInt() + 64u
+        val converted = AVAudioPCMBuffer(target, capacity)
+        var consumed = false
+        converter.convertToBuffer(converted, null) { _, status ->
+            // The converter pulls until satisfied; hand over this block once and
+            // then report starvation so it returns with what it has.
+            if (consumed) {
+                status?.pointed?.value = AVAudioConverterInputStatus_NoDataNow
+                null
+            } else {
+                consumed = true
+                status?.pointed?.value = AVAudioConverterInputStatus_HaveData
+                pcm
+            }
+        }
+
+        val count = converted.frameLength.toInt()
+        val channel = converted.floatChannelData?.get(0) ?: return@installTapOnBus
+        val start = filled.value
+        val room = minOf(count, total - start)
+        for (i in 0 until room) {
+            out[start + i] = (channel[i].coerceIn(-1f, 1f) * SHORT_SCALE).toInt().toShort()
+        }
+        filled.value = start + room
+    }
+
+    val started = runCatching {
+        engine.prepare()
+        engine.startAndReturnError(null)
+    }.getOrDefault(false)
+    if (!started) {
+        runCatching { input.removeTapOnBus(0u) }
+        return null
+    }
+
+    // Blocking is what the caller wants; it already runs this off the main
+    // thread, and the tap fills `out` from the audio thread meanwhile.
+    val deadline = nowMillis() + seconds * 1000L + 1500L
+    while (filled.value < total && nowMillis() < deadline) {
+        usleep(20_000u)
+    }
+
+    runCatching {
+        input.removeTapOnBus(0u)
+        engine.stop()
+    }
+
+    val got = filled.value
+    return when {
+        got <= 0 -> null
+        got < total -> out.copyOf(got)
+        else -> out
     }
 }

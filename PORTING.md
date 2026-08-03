@@ -191,10 +191,26 @@ table. What is left, largest first:
 | `Door4Room` | 1,782 | `GL_TEXTURE_EXTERNAL_OES` + `SurfaceTexture` (26 uses) → `CVOpenGLESTextureCache` |
 | `Building5Map` | 1,341 | osmdroid → MapKit |
 | `Building7VanityRoom` | 1,071 | CameraX + ML Kit → AVFoundation + Vision |
-| `Building5SoundProto` | 964 | AudioRecord/AudioTrack → the `Pcm` seam |
 | `Camerapreview` | 287 | AVFoundation capture |
 | `ModelBitmap` | 285 | offscreen EGL pbuffer |
 | `PhonePicturesApp` | 190 | MediaStore → PhotoKit |
+
+`Building5SoundProto` ported the same way `TalkAudioHandler` did — the FFT, the
+band analysis and the mosaic combination were already pure arithmetic. It added
+three seam pieces: `recordPcm` (a fixed-rate blocking capture), and
+`saveImageToGallery` / `showToast` / `formatDateTime` in `platform/Gallery.kt`.
+
+`recordPcm` honours the requested rate rather than reporting one, because the
+caller derives FFT band edges from it — a substituted rate would silently shift
+every frequency the mosaic reports. That costs an `AVAudioConverter` on iOS,
+since taps only ever deliver the input node's own format.
+
+The mosaic PNG is drawn with `CanvasDrawScope` into an `ImageBitmap` instead of
+`Bitmap`/`Canvas`/`Paint`. The one thing that does not translate directly is
+text: `drawText` takes a top-left corner, so the caption is measured with a
+`TextMeasurer` and centred by hand where `Paint.Align.CENTER` used to do it.
+The measurer only exists inside a composition, so it is captured in the gallery
+composable and passed down.
 
 `TalkAudioHandler` ported by splitting it in two: every waveform — the typing
 click, the static crackle, the feedback squeal, the echo delay line — is plain

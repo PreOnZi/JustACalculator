@@ -46,3 +46,14 @@ interface MicEcho {
 expect fun startMicEcho(
     process: (samples: ShortArray, count: Int, sampleRate: Int) -> ShortArray?,
 ): MicEcho?
+
+/**
+ * Records [seconds] of 16-bit mono audio at exactly [sampleRate] and returns it,
+ * blocking until done. Null when the microphone is unavailable or permission was
+ * refused; a short array when capture ended early.
+ *
+ * The rate is honoured rather than reported here — unlike the echo loop, the
+ * caller analyses the result with FFT band edges derived from it, so a
+ * substituted rate would silently shift every frequency the mosaic reports.
+ */
+expect fun recordPcm(seconds: Int, sampleRate: Int): ShortArray?

@@ -1,27 +1,27 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
-import android.Manifest
-import android.content.ContentValues
-import android.content.Context
-import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.graphics.Canvas as AndroidCanvas
-import android.graphics.Color as AndroidColor
-import android.graphics.Paint
-import android.graphics.RectF
-import android.graphics.Typeface
-import android.os.Environment
-import android.provider.MediaStore
-import android.widget.Toast
-import android.media.AudioDeviceInfo
-import android.media.AudioFormat
-import android.media.AudioManager
-import android.media.AudioRecord
-import android.media.MediaRecorder
-import android.os.Build
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.Canvas
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.CornerRadius
+import com.fictioncutshort.justacalculator.platform.AppPermission
+import com.fictioncutshort.justacalculator.platform.currentAppContext
+import com.fictioncutshort.justacalculator.platform.formatDateTime
+import com.fictioncutshort.justacalculator.platform.formatFixed
+import com.fictioncutshort.justacalculator.platform.hasPermission
+import com.fictioncutshort.justacalculator.platform.recordPcm
+import com.fictioncutshort.justacalculator.platform.rememberPermissionRequest
+import com.fictioncutshort.justacalculator.platform.saveImageToGallery
+import com.fictioncutshort.justacalculator.platform.showToast
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -35,20 +35,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -181,14 +177,12 @@ internal fun Building5SoundProto(
     onComplete: (SoundMosaic) -> Unit,
     buttonLabel: String = "Let's find the next stop"
 ) {
-    val context = LocalContext.current
+    val context = currentAppContext()
     val scope = rememberCoroutineScope()
 
-    var hasMic by remember { mutableStateOf(hasMicPermission(context)) }
-    val permLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted -> hasMic = granted }
-    LaunchedEffect(Unit) { if (!hasMic) permLauncher.launch(Manifest.permission.RECORD_AUDIO) }
+    var hasMic by remember { mutableStateOf(hasPermission(context, AppPermission.MICROPHONE)) }
+    val requestMic = rememberPermissionRequest(AppPermission.MICROPHONE) { granted -> hasMic = granted }
+    LaunchedEffect(Unit) { if (!hasMic) requestMic() }
 
     var phase by remember { mutableStateOf(Phase.IDLE) }
     var countNum by remember { mutableStateOf(3) }
@@ -201,7 +195,7 @@ internal fun Building5SoundProto(
             for (n in 3 downTo 1) { phase = Phase.COUNTDOWN; countNum = n; delay(900) }
             phase = Phase.REC
             delay(100)
-            val pcm = withContext(Dispatchers.IO) { recordSeconds(context, REC_SECONDS) }
+            val pcm = withContext(Dispatchers.Default) { recordPcm(REC_SECONDS, SAMPLE_RATE) }
             phase = Phase.PROCESSING
             val sr = withContext(Dispatchers.Default) { analyzeScan(pcm, scans.size) }
             scans.add(sr)
@@ -215,7 +209,7 @@ internal fun Building5SoundProto(
     Box(Modifier.fillMaxSize().background(P_BG)) {
         val done = combined
         when {
-            !hasMic -> MicGate { permLauncher.launch(Manifest.permission.RECORD_AUDIO) }
+            !hasMic -> MicGate { requestMic() }
             phase == Phase.REVEAL && done != null -> RevealScreen(
                 mosaic = done,
                 buttonLabel = buttonLabel,
@@ -476,70 +470,7 @@ private fun cellDb(cell: MosaicCell): Int = ((cell.loud - 1f) * 42f).toInt()
 private fun cellDetail(cell: MosaicCell): String =
     if (cell.freqHz <= 0f) "empty — nothing stood out to fill this tile"
     else "≈ ${cell.freqHz.toInt()} Hz (${freqName(cell.freqHz)}) · " +
-         "${cellDb(cell)} dB · t ${"%.1f".format(cell.timeSec)}s"
-
-// ─────────────────────────────────────────────────────────────────────────────
-// AUDIO CAPTURE  (raw PCM discarded the moment the tones are pulled out)
-// ─────────────────────────────────────────────────────────────────────────────
-
-private fun hasMicPermission(context: Context): Boolean =
-    ContextCompat.checkSelfPermission(
-        context, Manifest.permission.RECORD_AUDIO
-    ) == PackageManager.PERMISSION_GRANTED
-
-private fun openRecorder(context: Context): AudioRecord? {
-    val minBuf = AudioRecord.getMinBufferSize(
-        SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
-    )
-    if (minBuf <= 0) return null
-    val bufSize = max(minBuf, SAMPLE_RATE * 2)
-    val sources = buildList {
-        if (Build.VERSION.SDK_INT >= 24) add(MediaRecorder.AudioSource.UNPROCESSED)
-        add(MediaRecorder.AudioSource.VOICE_RECOGNITION)
-        add(MediaRecorder.AudioSource.MIC)
-    }
-    val builtInMic = if (Build.VERSION.SDK_INT >= 23) {
-        (context.getSystemService(Context.AUDIO_SERVICE) as AudioManager)
-            .getDevices(AudioManager.GET_DEVICES_INPUTS)
-            .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
-    } else null
-
-    for (src in sources) {
-        try {
-            val rec = AudioRecord(
-                src, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT, bufSize
-            )
-            if (rec.state == AudioRecord.STATE_INITIALIZED) {
-                if (builtInMic != null) rec.setPreferredDevice(builtInMic)
-                return rec
-            }
-            rec.release()
-        } catch (_: Exception) { /* try next source */ }
-    }
-    return null
-}
-
-private fun recordSeconds(context: Context, seconds: Int): ShortArray? {
-    val rec = openRecorder(context) ?: return null
-    val total = SAMPLE_RATE * seconds
-    val out = ShortArray(total)
-    return try {
-        rec.startRecording()
-        var read = 0
-        while (read < total) {
-            val n = rec.read(out, read, total - read)
-            if (n <= 0) break
-            read += n
-        }
-        if (read < total) out.copyOf(read) else out
-    } catch (_: Exception) {
-        null
-    } finally {
-        try { rec.stop() } catch (_: Exception) {}
-        rec.release()
-    }
-}
+         "${cellDb(cell)} dB · t ${formatFixed(cell.timeSec.toDouble(), 1)}s"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DSP
@@ -565,7 +496,7 @@ private fun fft(re: FloatArray, im: FloatArray) {
     }
     var len = 2
     while (len <= n) {
-        val ang = -2.0 * Math.PI / len
+        val ang = -2.0 * PI / len
         val wRe = cos(ang).toFloat(); val wIm = sin(ang).toFloat()
         var i = 0
         while (i < n) {
@@ -590,7 +521,7 @@ private fun fft(re: FloatArray, im: FloatArray) {
 /** Exactly [k] band indices, strongest first: prominent local maxima preferred,
  *  then next-strongest, so every slice yields [k] tiles (grid stays full). */
 private fun pickTopBands(bands: DoubleArray, k: Int): List<Int> {
-    val floor = bands.clone().also { it.sort() }[bands.size / 2]
+    val floor = bands.copyOf().also { it.sort() }[bands.size / 2]
     val maxima = ArrayList<Int>()
     for (i in bands.indices) {
         val e = bands[i]
@@ -627,7 +558,7 @@ private fun analyzeScan(pcm: ShortArray?, scanIndex: Int): ScanResult {
     }
 
     val window = FloatArray(FFT_SIZE) {
-        (0.5 - 0.5 * cos(2.0 * Math.PI * it / (FFT_SIZE - 1))).toFloat()
+        (0.5 - 0.5 * cos(2.0 * PI * it / (FFT_SIZE - 1))).toFloat()
     }
     val re = FloatArray(FFT_SIZE); val im = FloatArray(FFT_SIZE)
     val numFrames = ((pcm.size - FFT_SIZE) / FFT_HOP + 1).coerceAtLeast(1)
@@ -764,7 +695,7 @@ private fun summaryFeatures(
         var acc = 0.0; for (i in i0 until i1) acc += mag[i]
         bands[b] = acc.toFloat()
     }
-    val floor = bands.clone().also { it.sort() }[bands.size / 2]
+    val floor = bands.copyOf().also { it.sort() }[bands.size / 2]
     for (b in bands.indices) bands[b] = max(0f, bands[b] - floor)
     val bMax = bands.maxOrNull() ?: 0f
     if (bMax > 0f) for (b in bands.indices) bands[b] = bands[b] / bMax
@@ -827,13 +758,13 @@ internal fun dominantHz(m: SoundMosaic): Int {
 
 @Composable
 internal fun SoundMosaicGallery(captures: List<PlaceCapture>, onBack: () -> Unit) {
-    val context = LocalContext.current
-    val timeFmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
+    // Rendering the caption needs a measurer, and one only exists inside a
+    // composition — so it is captured here rather than inside the renderer.
+    val textMeasurer = rememberTextMeasurer()
 
     fun save(cap: PlaceCapture) {
-        val ok = saveMosaicToGallery(context, cap)
-        Toast.makeText(context, if (ok) "Saved to gallery" else "Save failed",
-                       Toast.LENGTH_SHORT).show()
+        val ok = saveImageToGallery(mosaicFileName(cap), renderMosaic(cap, textMeasurer))
+        showToast(if (ok) "Saved to gallery" else "Save failed")
     }
 
     Box(Modifier.fillMaxSize().background(P_BG)) {
@@ -855,9 +786,9 @@ internal fun SoundMosaicGallery(captures: List<PlaceCapture>, onBack: () -> Unit
                 Text("Location ${cap.index}", color = P_GREEN, fontSize = 14.sp,
                      fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(3.dp))
-                Text("%.5f, %.5f".format(cap.lat, cap.lon), color = P_GREEN_D,
+                Text("${formatFixed(cap.lat, 5)}, ${formatFixed(cap.lon, 5)}", color = P_GREEN_D,
                      fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-                Text(timeFmt.format(Date(cap.timeMs)), color = P_GREEN_D,
+                Text(formatDateTime(cap.timeMs), color = P_GREEN_D,
                      fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 Text("dominant ≈ ${cap.dominantHz} Hz (${freqName(cap.dominantHz.toFloat())})",
                      color = P_GREEN_D, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
@@ -904,61 +835,59 @@ internal fun SoundMosaicGallery(captures: List<PlaceCapture>, onBack: () -> Unit
     }
 }
 
-/** Draw a mosaic to a Bitmap for saving. [caption] holds date + dominant Hz —
- *  never the coordinates, so a shared image can't give the place away. */
-private fun renderMosaicBitmap(m: SoundMosaic, caption: String?): Bitmap {
+private fun mosaicFileName(cap: PlaceCapture) =
+    "sound_mosaic_loc${cap.index}_${cap.timeMs}.png"
+
+/**
+ * Draw a mosaic to an image for saving. The caption holds date + dominant Hz —
+ * never the coordinates, so a shared image can't give the place away.
+ */
+private fun renderMosaic(cap: PlaceCapture, textMeasurer: TextMeasurer): ImageBitmap {
+    val caption = "${formatDateTime(cap.timeMs)}   ~${cap.dominantHz} Hz"
     val tile = 64; val gap = 5; val pad = 28
     val gridW = M_COLS * tile + (M_COLS - 1) * gap
     val gridH = M_ROWS * tile + (M_ROWS - 1) * gap
-    val footer = if (caption != null) 54 else 0
+    val footer = 54
     val w = gridW + pad * 2
     val h = gridH + pad * 2 + footer
-    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-    val c = AndroidCanvas(bmp)
-    c.drawColor(AndroidColor.rgb(10, 15, 10))
-    val p = Paint(Paint.ANTI_ALIAS_FLAG)
-    for (r in 0 until M_ROWS) for (col in 0 until M_COLS) {
-        val cell = m.cells[r][col]
-        val left = (pad + col * (tile + gap)).toFloat()
-        val top = (pad + r * (tile + gap)).toFloat()
-        p.color = if (cell.freqHz <= 0f) AndroidColor.rgb(16, 16, 16)
-                  else AndroidColor.HSVToColor(floatArrayOf(hueForFreq(cell.freqHz), 0.85f, 0.40f + 0.60f * cell.loud))
-        c.drawRoundRect(RectF(left, top, left + tile, top + tile), 6f, 6f, p)
-    }
-    if (caption != null) {
-        p.color = AndroidColor.rgb(51, 170, 85)
-        p.typeface = Typeface.MONOSPACE
-        p.textSize = 26f
-        p.textAlign = Paint.Align.CENTER
-        c.drawText(caption, w / 2f, h - footer / 2f + 9f, p)
-    }
-    return bmp
-}
 
-/** Save one place's mosaic to the device gallery (Pictures/JustACalculator). */
-private fun saveMosaicToGallery(context: Context, cap: PlaceCapture): Boolean {
-    val date = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(cap.timeMs))
-    val caption = "$date   ~${cap.dominantHz} Hz"    // deliberately no coordinates
-    val bmp = renderMosaicBitmap(cap.mosaic, caption)
-    val name = "sound_mosaic_loc${cap.index}_${cap.timeMs}.png"
-    return try {
-        val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, name)
-            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-            if (Build.VERSION.SDK_INT >= 29) {
-                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/JustACalculator")
-                put(MediaStore.Images.Media.IS_PENDING, 1)
-            }
+    val bitmap = ImageBitmap(w, h)
+    CanvasDrawScope().draw(
+        density = Density(1f),
+        layoutDirection = LayoutDirection.Ltr,
+        canvas = Canvas(bitmap),
+        size = Size(w.toFloat(), h.toFloat()),
+    ) {
+        drawRect(Color(0xFF0A0F0A))
+        for (r in 0 until M_ROWS) for (col in 0 until M_COLS) {
+            val cell = cap.mosaic.cells[r][col]
+            val left = (pad + col * (tile + gap)).toFloat()
+            val top = (pad + r * (tile + gap)).toFloat()
+            drawRoundRect(
+                color = if (cell.freqHz <= 0f) Color(0xFF101010)
+                        else Color.hsv(hueForFreq(cell.freqHz), 0.85f, 0.40f + 0.60f * cell.loud),
+                topLeft = Offset(left, top),
+                size = Size(tile.toFloat(), tile.toFloat()),
+                cornerRadius = CornerRadius(6f, 6f),
+            )
         }
-        val resolver = context.contentResolver
-        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return false
-        resolver.openOutputStream(uri)?.use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) } ?: return false
-        if (Build.VERSION.SDK_INT >= 29) {
-            values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
-            resolver.update(uri, values, null, null)
-        }
-        true
-    } catch (_: Exception) {
-        false
+        val style = TextStyle(
+            color = Color(0xFF33AA55),
+            fontSize = 26.sp,
+            fontFamily = FontFamily.Monospace,
+        )
+        // Measured then centred by hand; the draw call takes a top-left corner
+        // rather than the baseline-and-alignment pair Android's Paint used.
+        val measured = textMeasurer.measure(caption, style)
+        drawText(
+            textMeasurer = textMeasurer,
+            text = caption,
+            style = style,
+            topLeft = Offset(
+                (w - measured.size.width) / 2f,
+                (h - footer + (footer - measured.size.height) / 2f),
+            ),
+        )
     }
+    return bitmap
 }
