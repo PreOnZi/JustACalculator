@@ -64,7 +64,7 @@ import com.fictioncutshort.justacalculator.platform.AppPermission
 import com.fictioncutshort.justacalculator.platform.LocalNotifications
 import com.fictioncutshort.justacalculator.platform.OnAppLifecycleEvent
 import com.fictioncutshort.justacalculator.ui.components.HomeScreenOverlay
-import com.fictioncutshort.justacalculator.platform.createTalkAudioHandler
+import com.fictioncutshort.justacalculator.logic.TalkAudioHandler
 import com.fictioncutshort.justacalculator.platform.currentAppContext
 import com.fictioncutshort.justacalculator.platform.hasPermission
 import com.fictioncutshort.justacalculator.platform.logDebug
@@ -110,7 +110,7 @@ import kotlinx.coroutines.launch
 fun CalculatorScreen() {
     var sessionStartTime by remember { mutableLongStateOf(nowMillis()) }
     val context = currentAppContext()
-    val talkAudioHandler = remember { createTalkAudioHandler(context) }
+    val talkAudioHandler = remember { TalkAudioHandler() }
         // Use live state from singleton if it exists (survives rotation),
     // otherwise create fresh from SharedPreferences
     val state = remember {

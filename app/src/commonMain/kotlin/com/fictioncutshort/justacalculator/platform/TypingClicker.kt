@@ -4,10 +4,9 @@ package com.fictioncutshort.justacalculator.platform
  * The story's non-music audio: the per-character typing click, the dormancy
  * static, and the realtime mic echo used during the phone detour.
  *
- * Android implements all of it in TalkAudioHandler (AudioRecord + AudioTrack).
- * The iOS actual is a no-op until that ports — the beats still advance, they are
- * just silent, which is preferable to blocking the whole story on an
- * AVAudioEngine port.
+ * All of it is synthesised in shared code by TalkAudioHandler; only the PCM
+ * sink and the microphone are platform, behind the `Pcm` seam. The interface
+ * survives so call sites can hold a nullable handler without caring.
  */
 interface TypingClicker {
     fun playTypingClick()
@@ -19,4 +18,10 @@ interface TypingClicker {
     fun startRealtimeEcho(decay: Float = 0.18f, distortion: Float = 1.0f) = Unit
 
     fun stopRealtimeEcho() = Unit
+
+    /**
+     * Drop captured audio before it reaches the speaker, without tearing the
+     * graph down — the call screen mutes the player while the calculator talks.
+     */
+    fun setEchoMuted(muted: Boolean) = Unit
 }

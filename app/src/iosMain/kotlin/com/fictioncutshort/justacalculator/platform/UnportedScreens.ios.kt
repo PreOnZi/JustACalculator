@@ -26,13 +26,6 @@ actual fun PlatformPhonePicturesApp(onClose: () -> Unit) =
     NotPortedYet("Pictures", "Needs the PhotoKit gallery port.", onClose)
 
 @Composable
-actual fun PlatformPhoneCallScreen(
-    number: String,
-    audioHandler: TypingClicker?,
-    onHangup: () -> Unit,
-) = NotPortedYet("Call", "Needs the realtime mic-echo port.", onHangup)
-
-@Composable
 actual fun PlatformModelViewer(modelFile: String, modifier: Modifier) =
     NotPortedYet("3D model viewer", "SceneView/Filament has no iOS counterpart.", {})
 
@@ -60,11 +53,6 @@ actual fun rememberModelIcon(
 ): ImageBitmap? = null
 
 /** Silent until the AVAudioEngine mic echo is ported; the story still advances. */
-actual fun createTalkAudioHandler(context: AppContext): TypingClicker =
-    object : TypingClicker {
-        override fun playTypingClick() = Unit
-    }
-
 @Composable
 private fun NotPortedYet(title: String, detail: String, onSkip: () -> Unit) {
     Box(

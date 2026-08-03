@@ -23,14 +23,6 @@ expect fun PlatformPhoneCameraApp(onClose: () -> Unit)
 @Composable
 expect fun PlatformPhonePicturesApp(onClose: () -> Unit)
 
-/** The in-call screen — drives the realtime mic echo. */
-@Composable
-expect fun PlatformPhoneCallScreen(
-    number: String,
-    audioHandler: TypingClicker?,
-    onHangup: () -> Unit,
-)
-
 /** Interactive 3D model viewer — SceneView/Filament, no iOS counterpart. */
 @Composable
 expect fun PlatformModelViewer(modelFile: String, modifier: Modifier = Modifier)
@@ -63,5 +55,3 @@ expect fun rememberModelIcon(
     fitSpan: Float = 1.7f,
 ): ImageBitmap?
 
-/** The realtime mic-echo handler; a silent no-op on iOS for now. */
-expect fun createTalkAudioHandler(context: AppContext): TypingClicker

@@ -172,12 +172,10 @@ and one of those was blocking entry to the whole city.
 | `PlatformDoor4Room` | `CVOpenGLESTextureCache` camera texture |
 | `PlatformBuilding5Map` | MapKit |
 | `PlatformBuilding7VanityRoom` | AVFoundation + Vision face landmarks |
-| `PlatformPhoneCallScreen` | AVAudioEngine mic echo |
 | `PlatformPhoneCameraApp` | AVFoundation capture |
 | `PlatformPhonePicturesApp` | PhotoKit |
 | `PlatformCameraPreview` | AVFoundation capture |
 | `PlatformModelViewer` / `rememberModelIcon` | SceneKit, or offscreen GL |
-| `createTalkAudioHandler` | AVAudioEngine mic echo (no-op on iOS today) |
 
 ## Remaining
 
@@ -193,12 +191,29 @@ table. What is left, largest first:
 | `Door4Room` | 1,782 | `GL_TEXTURE_EXTERNAL_OES` + `SurfaceTexture` (26 uses) → `CVOpenGLESTextureCache` |
 | `Building5Map` | 1,341 | osmdroid → MapKit |
 | `Building7VanityRoom` | 1,071 | CameraX + ML Kit → AVFoundation + Vision |
-| `Building5SoundProto` | 964 | AudioRecord/AudioTrack → AVAudioEngine |
-| `TalkAudioHandler` | 334 | realtime mic echo → AVAudioEngine |
-| `PhoneCallScreen` | 313 | follows `TalkAudioHandler` |
+| `Building5SoundProto` | 964 | AudioRecord/AudioTrack → the `Pcm` seam |
 | `Camerapreview` | 287 | AVFoundation capture |
 | `ModelBitmap` | 285 | offscreen EGL pbuffer |
 | `PhonePicturesApp` | 190 | MediaStore → PhotoKit |
+
+`TalkAudioHandler` ported by splitting it in two: every waveform — the typing
+click, the static crackle, the feedback squeal, the echo delay line — is plain
+arithmetic and moved to `commonMain`, leaving only a PCM sink and a microphone
+behind `platform/Pcm.kt`. `Building5SoundProto` should reuse that seam rather
+than growing a second one.
+
+Two things the seam has to expose that Android never needed:
+- **The capture rate is a callback parameter, not a constant.** Android asked
+  AudioRecord for 22.05 kHz and got it; `AVAudioEngine` hands over whatever the
+  hardware is running at, and a delay line specified in milliseconds has to be
+  sized from the real rate.
+- **`AVAudioPlayerNode.scheduleBuffer` queues instead of blocking**, so unlike
+  `AudioTrack.write` it applies no back-pressure. Fine for the generators, which
+  write a bounded few seconds and stop.
+
+The typing click now holds one sink open instead of building a fresh one per
+keystroke — tearing down an `AudioTrack` each time was cheap, but the iOS
+equivalent is a whole `AVAudioEngine`.
 
 `Door4Room` is the hardest and deserves its own run: the external-texture path
 is a different API, not a translation of the existing one.

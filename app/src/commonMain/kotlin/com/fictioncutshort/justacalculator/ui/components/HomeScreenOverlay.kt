@@ -1,6 +1,5 @@
 package com.fictioncutshort.justacalculator.ui.components
 
-import com.fictioncutshort.justacalculator.platform.PlatformPhoneCallScreen
 import com.fictioncutshort.justacalculator.platform.PlatformPhonePicturesApp
 import com.fictioncutshort.justacalculator.platform.PlatformPhoneCameraApp
 import com.fictioncutshort.justacalculator.platform.TypingClicker
@@ -514,7 +513,7 @@ private fun AppHost(
             if (audioHandler == null) {
                 LaunchedEffect(Unit) { onClose() }
             } else {
-                PlatformPhoneCallScreen(
+                PhoneCallScreen(
                     number = dialedNumber,
                     audioHandler = audioHandler,
                     onHangup = onClose

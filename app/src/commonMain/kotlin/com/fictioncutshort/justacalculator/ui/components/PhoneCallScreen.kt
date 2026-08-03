@@ -2,7 +2,7 @@ package com.fictioncutshort.justacalculator.ui.components
 
 import com.fictioncutshort.justacalculator.platform.createSoundPlayer
 import com.fictioncutshort.justacalculator.platform.SoundPlayer
-import android.content.Context
+import com.fictioncutshort.justacalculator.platform.Assets
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -35,11 +35,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.fictioncutshort.justacalculator.logic.TalkAudioHandler
+import com.fictioncutshort.justacalculator.platform.TypingClicker
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -85,10 +84,9 @@ private val SEQUENCE_BASENAMES = listOf(
 @Composable
 fun PhoneCallScreen(
     number: String,
-    audioHandler: TalkAudioHandler,
+    audioHandler: TypingClicker,
     onHangup: () -> Unit
 ) {
-    val context = LocalContext.current
     var connected by remember { mutableStateOf(false) }
     var elapsedSec by remember { mutableStateOf(0) }
     // We keep a reference to the live ringtone player so the pickup transition
@@ -99,7 +97,7 @@ fun PhoneCallScreen(
     LaunchedEffect(Unit) {
         audioHandler.startRealtimeEcho(decay = 0.18f, distortion = 1.0f)
         audioHandler.setEchoMuted(true)
-        ringPlayerRef[0] = resolveAsset(context, RING_BASENAME)?.let {
+        ringPlayerRef[0] = resolveAsset(RING_BASENAME)?.let {
             tryStartLoopingAudio(it)
         }
         delay(RING_DURATION_MS)
@@ -122,7 +120,7 @@ fun PhoneCallScreen(
                 delay(gapBefore)
             }
             audioHandler.setEchoMuted(true)
-            val resolved = resolveAsset(context, basename)
+            val resolved = resolveAsset(basename)
             if (resolved != null) {
                 playAssetAudio(resolved)
             }
@@ -248,11 +246,11 @@ fun PhoneCallScreen(
  * [AUDIO_EXTS]. Lets the user mix WAV/MP3/etc. without re-touching code.
  * Returns the full asset path (e.g. `audio/01.wav`), or null if none exist.
  */
-private fun resolveAsset(context: Context, basename: String): String? {
+private fun resolveAsset(basename: String): String? {
     val parent = basename.substringBeforeLast('/', "")
     val stem = basename.substringAfterLast('/')
     val listed = try {
-        context.assets.list(parent)?.toSet() ?: emptySet()
+        Assets.list(parent).toSet()
     } catch (_: Exception) {
         return null
     }
@@ -309,5 +307,5 @@ private fun stopAndRelease(mp: SoundPlayer) {
 private fun formatDuration(sec: Int): String {
     val m = sec / 60
     val s = sec % 60
-    return "%d:%02d".format(m, s)
+    return "$m:${s.toString().padStart(2, '0')}"
 }
