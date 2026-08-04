@@ -113,6 +113,7 @@ expect object Gl {
     fun glGenRenderbuffers(n: Int, renderbuffers: IntArray, offset: Int)
     fun glGenTextures(n: Int, textures: IntArray, offset: Int)
     fun glGenVertexArrays(n: Int, arrays: IntArray, offset: Int)
+    fun glDeleteBuffers(n: Int, buffers: IntArray, offset: Int)
     fun glDeleteFramebuffers(n: Int, framebuffers: IntArray, offset: Int)
     fun glDeleteRenderbuffers(n: Int, renderbuffers: IntArray, offset: Int)
     fun glDeleteTextures(n: Int, textures: IntArray, offset: Int)

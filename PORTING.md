@@ -198,6 +198,27 @@ Still open, none of it porting work:
   quad) is built lazily and held. If a draw path ever needs a new buffer,
   something is wrong.
 
+- **The iOS Simulator cannot hardware-accelerate OpenGL ES.** Profiling the
+  city there shows `gldMergeScanlines2x2` inside `GLRendererFloat` — Apple's
+  *software* rasteriser — as the hottest symbol by a wide margin. The city runs
+  at 100% CPU and a few frames per second in the simulator no matter what the
+  code does; the calculator screen, which uses no GL, sits at 0%. **Simulator
+  frame rate says nothing about this app.** Measure the city on a device.
+
+- **Static city geometry is in VBOs.** It used to draw from client-side arrays,
+  so the driver re-read every vertex from CPU memory on every draw call
+  (`glDrawArrays_IMM_ES2Exec` in the profile). Per-frame geometry still uses
+  client arrays through `scratch()`, where a VBO re-uploaded each frame buys
+  nothing. One trap: `glVertexAttribPointer` captures the ARRAY_BUFFER binding
+  **at call time**, so any client-side pointer set while a VBO is bound becomes
+  an offset into it — the textured meshes' UVs need an explicit unbind first.
+
+- **Do not pad the iOS root for the Dynamic Island.** Insetting there
+  letterboxes the app and shows bare window as white bars top and bottom. The
+  screens own their insets: the calculator layouts pair `statusBarsPadding()`
+  with the `navigationBarsPadding()` that was already there. Both report zero
+  on Android, where the window is not edge-to-edge.
+
 - **The whole iOS build is unrun.** It compiles and links; nothing in it has
   been exercised on a device or simulator. The highest-risk parts are the ones
   with no compile-time check on their correctness: the `CVOpenGLESTextureCache`

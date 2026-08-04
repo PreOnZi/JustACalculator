@@ -40,6 +40,10 @@ fun LandscapeCalculatorContent(
     Row(
         modifier = modifier
             .fillMaxSize()
+            // Pairs with navigationBarsPadding: on Android the system already
+            // insets the window so both report zero, on iOS they clear the
+            // Dynamic Island and the home indicator.
+            .statusBarsPadding()
             .navigationBarsPadding()
             .padding(horizontal = dimensions.contentPadding)
             .padding(top = 8.dp, bottom = 8.dp)

@@ -40,6 +40,10 @@ fun PortraitCalculatorContent(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Transparent)
+            // Pairs with navigationBarsPadding: on Android the system already
+            // insets the window so both report zero, on iOS they clear the
+            // Dynamic Island and the home indicator.
+            .statusBarsPadding()
             .navigationBarsPadding()
             .padding(horizontal = dimensions.contentPadding)
     ) {

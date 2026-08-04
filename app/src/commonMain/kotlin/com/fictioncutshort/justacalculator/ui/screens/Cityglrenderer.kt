@@ -146,7 +146,19 @@ class CityGLRenderer : GlRenderer {
         val crack: Boolean = false,        // a tear in the sky — only during the collapse
         val tex: Int = 0,                  // GL texture — 0 for the flat-coloured majority
         val uv: GlFloatBuffer? = null        // its UVs, in step with buf
-    )
+    ) {
+        /**
+         * Vertex buffer object, uploaded on first draw. 0 until then.
+         *
+         * Without this the renderer drew from client-side arrays, so the driver
+         * re-read every vertex out of CPU memory on every draw call, every
+         * frame — the profile showed it as glDrawArrays_IMM_ES2Exec. Static
+         * geometry only; the per-frame scratch buffers stay client-side, since
+         * a VBO re-uploaded every frame buys nothing.
+         */
+        var vbo: Int = 0
+    }
+
     private val meshes = mutableListOf<Mesh>()
 
     /**
@@ -170,6 +182,44 @@ class CityGLRenderer : GlRenderer {
     /** The full-screen night scrim. Constant geometry, so built once. */
     private val nightScrimQuad: GlFloatBuffer by lazy {
         floatArrayOf(-1f, -1f, 0f, 1f, -1f, 0f, 1f, 1f, 0f, -1f, 1f, 0f).toGlBuffer()
+    }
+
+    /**
+     * Binds [m]'s vertex buffer, uploading it on first use.
+     *
+     * Callers must call [unbindVbo] once they are done drawing meshes —
+     * while a VBO is bound, a client-array pointer is reinterpreted as a byte
+     * offset into it, which would silently corrupt the dynamic draws.
+     */
+    private fun bindMeshVbo(m: Mesh): Boolean {
+        if (m.vbo == 0) {
+            val ids = IntArray(1)
+            Gl.glGenBuffers(1, ids, 0)
+            if (ids[0] == 0) return false
+            m.vbo = ids[0]
+            Gl.glBindBuffer(Gl.GL_ARRAY_BUFFER, m.vbo)
+            m.buf.position(0)
+            Gl.glBufferData(
+                Gl.GL_ARRAY_BUFFER, m.buf.capacity * 4, m.buf, Gl.GL_STATIC_DRAW,
+            )
+        } else {
+            Gl.glBindBuffer(Gl.GL_ARRAY_BUFFER, m.vbo)
+        }
+        return true
+    }
+
+    private fun unbindVbo() = Gl.glBindBuffer(Gl.GL_ARRAY_BUFFER, 0)
+
+    /** Releases every mesh VBO and unpins its CPU copy. Called before a rebuild. */
+    private fun releaseMeshBuffers() {
+        for (m in meshes) {
+            if (m.vbo != 0) {
+                Gl.glDeleteBuffers(1, intArrayOf(m.vbo), 0)
+                m.vbo = 0
+            }
+            m.buf.dispose()
+            m.uv?.dispose()
+        }
     }
 
     private fun scratch(arr: FloatArray, slot: Int = 0): GlFloatBuffer {
@@ -781,7 +831,7 @@ class CityGLRenderer : GlRenderer {
             throttleRenderThread(45L + kotlin.random.Random.nextInt(160).toLong())
         }
         lastFrameMs = monotonicMillis()
-        if (needsRebuild) { needsRebuild = false; buildScene() }
+        if (needsRebuild) { needsRebuild = false; releaseMeshBuffers(); buildScene() }
         // Easter-egg background colour (707) + grayscale (1134206) — both read
         // live so a tweak made on the calculator shows next time the city draws.
         val clearRgb = com.fictioncutshort.justacalculator.logic.EasterEggTheme.cityClearRgb()
@@ -955,11 +1005,12 @@ class CityGLRenderer : GlRenderer {
             bindMeshTexture(m)
             Gl.glUniform4f(uCol, r, g, b, if (seeThrough) 0.22f else m.a)
             Gl.glUniform1f(uFog, if (aerialMode) m.fog else 0f)
-            m.buf.position(0)
-            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, m.buf)
+            if (!bindMeshVbo(m)) continue
+            Gl.glVertexAttribPointerOffset(aPos, 3, Gl.GL_FLOAT, false, 12, 0)
             Gl.glEnableVertexAttribArray(aPos)
             Gl.glDrawArrays(m.mode, 0, m.cnt)
         }
+        unbindVbo()
         if (blendMode != 0) {
             Gl.glDisable(Gl.GL_BLEND)
             Gl.glDepthMask(true)
@@ -1045,11 +1096,12 @@ class CityGLRenderer : GlRenderer {
                 } else if (m.skyNight) dkLvl else 1f - dkLvl
                 if (fade < 0.01f) continue
                 Gl.glUniform4f(uCol, m.r, m.g, m.b, m.a * fade)
-                m.buf.position(0)
-                Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, m.buf)
+                if (!bindMeshVbo(m)) continue
+                Gl.glVertexAttribPointerOffset(aPos, 3, Gl.GL_FLOAT, false, 12, 0)
                 Gl.glEnableVertexAttribArray(aPos)
                 Gl.glDrawArrays(m.mode, 0, m.cnt)
             }
+            unbindVbo()
             Gl.glDisable(Gl.GL_BLEND)
             Gl.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
         }
@@ -1096,11 +1148,12 @@ class CityGLRenderer : GlRenderer {
                 if (a < 0.01f) continue
                 Gl.glUniform4f(uCol, r, g, b, a)
                 Gl.glUniform1f(uFog, 0f)
-                m.buf.position(0)
-                Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, m.buf)
+                if (!bindMeshVbo(m)) continue
+                Gl.glVertexAttribPointerOffset(aPos, 3, Gl.GL_FLOAT, false, 12, 0)
                 Gl.glEnableVertexAttribArray(aPos)
                 Gl.glDrawArrays(m.mode, 0, m.cnt)
             }
+            unbindVbo()
             setXform(null)
             // The way in to every building you haven't done yet.
             drawDoorGlow(dkLvl)
@@ -1395,11 +1448,12 @@ class CityGLRenderer : GlRenderer {
 
             setLit(if (m.lava || m.radArc || m.noAO) 0f else 1f)
             Gl.glUniform4f(uCol, r, g, b, m.a)
-            m.buf.position(0)
-            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, m.buf)
+            if (!bindMeshVbo(m)) continue
+            Gl.glVertexAttribPointerOffset(aPos, 3, Gl.GL_FLOAT, false, 12, 0)
             Gl.glEnableVertexAttribArray(aPos)
             Gl.glDrawArrays(m.mode, 0, m.cnt)
         }
+        unbindVbo()
         setXform(null)
 
         // The doors have to come along: the buildings have real holes cut for them.
@@ -4483,6 +4537,11 @@ class CityGLRenderer : GlRenderer {
         Gl.glBindTexture(Gl.GL_TEXTURE_2D, m.tex)
         Gl.glUniform1i(uTexSampler, 0)
         if (!curTexOn) { Gl.glUniform1f(uTexOn, 1f); curTexOn = true }
+        // UVs are still client-side, so the ARRAY_BUFFER binding has to be
+        // clear when their pointer is set: glVertexAttribPointer captures the
+        // binding at call time, and the previous mesh's VBO would still be
+        // bound here, turning this pointer into an offset into it.
+        Gl.glBindBuffer(Gl.GL_ARRAY_BUFFER, 0)
         uv.position(0)
         Gl.glVertexAttribPointer(aUV, 2, Gl.GL_FLOAT, false, 8, uv)
         Gl.glEnableVertexAttribArray(aUV)

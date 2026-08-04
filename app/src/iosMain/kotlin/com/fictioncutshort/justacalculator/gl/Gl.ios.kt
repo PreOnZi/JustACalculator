@@ -176,6 +176,14 @@ actual object Gl {
         }
     }
 
+    actual fun glDeleteBuffers(n: Int, buffers: IntArray, offset: Int) {
+        memScoped {
+            val ids = allocArray<UIntVar>(n)
+            for (i in 0 until n) ids[i] = buffers[offset + i].toUInt()
+            platform.gles3.glDeleteBuffers(n, ids)
+        }
+    }
+
     actual fun glDeleteFramebuffers(n: Int, framebuffers: IntArray, offset: Int) {
         memScoped {
             val ids = allocArray<UIntVar>(n)

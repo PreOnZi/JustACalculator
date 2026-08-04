@@ -112,6 +112,9 @@ actual object Gl {
     actual fun glGenRenderbuffers(n: Int, renderbuffers: IntArray, offset: Int) = GLES30.glGenRenderbuffers(n, renderbuffers, offset)
     actual fun glGenTextures(n: Int, textures: IntArray, offset: Int) = GLES30.glGenTextures(n, textures, offset)
     actual fun glGenVertexArrays(n: Int, arrays: IntArray, offset: Int) = GLES30.glGenVertexArrays(n, arrays, offset)
+    actual fun glDeleteBuffers(n: Int, buffers: IntArray, offset: Int) =
+        GLES30.glDeleteBuffers(n, buffers, offset)
+
     actual fun glDeleteFramebuffers(n: Int, framebuffers: IntArray, offset: Int) = GLES30.glDeleteFramebuffers(n, framebuffers, offset)
     actual fun glDeleteRenderbuffers(n: Int, renderbuffers: IntArray, offset: Int) = GLES30.glDeleteRenderbuffers(n, renderbuffers, offset)
     actual fun glDeleteTextures(n: Int, textures: IntArray, offset: Int) = GLES30.glDeleteTextures(n, textures, offset)
