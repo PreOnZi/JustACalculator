@@ -2008,15 +2008,30 @@ class CityGLRenderer : GlRenderer {
                 val x1m = src[i + 3]; val y1m = src[i + 4]; val z1m = src[i + 5]
                 val x2m = src[i + 6]; val y2m = src[i + 7]; val z2m = src[i + 8]
 
-                // Detect the pavement first (all verts below the sidewalk cutoff),
-                // then compress its skirt toward the building so a wide BW doesn't
-                // inflate it into the road.
+                // Whether this triangle is pavement — used below to hide it from
+                // the aerial view. Purely a visibility question.
                 val isSidewalk = y0m <= MB_SIDEWALK_Y_LIMIT &&
                                  y1m <= MB_SIDEWALK_Y_LIMIT &&
                                  y2m <= MB_SIDEWALK_Y_LIMIT
-                val ax0 = if (isSidewalk) skirtX(x0m) else x0m; val az0 = if (isSidewalk) skirtZ(z0m) else z0m
-                val ax1 = if (isSidewalk) skirtX(x1m) else x1m; val az1 = if (isSidewalk) skirtZ(z1m) else z1m
-                val ax2 = if (isSidewalk) skirtX(x2m) else x2m; val az2 = if (isSidewalk) skirtZ(z2m) else z2m
+
+                // Skirt compression is applied to EVERY vertex, on its own
+                // position — never gated on isSidewalk.
+                //
+                // It used to be, and that tore the pavement open: skirtX/skirtZ
+                // only move vertices beyond the body edge, and the kerb's
+                // vertical wall spans the sidewalk cutoff, so its triangles
+                // failed the all-three-below test and stayed put while the flat
+                // top and bottom were pulled inward. The surfaces stopped
+                // meeting and you could see straight through the gap — worse
+                // the wider BW got, since the displacement scales with it.
+                //
+                // Doing it per-vertex is safe precisely because the transform is
+                // a no-op inside the body half-extents: building geometry lives
+                // within ±MB_BODY_HALF_X / ±MB_BODY_HALF_Z and passes through
+                // untouched, so only genuine skirt vertices ever move.
+                val ax0 = skirtX(x0m); val az0 = skirtZ(z0m)
+                val ax1 = skirtX(x1m); val az1 = skirtZ(z1m)
+                val ax2 = skirtX(x2m); val az2 = skirtZ(z2m)
 
                 val sx0 = ax0 * sX; val sy0 = y0m * sY; val sz0 = az0 * sZ
                 val sx1 = ax1 * sX; val sy1 = y1m * sY; val sz1 = az1 * sZ
