@@ -2401,11 +2401,21 @@ fun CalculatorCityView(
                         renderer.introLookZ = pZ - 200f
                         renderer.useLookAt  = false
                     } else {
-                        // Pure first-person
+                        // Pure first-person.
+                        //
+                        // The look-at target carries the pitch as well as the
+                        // yaw. It has to: this branch goes through setLookAtM,
+                        // which builds the view from eye/target/up and ignores
+                        // renderer.camPitch entirely — so with a target pinned
+                        // to eye height the camera stayed dead level no matter
+                        // what the player did, while yaw worked because it was
+                        // baked into the target's XZ.
+                        val pr = (camPitch.toDouble()) * kotlin.math.PI / 180.0
+                        val horiz = cos(pr).toFloat()
                         renderer.useLookAt = true
-                        renderer.lookAtX   = pX + sin(cr).toFloat()
-                        renderer.lookAtY   = eyeY
-                        renderer.lookAtZ   = pZ - cos(cr).toFloat()
+                        renderer.lookAtX   = pX + (sin(cr) * horiz).toFloat()
+                        renderer.lookAtY   = eyeY + sin(pr).toFloat()
+                        renderer.lookAtZ   = pZ - (cos(cr) * horiz).toFloat()
                     }
                 }
 
