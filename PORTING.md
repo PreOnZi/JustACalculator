@@ -210,6 +210,25 @@ rotation bookkeeping the Android original carried around. On iOS the copy goes
 straight from the capture buffer into a Skia bitmap with no channel swap:
 Skia's N32 is little-endian BGRA there, which is what the buffer already holds.
 
+Two of the room's pieces are already shared:
+
+- **`renderSvgAsset`** — the stickers are vectors so they stay sharp anchored to
+  a face at any distance. AndroidSVG on Android; on iOS, Skia's own `SVGDOM`,
+  which is already linked in because Compose draws through Skia there. Prefer
+  the viewBox for the aspect ratio: an SVG's width/height attributes are often
+  absent or in physical units that say nothing about its proportions.
+- **`VanityLooks.kt`** — the nine colour grades. Compose's `ColorMatrix` has the
+  same 4x5 row-major layout as the `android.graphics` one, so the coefficients
+  port verbatim; the Android screen bridges with a one-line `toAndroid()`.
+
+  **What does not port is the concatenation.** Android's `postConcat` and
+  Compose's `timesAssign` multiply in opposite orders, and a grade built the
+  wrong way round still looks plausible. `after` spells the order out, and
+  **7 tests** pin it. Worth knowing: saturation and contrast *commute* (contrast
+  is affine per channel and luminance weights sum to 1), so the obvious
+  order-matters test using the Noir pair passes either way and proves nothing —
+  the real test uses a scale and an offset.
+
 What remains for the room itself is the compositing: `ColorMatrixColorFilter`,
 `RadialGradient`, `RenderEffect` blur and a stack of `android.graphics.Canvas`
 work, all of which have Compose counterparts (`ColorFilter.colorMatrix`,

@@ -6,8 +6,8 @@ import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PointF
@@ -144,77 +144,6 @@ private data class StickerAsset(
 private data class Placement(
     val image: ImageBitmap,
     val cx: Float, val cy: Float, val w: Float, val h: Float, val roll: Float,
-)
-
-// ── Colour / lighting "Look" filters ─────────────────────────────────────────
-// makeMatrix() returns a fresh ColorMatrix (or null for no grade); overlay is a
-// flat scrim drawn on top; vignette darkens the edges. swatch tints the chip.
-private class LookFilter(
-    val name: String,
-    val swatch: Color,
-    val points: Int,
-    val makeMatrix: () -> ColorMatrix?,
-    val overlay: Color? = null,
-    val vignette: Boolean = false,
-)
-
-private fun contrastMatrix(c: Float): ColorMatrix {
-    val t = (1f - c) / 2f * 255f
-    return ColorMatrix(floatArrayOf(
-        c, 0f, 0f, 0f, t,
-        0f, c, 0f, 0f, t,
-        0f, 0f, c, 0f, t,
-        0f, 0f, 0f, 1f, 0f,
-    ))
-}
-
-private val LOOKS: List<LookFilter> = listOf(
-    LookFilter("None", Color(0xFF3A3A3A), 0, { null }),
-    LookFilter("Warm", Color(0xFFE8A24C), 5, {
-        ColorMatrix(floatArrayOf(
-            1.12f, 0f, 0f, 0f, 12f,
-            0f, 1.00f, 0f, 0f, 4f,
-            0f, 0f, 0.85f, 0f, 0f,
-            0f, 0f, 0f, 1f, 0f,
-        ))
-    }),
-    LookFilter("Cool", Color(0xFF4C8FE8), 5, {
-        ColorMatrix(floatArrayOf(
-            0.88f, 0f, 0f, 0f, 0f,
-            0f, 1.00f, 0f, 0f, 0f,
-            0f, 0f, 1.15f, 0f, 8f,
-            0f, 0f, 0f, 1f, 0f,
-        ))
-    }),
-    LookFilter("Mono", Color(0xFF8A8A8A), 8, { ColorMatrix().apply { setSaturation(0f) } }),
-    LookFilter("Sepia", Color(0xFF9A7B4F), 8, {
-        ColorMatrix(floatArrayOf(
-            0.393f, 0.769f, 0.189f, 0f, 0f,
-            0.349f, 0.686f, 0.168f, 0f, 0f,
-            0.272f, 0.534f, 0.131f, 0f, 0f,
-            0f, 0f, 0f, 1f, 0f,
-        ))
-    }),
-    LookFilter("Vivid", Color(0xFFE83C8F), 12, { ColorMatrix().apply { setSaturation(1.6f) } }),
-    LookFilter("Noir", Color(0xFF101010), 15, {
-        ColorMatrix().apply { setSaturation(0f); postConcat(contrastMatrix(1.4f)) }
-    }, overlay = Color(0x14000000), vignette = true),
-    LookFilter("Dream", Color(0xFFF6A8C8), 12, {
-        ColorMatrix(floatArrayOf(
-            1.0f, 0f, 0f, 0f, 16f,
-            0f, 1.0f, 0f, 0f, 12f,
-            0f, 0f, 1.0f, 0f, 18f,
-            0f, 0f, 0f, 1f, 0f,
-        ))
-    }, overlay = Color(0x1FFF6FA8)),
-    LookFilter("Sunset", Color(0xFFFF7A3D), 15, {
-        ColorMatrix(floatArrayOf(
-            1.15f, 0f, 0f, 0f, 10f,
-            0f, 0.95f, 0f, 0f, 0f,
-            0f, 0f, 0.80f, 0f, 0f,
-            0f, 0f, 0f, 1f, 0f,
-        ))
-    }, overlay = Color(0x26FF7A3D), vignette = true),
 )
 
 @Composable
@@ -458,7 +387,7 @@ fun Building7VanityRoom(modifier: Modifier = Modifier, onComplete: () -> Unit = 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val m = if (bodyMode.value) null else look.makeMatrix()
             previewView.setRenderEffect(
-                m?.let { RenderEffect.createColorFilterEffect(ColorMatrixColorFilter(it)) }
+                m?.let { RenderEffect.createColorFilterEffect(ColorMatrixColorFilter(it.toAndroid())) }
             )
         }
     }
@@ -854,7 +783,7 @@ private fun drawBodyComposite(
                 postTranslate(ex - faceCx * s, ey - faceCy * s)
             }
             val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-            look.makeMatrix()?.let { paint.colorFilter = ColorMatrixColorFilter(it) }
+            look.makeMatrix()?.let { paint.colorFilter = ColorMatrixColorFilter(it.toAndroid()) }
             nc.drawBitmap(fb, mtx, paint)
             nc.restore()
         }
@@ -937,7 +866,7 @@ private fun captureAndSave(
 
         // Base photo with the Look colour grade baked in.
         val basePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-        look.makeMatrix()?.let { basePaint.colorFilter = ColorMatrixColorFilter(it) }
+        look.makeMatrix()?.let { basePaint.colorFilter = ColorMatrixColorFilter(it.toAndroid()) }
         canvas.drawBitmap(mirrored, 0f, 0f, basePaint)
         if (upright != mirrored) upright.recycle()
         mirrored.recycle()
@@ -1000,7 +929,7 @@ private fun captureBodyAndSave(
             postTranslate(ex - faceCx * s, ey - faceCy * s)
         }
         val camPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-        look.makeMatrix()?.let { camPaint.colorFilter = ColorMatrixColorFilter(it) }
+        look.makeMatrix()?.let { camPaint.colorFilter = ColorMatrixColorFilter(it.toAndroid()) }
         nc.drawBitmap(frame, mtx, camPaint)
         nc.restore()
         frame.recycle()
@@ -1069,3 +998,10 @@ fun loadVanityCapturePaths(context: android.content.Context, max: Int = 2): List
         ?.map { it.absolutePath }
         ?: emptyList()
 }
+
+/**
+ * The grades are defined with Compose's ColorMatrix so both platforms share
+ * them; the android.graphics paint API needs its own type. Same 4x5 row-major
+ * layout, so the coefficients pass straight through.
+ */
+private fun ColorMatrix.toAndroid() = android.graphics.ColorMatrix(values)
