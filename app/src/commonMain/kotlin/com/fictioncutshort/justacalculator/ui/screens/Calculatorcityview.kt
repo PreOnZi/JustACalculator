@@ -63,6 +63,15 @@ import kotlin.math.*
 // Ambient audio mix levels (0..1) for the looping wind bed and footstep bed.
 // Two wind loops play offset by half the clip at this (lower) volume each, so
 // their fade-tails overlap and the bed never drops to silence at the loop seam.
+/**
+ * How long the UNSTUCK button stays up after the player stops pushing.
+ *
+ * The move loop ticks every 16 ms, so this is roughly five seconds — long
+ * enough to let go of the stick and reach across for the button without
+ * hurrying, short enough that it does not linger once they are walking again.
+ */
+private const val UNSTUCK_LINGER_FRAMES = 300
+
 private const val WIND_VOL = 0.26f
 private const val STEPS_VOL = 0.6f
 
@@ -1367,6 +1376,7 @@ fun CalculatorCityView(
         fun buzz(ms: Long) = vibrate(context, ms, amplitude = 200)
         var bridgeDarkOverride = false
         var stuckFrames = 0        // frames spent pushing to walk while pinned in place
+        var unstuckLinger = 0      // frames the button stays up after the stick is released
         while (true) {
             delay(16)
             lavaShift = (lavaShift + 0.003f) % 1f
@@ -1555,13 +1565,29 @@ fun CalculatorCityView(
 
                 // "Stuck" detection: the player is pushing to walk (meaningful
                 // forward/back input) but barely moved. After ~0.7s of that,
-                // surface the UNSTUCK button. Any real movement, or letting go of
-                // the stick, clears it.
+                // surface the UNSTUCK button.
+                //
+                // Once shown the button LATCHES. It used to hide the moment
+                // `tryingToWalk` went false, which is exactly what happens when
+                // the player lets go of the stick to reach for it — so it
+                // vanished before it could ever be pressed. Only real movement,
+                // or a few seconds of neither, takes it away now.
                 val tryingToWalk = !controlsLocked && abs(jFwd) > 0.28f
                 val movedD2 = (pX - preMoveX) * (pX - preMoveX) + (pZ - preMoveZ) * (pZ - preMoveZ)
-                if (tryingToWalk && movedD2 < 0.6f) stuckFrames++ else stuckFrames = 0
-                val wantUnstuck = stuckFrames > 44
-                if (wantUnstuck != showUnstuck) showUnstuck = wantUnstuck
+                val movedForReal = movedD2 >= 0.6f
+                if (tryingToWalk && !movedForReal) stuckFrames++ else stuckFrames = 0
+
+                if (stuckFrames > 44) {
+                    showUnstuck = true
+                    unstuckLinger = UNSTUCK_LINGER_FRAMES   // refreshed while still wedged
+                } else if (showUnstuck) {
+                    if (movedForReal) {
+                        showUnstuck = false
+                        unstuckLinger = 0
+                    } else if (--unstuckLinger <= 0) {
+                        showUnstuck = false
+                    }
+                }
 
                 // Fulfil an UNSTUCK tap: hop the player to the nearest open spot,
                 // preferring straight back (the way they came), then a widening
@@ -1587,6 +1613,7 @@ fun CalculatorCityView(
                         if (freed) break
                     }
                     stuckFrames = 0
+                    unstuckLinger = 0
                     showUnstuck = false
                 }
 
