@@ -8,6 +8,7 @@ import com.fictioncutshort.justacalculator.util.vibrate
 import com.fictioncutshort.justacalculator.platform.currentAppContext
 import kotlin.math.hypot
 import com.fictioncutshort.justacalculator.platform.nowMillis
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -71,6 +72,18 @@ import kotlin.math.*
  * hurrying, short enough that it does not linger once they are walking again.
  */
 private const val UNSTUCK_LINGER_FRAMES = 300
+
+/** How far the player can look up or down, in degrees. */
+private const val PITCH_LIMIT = 70f
+
+/**
+ * Fraction of the current pitch kept each 16 ms tick once the finger lifts —
+ * about a second to settle back to level from a full tilt.
+ */
+private const val PITCH_EASE_RETAIN = 0.92f
+
+/** Degrees of camera rotation per pixel dragged. */
+private const val LOOK_SENSITIVITY = 0.18f
 
 private const val WIND_VOL = 0.26f
 private const val STEPS_VOL = 0.6f
@@ -513,6 +526,12 @@ fun CalculatorCityView(
     var pX     by rememberSaveable { mutableStateOf(if (introAlreadyDone) cityPrefs.getFloat("pos_x_$posKey", startX) else startX) }
     var pZ     by rememberSaveable { mutableStateOf(if (introAlreadyDone) cityPrefs.getFloat("pos_z_$posKey", startZ) else startZ) }
     var camYaw by rememberSaveable { mutableStateOf(if (introAlreadyDone) cityPrefs.getFloat("pos_yaw_$posKey", 0f) else 0f) }
+    // Look pitch, driven by dragging the view. Not saved: it eases back to level
+    // on its own, so there is never a meaningful value to restore.
+    var camPitch by remember { mutableStateOf(0f) }
+    // True while a look-drag is in progress, so the ease-back holds off until
+    // the finger lifts.
+    var isLooking by remember { mutableStateOf(false) }
 
     // Persist position ~1×/s so even a swipe-kill loses at most a second of walk.
     LaunchedEffect(Unit) {
@@ -1416,18 +1435,34 @@ fun CalculatorCityView(
                     continue
                 }
 
-                // Yaw from joystick X; no pitch control (camera stays level). The
-                // monster's dart finale locks out all control while it closes in.
+                // The stick moves, dragging the view looks — the standard mobile
+                // FPS split. The stick used to steer, which meant you could not
+                // look at anything without also driving into it.
+                // The monster's dart finale locks out all control while it closes in.
                 val doorSeqActive = doorOpeningDigit != null
                 val controlsLocked = doorSeqActive || monsterLock
-                if (!controlsLocked) camYaw += joyX * 3.0f
                 val cr = ((camYaw.toDouble()) * kotlin.math.PI / 180.0)
 
-                // Forward/backward from joystick Y (push up = forward)
-                val jFwd = if (controlsLocked) 0f else -joyY
+                // Pitch eases back to level whenever the player is not actively
+                // looking, so nobody ends up walking while staring at the sky.
+                if (!isLooking && camPitch != 0f) {
+                    camPitch *= PITCH_EASE_RETAIN
+                    if (abs(camPitch) < 0.35f) camPitch = 0f
+                }
+                // Only drive the camera while the player actually has control.
+                // The door-opening and building-entry sequences animate pitch
+                // themselves from their own effects; writing it every tick here
+                // would fight them mid-transition.
+                if (!controlsLocked) renderer.camPitch = camPitch
+
+                // Forward/back on the stick's Y, strafe on its X.
+                val jFwd    = if (controlsLocked) 0f else -joyY
+                val jStrafe = if (controlsLocked) 0f else joyX
                 val spd = 2.2f
-                val dx = (sin(cr) * jFwd * spd).toFloat()
-                val dz = (-cos(cr) * jFwd * spd).toFloat()
+                val fX = sin(cr).toFloat();  val fZ = -cos(cr).toFloat()   // forward
+                val rX = cos(cr).toFloat();  val rZ = sin(cr).toFloat()    // right
+                val dx = (fX * jFwd + rX * jStrafe) * spd
+                val dz = (fZ * jFwd + rZ * jStrafe) * spd
 
                 // Portrait west bound extended by one street width (matches the
                 // renderer's WEST_LANE) so the player can step into the lane west
@@ -1572,7 +1607,7 @@ fun CalculatorCityView(
                 // the player lets go of the stick to reach for it — so it
                 // vanished before it could ever be pressed. Only real movement,
                 // or a few seconds of neither, takes it away now.
-                val tryingToWalk = !controlsLocked && abs(jFwd) > 0.28f
+                val tryingToWalk = !controlsLocked && (abs(jFwd) > 0.28f || abs(jStrafe) > 0.28f)
                 val movedD2 = (pX - preMoveX) * (pX - preMoveX) + (pZ - preMoveZ) * (pZ - preMoveZ)
                 val movedForReal = movedD2 >= 0.6f
                 if (tryingToWalk && !movedForReal) stuckFrames++ else stuckFrames = 0
@@ -2499,9 +2534,32 @@ fun CalculatorCityView(
         // Orientation now comes from the composition rather than the factory's
         // AppContext, so it also tracks rotation instead of being read once.
         renderer.isLandscape = screenMetrics().isLandscape
+        // Drag anywhere on the view to look around.
+        //
+        // This sits directly on the GL surface, beneath every control and tap
+        // target in the Box, so the joystick, UNSTUCK and the door prompts all
+        // get first refusal on a touch. detectDragGestures only claims a
+        // pointer once it has actually travelled, so simple taps still fall
+        // through to whatever is underneath.
         PlatformGlSurface(
             renderer = renderer,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectDragGestures(
+                        onDragStart = { isLooking = true },
+                        onDragEnd = { isLooking = false },
+                        onDragCancel = { isLooking = false },
+                    ) { change, drag ->
+                        change.consume()
+                        camYaw += drag.x * LOOK_SENSITIVITY
+                        // Screen y grows downward, so dragging down should tip
+                        // the view down: negate to keep it natural rather than
+                        // inverted.
+                        camPitch = (camPitch - drag.y * LOOK_SENSITIVITY)
+                            .coerceIn(-PITCH_LIMIT, PITCH_LIMIT)
+                    }
+                },
             // A full-screen minigame hides the city entirely; rendering it
             // underneath is heat and battery for pixels nobody sees. The scene
             // stays built, so coming back is instant.
