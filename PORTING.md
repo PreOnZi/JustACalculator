@@ -342,6 +342,29 @@ The 64 call signatures are enumerated by grepping
   is an empty placeholder), launch screen, and a real `DEVELOPMENT_TEAM` in
   `iosApp/Configuration/Config.xcconfig` for device builds and TestFlight.
 
+## Asset weight
+
+Shipped assets are ~56 MB (down from ~89 MB); the rest of the repo —
+`design-sources/`, `iosApp/`, tests, `.github/` — does not reach the app.
+
+Checked and clean, so do not go looking again:
+
+- **No unused assets.** The ones that look unreferenced (`bridge5.obj`,
+  `debris7.obj`, `spikes3.obj`…) are loaded by constructed names like
+  `"models/bridge/bridge${i+1}.obj"`.
+- **No duplication** between `commonMain/assets` and `composeResources`.
+- `androidMain/res/raw` holds only `keep.xml`.
+
+**Do not convert the voiceover to mono.** It has been tried and reverted once.
+The channels carry genuinely different content — the L−R difference peaks at
+−3.3 dB and averages −22 dB on vo034 — so these are true stereo recordings,
+not dual-mono. Collapsing them loses audio and can phase-cancel. Lowering the
+stereo bitrate is the safe lever if the ~19 MB of voiceover ever has to shrink.
+
+`models/mutebutton.obj` is 3.9 MB and looks like an over-tessellated button.
+It is not: the mute button is the *outside* of an entire room, and the geometry
+is the interior. Leave it.
+
 ## Notes
 
 - The "ads" are in-fiction; there is no AdMob/Play Services dependency to port.
