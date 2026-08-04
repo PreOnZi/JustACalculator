@@ -85,8 +85,15 @@ private const val PITCH_LIMIT = 70f
  */
 private const val PITCH_EASE_RETAIN = 0.92f
 
-/** Degrees of camera rotation per pixel dragged. */
-private const val LOOK_SENSITIVITY = 0.18f
+/**
+ * Degrees of camera rotation per **dp** dragged.
+ *
+ * Per dp, not per pixel: the raw drag deltas are in pixels, so tying
+ * sensitivity to them made the camera turn three times as far per swipe on a
+ * 3x screen as on a 1x one. At 0.30 a swipe across a ~400 dp portrait screen
+ * turns about 120 degrees, which is roughly half the old effective rate.
+ */
+private const val LOOK_SENSITIVITY = 0.30f
 
 private const val WIND_VOL = 0.26f
 private const val STEPS_VOL = 0.6f
@@ -2565,10 +2572,16 @@ fun CalculatorCityView(
                         onDragCancel = { isLooking = false },
                     ) { change, drag ->
                         change.consume()
-                        camYaw += drag.x * LOOK_SENSITIVITY
+                        // Convert to dp first. `drag` is in raw pixels, so
+                        // sensitivity used to scale with screen density — the
+                        // same swipe turned three times as far on a 3x phone as
+                        // on a 1x one.
+                        val dxDp = drag.x.toDp().value
+                        val dyDp = drag.y.toDp().value
+                        camYaw += dxDp * LOOK_SENSITIVITY
                         // Screen y grows downward, so negating gives drag-up =
                         // look-up. Verified on device — do not "fix" the sign.
-                        camPitch = (camPitch - drag.y * LOOK_SENSITIVITY)
+                        camPitch = (camPitch - dyDp * LOOK_SENSITIVITY)
                             .coerceIn(-PITCH_LIMIT, PITCH_LIMIT)
                     }
                 },
