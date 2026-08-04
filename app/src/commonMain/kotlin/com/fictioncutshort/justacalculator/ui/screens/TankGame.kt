@@ -528,8 +528,8 @@ private fun InstaPost(name: String, image: Any?, caption: String) {
 }
 
 // ── TukTak feed ───────────────────────────────────────────────────────────────
-// Exactly one of imageRes / videoRes is set. The video autoplays looping WITH
-// sound (the obnoxious social-feed effect).
+// Exactly one of imageRes / videoRes is set. Videos autoplay looping but start
+// MUTED — tapping one turns its sound on, and unmutes only that post.
 private data class TukPostData(val name: String, val imageRes: DrawableResource?, val videoRes: String?, val caption: String)
 
 @Composable
@@ -539,8 +539,15 @@ private fun AppSocialTikTok() {
             TukPostData("MarytheInfluencer", Res.drawable.social04, null,
                 "Feeling sparkly with my Mucy earrings, Guli necklace and the most gorgeous Fuki shoulder chains! See my link below."),
             TukPostData("SexyMan", null, "socialvid01", "LINK"),
+            TukPostData("MarytheInfluencer", null, "socialvid02",
+                "Running late but still had time for my @starsucks signature drink. " +
+                    "Get my drink today in store and in the app!"),
         )
     }
+    // Which feed slot currently has sound. One at a time: two obnoxious videos
+    // talking over each other is noise, not satire.
+    var unmutedIndex by remember { mutableStateOf<Int?>(null) }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(Color.Black),
         userScrollEnabled = !LocalScrollLag.current
@@ -555,7 +562,12 @@ private fun AppSocialTikTok() {
                     .background(Color.Black)
             ) {
                 when {
-                    p.videoRes != null -> TukTakVideo(p.videoRes, Modifier.fillMaxSize())
+                    p.videoRes != null -> TukTakVideo(
+                        res = p.videoRes,
+                        muted = unmutedIndex != idx,
+                        onTap = { unmutedIndex = if (unmutedIndex == idx) null else idx },
+                        modifier = Modifier.fillMaxSize(),
+                    )
                     p.imageRes != null -> AsyncImage(
                         model = p.imageRes,
                         contentDescription = null,
@@ -586,10 +598,43 @@ private fun AppSocialTikTok() {
     }
 }
 
-// Looping, audible full-bleed video card for TukTak.
+/**
+ * Looping full-bleed video card for TukTak, silent until tapped.
+ *
+ * A muted badge sits in the corner while it is silent — without it the video
+ * just looks like it has no audio, and the player never discovers the tap.
+ */
 @Composable
-private fun TukTakVideo(res: String, modifier: Modifier = Modifier) {
-    PlatformVideoPlayer(assetPath = Sounds.path(res).orEmpty(), modifier = modifier)
+private fun TukTakVideo(
+    res: String,
+    muted: Boolean,
+    onTap: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier.clickable(
+            indication = null,
+            interactionSource = remember { MutableInteractionSource() },
+            onClick = onTap,
+        )
+    ) {
+        PlatformVideoPlayer(
+            assetPath = Sounds.path(res).orEmpty(),
+            modifier = Modifier.fillMaxSize(),
+            muted = muted,
+        )
+        if (muted) {
+            Text(
+                text = "🔇",
+                fontSize = 18.sp,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(14.dp)
+                    .background(Color.Black.copy(alpha = 0.45f), CircleShape)
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+            )
+        }
+    }
 }
 // Dumbazon product. `margin` is how many giftcards the price always sits ABOVE
 // the player's balance — different per phone, so each stays just out of reach.

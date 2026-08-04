@@ -2,6 +2,7 @@ package com.fictioncutshort.justacalculator.platform
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.UIKitView
@@ -13,6 +14,7 @@ import platform.AVFoundation.AVPlayerLayer
 import platform.AVFoundation.pause
 import platform.AVFoundation.play
 import platform.AVFoundation.seekToTime
+import platform.AVFoundation.setVolume
 import platform.CoreMedia.CMTimeMake
 import platform.Foundation.NSNotificationCenter
 import platform.Foundation.NSURL
@@ -24,7 +26,7 @@ import platform.CoreGraphics.CGRect
 
 @OptIn(ExperimentalForeignApi::class)
 @Composable
-actual fun PlatformVideoPlayer(assetPath: String, modifier: Modifier) {
+actual fun PlatformVideoPlayer(assetPath: String, modifier: Modifier, muted: Boolean) {
     val player = remember {
         val path = Assets.uri(assetPath).removePrefix("file://")
         AVPlayer(uRL = NSURL.fileURLWithPath(path))
@@ -44,6 +46,8 @@ actual fun PlatformVideoPlayer(assetPath: String, modifier: Modifier) {
             NSNotificationCenter.defaultCenter.removeObserver(observer)
         }
     }
+
+    LaunchedEffect(muted) { player.setVolume(if (muted) 0f else 1f) }
 
     UIKitView(
         factory = {

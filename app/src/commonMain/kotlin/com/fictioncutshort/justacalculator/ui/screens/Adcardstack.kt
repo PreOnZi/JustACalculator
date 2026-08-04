@@ -11,6 +11,7 @@ import com.fictioncutshort.justacalculator.resources.adspexeso_5
 import com.fictioncutshort.justacalculator.resources.adspexeso_4
 import com.fictioncutshort.justacalculator.resources.adspexeso_3
 import com.fictioncutshort.justacalculator.resources.adspexeso_25
+import com.fictioncutshort.justacalculator.resources.adspexeso_26
 import com.fictioncutshort.justacalculator.resources.adspexeso_24
 import com.fictioncutshort.justacalculator.resources.adspexeso_23
 import com.fictioncutshort.justacalculator.resources.adspexeso_22
@@ -145,7 +146,9 @@ private fun buildCardStack(): List<AdCard> {
         Res.drawable.adspexeso_22,
         Res.drawable.adspexeso_23,
         Res.drawable.adspexeso_24,
-        Res.drawable.adspexeso_25,
+        // The last card names the store the player would have come from, so it
+        // differs per platform: _25 says Play, _26 says App Store.
+        lastSwipeCard(),
     )
     val swipeOnly = (0 until 5).map { i ->
         AdCard(

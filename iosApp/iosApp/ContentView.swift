@@ -15,6 +15,11 @@ struct ComposeView: UIViewControllerRepresentable {
 
 struct ContentView: View {
     var body: some View {
+        // Compose owns the full screen and insets itself — see
+        // MainViewController.kt. Letting SwiftUI inset here as well would
+        // double up, and would also zero out the insets Compose reports, so
+        // the screens that position against them would drift.
         ComposeView()
+            .ignoresSafeArea(.all)
     }
 }

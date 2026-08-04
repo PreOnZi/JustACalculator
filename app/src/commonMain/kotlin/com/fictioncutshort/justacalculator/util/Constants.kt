@@ -12,7 +12,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.fictioncutshort.justacalculator.resources.Res
-import com.fictioncutshort.justacalculator.resources.calculator_lcd
+import com.fictioncutshort.justacalculator.resources.calcdigit
 import org.jetbrains.compose.resources.Font
 
 /**
@@ -85,7 +85,7 @@ val CalculatorDisplayFont: FontFamily
     // Compose Resources loads fonts from a composition, so this is a composable
     // getter rather than a top-level val. Call sites are unchanged.
     @Composable get() = FontFamily(
-        Font(Res.font.calculator_lcd, FontWeight.Normal)
+        Font(Res.font.calcdigit, FontWeight.Normal)
     )
 
 // ═══════════════════════════════════════════════════════════════════════════

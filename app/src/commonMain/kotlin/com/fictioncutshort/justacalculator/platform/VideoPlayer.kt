@@ -4,11 +4,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 
 /**
- * A looping, audible video from a bundled asset — the in-fiction social feed
- * clips. Android uses VideoView, iOS an AVPlayer layer.
+ * A looping video from a bundled asset — the in-fiction social feed clips.
+ * Android uses VideoView, iOS an AVPlayer layer.
+ *
+ * [muted] starts true so a feed can be scrolled in silence and only speaks when
+ * the player asks it to, which is what both real apps and app-store review
+ * expect. Autoplaying audio was the old behaviour and made the phone detour
+ * unusable with several posts on screen at once.
  */
 @Composable
-expect fun PlatformVideoPlayer(assetPath: String, modifier: Modifier = Modifier)
+expect fun PlatformVideoPlayer(
+    assetPath: String,
+    modifier: Modifier = Modifier,
+    muted: Boolean = true,
+)
 
 /**
  * Paths of selfies the player saved in Building 7's vanity room, newest first.
