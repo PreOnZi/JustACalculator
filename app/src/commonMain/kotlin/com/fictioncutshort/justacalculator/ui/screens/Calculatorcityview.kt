@@ -71,6 +71,9 @@ import kotlin.math.*
  * enough to let go of the stick and reach across for the button without
  * hurrying, short enough that it does not linger once they are walking again.
  */
+/** How far the portrait joystick sits from the left edge. */
+private val JOY_EDGE_INSET = 24.dp
+
 private const val UNSTUCK_LINGER_FRAMES = 300
 
 /** How far the player can look up or down, in degrees. */
@@ -2563,11 +2566,9 @@ fun CalculatorCityView(
                     ) { change, drag ->
                         change.consume()
                         camYaw += drag.x * LOOK_SENSITIVITY
-                        // Drag up to look up. The sign here is empirical — it is
-                        // the one that reads correctly on a device, whatever the
-                        // combination of screen-space y, the look-at target and
-                        // the view matrix works out to.
-                        camPitch = (camPitch + drag.y * LOOK_SENSITIVITY)
+                        // Screen y grows downward, so negating gives drag-up =
+                        // look-up. Verified on device — do not "fix" the sign.
+                        camPitch = (camPitch - drag.y * LOOK_SENSITIVITY)
                             .coerceIn(-PITCH_LIMIT, PITCH_LIMIT)
                     }
                 },
@@ -2589,8 +2590,11 @@ fun CalculatorCityView(
                     .align(Alignment.CenterEnd)
                     .padding(end = 24.dp)
                 else Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 36.dp),
+                    // Bottom-LEFT in portrait, not centred: the right of the
+                    // screen is now the look area, and a centred stick put the
+                    // walking thumb in the middle of it.
+                    .align(Alignment.BottomStart)
+                    .padding(start = JOY_EDGE_INSET, bottom = 36.dp),
                 onJoy    = { x, y -> joyX = x; joyY = y },
                 onTap    = {
                     // Five quick taps on the stick opens the (passcode-gated) debug
@@ -2617,9 +2621,13 @@ fun CalculatorCityView(
                             .padding(end = 24.dp)
                             .offset(x = -(joySize + 72.dp))
                     else
-                        Modifier.align(Alignment.BottomCenter)
-                            .padding(bottom = 36.dp + joySize / 2 - 22.dp)
-                            .offset(x = -(joySize / 2 + 66.dp)))
+                        // To the RIGHT of the stick now that the stick is in the
+                        // corner — there is no room left of it any more.
+                        Modifier.align(Alignment.BottomStart)
+                            .padding(
+                                start = JOY_EDGE_INSET + joySize + 16.dp,
+                                bottom = 36.dp + joySize / 2 - 22.dp,
+                            ))
                         .background(Color(0xCC2A2320), RoundedCornerShape(12.dp))
                         .border(1.5.dp, Color(0xFFE0A24E), RoundedCornerShape(12.dp))
                         .clickable(
