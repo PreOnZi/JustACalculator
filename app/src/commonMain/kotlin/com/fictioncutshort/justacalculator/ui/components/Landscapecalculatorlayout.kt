@@ -1,6 +1,5 @@
 package com.fictioncutshort.justacalculator.ui.components
 
-import com.fictioncutshort.justacalculator.platform.PlatformCameraPreview
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -100,7 +99,7 @@ fun LandscapeCalculatorContent(
                         .fillMaxHeight(0.5f)
                         .padding(vertical = 8.dp)
                 ) {
-                    PlatformCameraPreview(
+                    CameraPreview(
                         modifier = Modifier
                             .fillMaxSize()
                             .clip(RoundedCornerShape(12.dp)),

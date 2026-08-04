@@ -1,7 +1,6 @@
 package com.fictioncutshort.justacalculator.ui.components
 
 import com.fictioncutshort.justacalculator.platform.PlatformWebView
-import com.fictioncutshort.justacalculator.platform.PlatformCameraPreview
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -86,7 +85,7 @@ fun PortraitCalculatorContent(
                 // Top quarter stays clear for the message/talk overlay.
                 // Camera fills the remaining three quarters above the keyboard area.
                 Spacer(Modifier.weight(1f))
-                PlatformCameraPreview(
+                CameraPreview(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(3f),

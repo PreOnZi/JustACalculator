@@ -1,5 +1,6 @@
 package com.fictioncutshort.justacalculator.platform
 
+import android.content.ContentUris
 import android.content.ContentValues
 import android.graphics.Bitmap
 import android.os.Build
@@ -52,3 +53,37 @@ actual fun showToast(message: String) {
 private val dateTimeFormat by lazy { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
 
 actual fun formatDateTime(millis: Long): String = dateTimeFormat.format(Date(millis))
+
+actual fun capturedImagePaths(max: Int): List<String> {
+    val out = mutableListOf<String>()
+    val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+    } else {
+        MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+    }
+    val projection = arrayOf(
+        MediaStore.Images.Media._ID,
+        MediaStore.Images.Media.DISPLAY_NAME,
+    )
+    val (selection, args) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        // RELATIVE_PATH is the directory under DCIM/Pictures/Movies/etc.
+        "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ?" to arrayOf("%DCIM/JustACalculator%")
+    } else {
+        "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?" to arrayOf("calculator_%")
+    }
+    val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
+
+    try {
+        AppInit.context.contentResolver
+            .query(collection, projection, selection, args, sortOrder)?.use { c ->
+                val idCol = c.getColumnIndex(MediaStore.Images.Media._ID)
+                if (idCol < 0) return@use
+                while (c.moveToNext() && out.size < max) {
+                    out += ContentUris.withAppendedId(collection, c.getLong(idCol)).toString()
+                }
+            }
+    } catch (_: SecurityException) {
+        // No media-images permission — return what we have (likely empty).
+    }
+    return out
+}

@@ -5,14 +5,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 
 @Composable
-actual fun PlatformPhoneCameraApp(onClose: () -> Unit) =
-    com.fictioncutshort.justacalculator.ui.components.PhoneCameraApp(onClose)
-
-@Composable
-actual fun PlatformPhonePicturesApp(onClose: () -> Unit) =
-    com.fictioncutshort.justacalculator.ui.components.PhonePicturesApp(onClose)
-
-@Composable
 actual fun PlatformModelViewer(modelFile: String, modifier: Modifier) {
     com.fictioncutshort.justacalculator.ui.screens.SceneViewModel(modelFile, modifier)
 }

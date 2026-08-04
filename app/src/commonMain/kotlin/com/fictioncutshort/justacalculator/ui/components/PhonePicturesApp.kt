@@ -1,9 +1,5 @@
 package com.fictioncutshort.justacalculator.ui.components
 
-import android.content.Context
-import android.net.Uri
-import android.os.Build
-import android.provider.MediaStore
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +22,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,29 +33,29 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.fictioncutshort.justacalculator.platform.capturedImagePaths
 
 /**
- * Gallery of pictures previously captured by the in-story camera. Reads from
- * MediaStore filtered by `RELATIVE_PATH = DCIM/JustACalculator/` (Android 10+),
- * or by display-name prefix `calculator_` on older versions.
+ * Gallery of pictures previously captured by the in-story camera.
+ *
+ * Where the captures live is the platform's business (see `capturedImagePaths`);
+ * this only knows they are strings the image loader can resolve.
  *
  * Empty state shows a plain message — no permission is requested here; if the
- * user never granted READ_MEDIA_IMAGES the list is empty rather than crashing.
+ * user never granted media access the list is empty rather than crashing.
  */
 @Composable
 fun PhonePicturesApp(onClose: () -> Unit) {
-    val context = LocalContext.current
-    var images by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var images by remember { mutableStateOf<List<String>>(emptyList()) }
     var loaded by remember { mutableStateOf(false) }
-    var preview by remember { mutableStateOf<Uri?>(null) }
+    var preview by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
-        images = loadCalculatorImages(context)
+        images = withContext(Dispatchers.Default) { capturedImagePaths() }
         loaded = true
     }
 
@@ -116,16 +114,16 @@ fun PhonePicturesApp(onClose: () -> Unit) {
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        items(images) { uri ->
+                        items(images) { path ->
                             AsyncImage(
-                                model = uri,
+                                model = path,
                                 contentDescription = null,
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .aspectRatio(1f)
                                     .clip(RoundedCornerShape(6.dp))
-                                    .clickable { preview = uri }
+                                    .clickable { preview = path }
                             )
                         }
                     }
@@ -152,39 +150,4 @@ fun PhonePicturesApp(onClose: () -> Unit) {
             }
         }
     }
-}
-
-private fun loadCalculatorImages(context: Context): List<Uri> {
-    val out = mutableListOf<Uri>()
-    val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
-    } else {
-        MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-    }
-    val projection = arrayOf(
-        MediaStore.Images.Media._ID,
-        MediaStore.Images.Media.DISPLAY_NAME
-    )
-
-    val (selection, args) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        // RELATIVE_PATH is the directory under DCIM/Pictures/Movies/etc.
-        "${MediaStore.Images.Media.RELATIVE_PATH} LIKE ?" to arrayOf("%DCIM/JustACalculator%")
-    } else {
-        "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?" to arrayOf("calculator_%")
-    }
-    val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
-
-    try {
-        context.contentResolver.query(collection, projection, selection, args, sortOrder)?.use { c ->
-            val idCol = c.getColumnIndex(MediaStore.Images.Media._ID)
-            if (idCol < 0) return@use
-            while (c.moveToNext()) {
-                val id = c.getLong(idCol)
-                out += android.content.ContentUris.withAppendedId(collection, id)
-            }
-        }
-    } catch (e: SecurityException) {
-        // No media-images permission — return what we have (likely empty).
-    }
-    return out
 }

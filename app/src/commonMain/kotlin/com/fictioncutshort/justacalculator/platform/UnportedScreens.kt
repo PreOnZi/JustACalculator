@@ -15,14 +15,6 @@ import androidx.compose.ui.graphics.ImageBitmap
  * which is exactly what happened to the debug-menu gate.
  */
 
-/** The phone's camera app — CameraX; iOS wants AVFoundation. */
-@Composable
-expect fun PlatformPhoneCameraApp(onClose: () -> Unit)
-
-/** The phone's gallery — reads MediaStore; iOS wants PhotoKit. */
-@Composable
-expect fun PlatformPhonePicturesApp(onClose: () -> Unit)
-
 /** Interactive 3D model viewer — SceneView/Filament, no iOS counterpart. */
 @Composable
 expect fun PlatformModelViewer(modelFile: String, modifier: Modifier = Modifier)

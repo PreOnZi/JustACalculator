@@ -171,9 +171,6 @@ and one of those was blocking entry to the whole city.
 |---|---|
 | `PlatformDoor4Room` | `CVOpenGLESTextureCache` camera texture |
 | `PlatformBuilding7VanityRoom` | AVFoundation + Vision face landmarks |
-| `PlatformPhoneCameraApp` | AVFoundation capture |
-| `PlatformPhonePicturesApp` | PhotoKit |
-| `PlatformCameraPreview` | AVFoundation capture |
 | `PlatformModelViewer` / `rememberModelIcon` | SceneKit, or offscreen GL |
 
 ## Remaining
@@ -189,9 +186,27 @@ table. What is left, largest first:
 |---|---|---|
 | `Door4Room` | 1,782 | `GL_TEXTURE_EXTERNAL_OES` + `SurfaceTexture` (26 uses) → `CVOpenGLESTextureCache` |
 | `Building7VanityRoom` | 1,071 | CameraX + ML Kit → AVFoundation + Vision |
-| `Camerapreview` | 287 | AVFoundation capture |
 | `ModelBitmap` | 285 | offscreen EGL pbuffer |
-| `PhonePicturesApp` | 190 | MediaStore → PhotoKit |
+
+The camera cluster (`Camerapreview`, `PhoneCameraApp`, `PhonePicturesApp`) came
+down to one narrow seam, `PlatformCameraSurface`. The viewfinder is mostly
+Compose drawing — the scan grid, the sweep line, the HUD brackets and the colour
+classification are all shared — so the seam carries only pixels on screen, a
+coarse colour readout, and one saved photo.
+
+- **The colour readout is a flat `IntArray` of packed ARGB**, one entry per grid
+  cell, filled platform-side. iOS samples straight out of the BGRA pixel buffer
+  rather than building an image: this runs per frame on the capture queue, and
+  allocating a full-size bitmap to read a hundred-odd pixels would cost more
+  than everything else the preview does.
+- **`AVCaptureVideoPreviewLayer` does not resize with its host view**, so it is
+  reframed in the `update` pass. Skipping that leaves it zero-sized and nothing
+  appears — no error, just a black rectangle.
+- **iOS keeps its own copy of every capture** (`CaptureStore`). Adding to the
+  photo library needs only `NSPhotoLibraryAddUsageDescription`, but reading it
+  back would need full library access — a much larger ask for a fake phone's
+  photo grid. Android keeps reading MediaStore, where the captures really do
+  land. `capturedImagePaths` hides the difference.
 
 `Building5Map` split at the map surface: the destination picking, the Overpass
 and OSRM queries, and the whole console UI are shared, and only the map view

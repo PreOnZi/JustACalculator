@@ -18,14 +18,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
-actual fun PlatformPhoneCameraApp(onClose: () -> Unit) =
-    NotPortedYet("Camera", "Needs the AVFoundation capture port.", onClose)
-
-@Composable
-actual fun PlatformPhonePicturesApp(onClose: () -> Unit) =
-    NotPortedYet("Pictures", "Needs the PhotoKit gallery port.", onClose)
-
-@Composable
 actual fun PlatformModelViewer(modelFile: String, modifier: Modifier) =
     NotPortedYet("3D model viewer", "SceneView/Filament has no iOS counterpart.", {})
 

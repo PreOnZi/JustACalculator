@@ -1,7 +1,5 @@
 package com.fictioncutshort.justacalculator.ui.components
 
-import com.fictioncutshort.justacalculator.platform.PlatformPhonePicturesApp
-import com.fictioncutshort.justacalculator.platform.PlatformPhoneCameraApp
 import com.fictioncutshort.justacalculator.platform.TypingClicker
 import com.fictioncutshort.justacalculator.platform.screenMetrics
 import com.fictioncutshort.justacalculator.platform.currentAppContext
@@ -496,14 +494,14 @@ private fun AppHost(
         "aggitatedbirds" -> GrowingBirdsPopup(onClose = onClose)
 
         // ─── Functional mini-apps ───────────────────────────────────────────
-        "camera"    -> PlatformPhoneCameraApp(onClose = onClose)
+        "camera"    -> PhoneCameraApp(onClose = onClose)
         "phone"     -> PhoneKeypadApp(
             onClose = onClose,
             initialNumber = keypadInitialNumber,
             onPlaceCall = onPlaceCall
         )
         "phonebook" -> PhonePhonebookApp(onClose = onClose, onContactCall = onContactCall)
-        "pictures"  -> PlatformPhonePicturesApp(onClose = onClose)
+        "pictures"  -> PhonePicturesApp(onClose = onClose)
         "tetris"    -> PhoneTetrisApp(onClose = onClose)
 
         // ─── Fake call screen (magic number only) ───────────────────────────
