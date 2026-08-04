@@ -170,7 +170,7 @@ and one of those was blocking entry to the whole city.
 | Stub | Waiting on |
 |---|---|
 | `PlatformDoor4Room` | `CVOpenGLESTextureCache` camera texture |
-| `PlatformModelViewer` / `rememberModelIcon` | SceneKit, or offscreen GL |
+| `PlatformModelViewer` | SceneKit — the one interactive 3D viewer |
 
 ## Remaining
 
@@ -184,7 +184,22 @@ table. What is left, largest first:
 | File | Lines | Needs |
 |---|---|---|
 | `Door4Room` | 1,782 | `GL_TEXTURE_EXTERNAL_OES` + `SurfaceTexture` (26 uses) → `CVOpenGLESTextureCache` |
-| `ModelBitmap` | 285 | offscreen EGL pbuffer |
+
+`ModelBitmap` ported behind `gl/OffscreenGl.kt`. **iOS has no pbuffer** — an
+`EAGLContext` draws into a framebuffer, so the offscreen target is a plain FBO
+with colour and depth renderbuffers, and `glReadPixels` reads from whatever is
+bound. Two things differ from Android on purpose:
+
+- **No multisampling.** The EGL path asks for 4x MSAA and falls back when it is
+  unavailable; the iOS equivalent needs a second framebuffer and an explicit
+  resolve, which is a lot of machinery for 128px icons.
+- **`release()` restores the previous context** rather than tearing the display
+  down, because the caller may have borrowed this from inside another render
+  pass.
+
+The vertical flip lives in shared code (`flipRows`): `glReadPixels` always
+hands rows back bottom-up, and doing it here rather than with a platform image
+transform stops the two from disagreeing about which way up a sprite is.
 
 `Building7VanityRoom` is ported. `PlatformCameraSurface` gained an
 `onFaceFrame` callback: ML Kit on Android,

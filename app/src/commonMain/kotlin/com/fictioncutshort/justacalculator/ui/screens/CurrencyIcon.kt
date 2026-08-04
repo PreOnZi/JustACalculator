@@ -3,7 +3,6 @@ package com.fictioncutshort.justacalculator.ui.screens
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.ImageBitmap
 import com.fictioncutshort.justacalculator.logic.Currency
-import com.fictioncutshort.justacalculator.platform.rememberModelIcon
 
 /**
  * CurrencyIcon.kt
@@ -20,4 +19,4 @@ private const val ICON_PX = 128
 
 @Composable
 fun rememberCurrencyIcon(c: Currency): ImageBitmap? =
-    rememberModelIcon(objPath = c.obj, mtlPath = c.mtl, sizePx = ICON_PX)
+    rememberModelBitmap(objPath = c.obj, mtlPath = c.mtl, sizePx = ICON_PX)

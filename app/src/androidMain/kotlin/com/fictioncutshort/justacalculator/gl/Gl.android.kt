@@ -32,6 +32,7 @@ actual object Gl {
     actual val GL_ONE: Int = GLES30.GL_ONE
     actual val GL_ONE_MINUS_SRC_ALPHA: Int = GLES30.GL_ONE_MINUS_SRC_ALPHA
     actual val GL_RENDERBUFFER: Int = GLES30.GL_RENDERBUFFER
+    actual val GL_RGBA8: Int = GLES30.GL_RGBA8
     actual val GL_RGB: Int = GLES30.GL_RGB
     actual val GL_RGBA: Int = GLES30.GL_RGBA
     actual val GL_SCISSOR_TEST: Int = GLES30.GL_SCISSOR_TEST
@@ -85,6 +86,16 @@ actual object Gl {
     actual fun glLinkProgram(program: Int) = GLES30.glLinkProgram(program)
     actual fun glRenderbufferStorage(target: Int, internalformat: Int, width: Int, height: Int) = GLES30.glRenderbufferStorage(target, internalformat, width, height)
     actual fun glScissor(x: Int, y: Int, width: Int, height: Int) = GLES30.glScissor(x, y, width, height)
+    actual fun glReadPixels(
+        x: Int, y: Int, width: Int, height: Int, format: Int, type: Int, pixels: ByteArray,
+    ) {
+        val buffer = java.nio.ByteBuffer.allocateDirect(pixels.size)
+            .order(java.nio.ByteOrder.nativeOrder())
+        GLES30.glReadPixels(x, y, width, height, format, type, buffer)
+        buffer.rewind()
+        buffer.get(pixels)
+    }
+
     actual fun glShaderSource(shader: Int, source: String) = GLES30.glShaderSource(shader, source)
     actual fun glTexParameteri(target: Int, pname: Int, param: Int) = GLES30.glTexParameteri(target, pname, param)
     actual fun glUniform1f(location: Int, x: Float) = GLES30.glUniform1f(location, x)

@@ -25,17 +25,6 @@ actual fun PlatformModelViewer(modelFile: String, modifier: Modifier) =
 actual fun PlatformDoor4Room(modifier: Modifier, onComplete: () -> Unit) =
     NotPortedYet("Building 4", "GL door room with a camera-fed texture.", onComplete)
 
-@Composable
-actual fun rememberModelIcon(
-    objPath: String,
-    mtlPath: String?,
-    sizePx: Int,
-    tilt: Float,
-    turn: Float,
-    colorGamma: Float,
-    fitSpan: Float,
-): ImageBitmap? = null
-
 /** Silent until the AVAudioEngine mic echo is ported; the story still advances. */
 @Composable
 private fun NotPortedYet(title: String, detail: String, onSkip: () -> Unit) {

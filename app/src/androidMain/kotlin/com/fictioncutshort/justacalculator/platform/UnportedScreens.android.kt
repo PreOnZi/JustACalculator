@@ -13,16 +13,3 @@ actual fun PlatformModelViewer(modelFile: String, modifier: Modifier) {
 actual fun PlatformDoor4Room(modifier: Modifier, onComplete: () -> Unit) =
     com.fictioncutshort.justacalculator.ui.screens.Door4Room(modifier, onComplete)
 
-@Composable
-actual fun rememberModelIcon(
-    objPath: String,
-    mtlPath: String?,
-    sizePx: Int,
-    tilt: Float,
-    turn: Float,
-    colorGamma: Float,
-    fitSpan: Float,
-): ImageBitmap? = com.fictioncutshort.justacalculator.ui.screens.rememberModelBitmap(
-    objPath, mtlPath, sizePx, tilt, turn, colorGamma, fitSpan,
-)
-

@@ -8,7 +8,6 @@ import androidx.compose.ui.text.AnnotatedString
 import com.fictioncutshort.justacalculator.resources.kytka
 import com.fictioncutshort.justacalculator.resources.strom
 import com.fictioncutshort.justacalculator.resources.Res
-import com.fictioncutshort.justacalculator.platform.rememberModelIcon
 import com.fictioncutshort.justacalculator.platform.currentAppContext
 import com.fictioncutshort.justacalculator.platform.Assets
 import androidx.compose.animation.core.Animatable
@@ -607,10 +606,10 @@ fun CookieCupsGame(onDone: () -> Unit) {
     var pickedCup by remember { mutableIntStateOf(-1) }
 
     // Opaque upside-down cup (tilt 180 → you never see inside), brightened.
-    val cup = rememberModelIcon("$CASINO_MODELS/cup.obj", "$CASINO_MODELS/cup.mtl",
+    val cup = rememberModelBitmap("$CASINO_MODELS/cup.obj", "$CASINO_MODELS/cup.mtl",
         sizePx = 260, tilt = 180f, turn = 18f, colorGamma = 0.5f, fitSpan = 1.4f)
     // The button is a flat red disc — tilt it toward the camera so its face shows.
-    val ball = rememberModelIcon("$CASINO_MODELS/button.obj", "$CASINO_MODELS/button.mtl",
+    val ball = rememberModelBitmap("$CASINO_MODELS/button.obj", "$CASINO_MODELS/button.mtl",
         sizePx = 180, tilt = -72f, turn = 0f, colorGamma = 0.7f)
 
     val lanePx = with(density) { 118.dp.toPx() }
@@ -915,8 +914,8 @@ fun GiftcardBoxesGame(onDone: () -> Unit) {
     val costPerBox = remember { (start / 9).coerceAtLeast(1) }
     var meter by remember { mutableIntStateOf(start) }
     val boxes = remember { mutableStateListOf(*Array(9) { -2 }) }   // -2 closed, -1 empty, >=0 prize
-    val closedBox = rememberModelIcon("$CASINO_MODELS/boxclosed.obj", "$CASINO_MODELS/boxclosed.mtl", sizePx = 200, tilt = -18f)
-    val openBox = rememberModelIcon("$CASINO_MODELS/boxopen.obj", "$CASINO_MODELS/boxopen.mtl", sizePx = 200, tilt = -18f)
+    val closedBox = rememberModelBitmap("$CASINO_MODELS/boxclosed.obj", "$CASINO_MODELS/boxclosed.mtl", sizePx = 200, tilt = -18f)
+    val openBox = rememberModelBitmap("$CASINO_MODELS/boxopen.obj", "$CASINO_MODELS/boxopen.mtl", sizePx = 200, tilt = -18f)
     val giftIcon = rememberCurrencyIcon(Currency.GIFTCARDS)
     val outOfCards = meter <= 0
 
@@ -963,7 +962,7 @@ fun GiftcardBoxesGame(onDone: () -> Unit) {
                                 }
                                 else -> {
                                     val (obj, mtl) = BOX_PRIZES[state]
-                                    val prize = rememberModelIcon(obj, mtl, sizePx = 140, colorGamma = 0.6f, fitSpan = 1.45f)
+                                    val prize = rememberModelBitmap(obj, mtl, sizePx = 140, colorGamma = 0.6f, fitSpan = 1.45f)
                                     openBox?.let { Image(it, null, Modifier.fillMaxSize().align(Alignment.BottomCenter)) }
                                     prize?.let { Image(it, null, Modifier.fillMaxSize(0.6f)) }
                                 }

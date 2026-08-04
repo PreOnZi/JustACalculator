@@ -23,19 +23,3 @@ expect fun PlatformModelViewer(modelFile: String, modifier: Modifier = Modifier)
 @Composable
 expect fun PlatformDoor4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {})
 
-/**
- * Renders an OBJ model to a bitmap for use as a 2D icon. Android uses an
- * offscreen EGL pbuffer; iOS returns null, and callers already treat that as
- * "model not ready" and draw without it.
- */
-@Composable
-expect fun rememberModelIcon(
-    objPath: String,
-    mtlPath: String? = null,
-    sizePx: Int = 160,
-    tilt: Float = -22f,
-    turn: Float = 32f,
-    colorGamma: Float = 1f,
-    fitSpan: Float = 1.7f,
-): ImageBitmap?
-

@@ -60,6 +60,7 @@ actual object Gl {
     actual val GL_ONE: Int = platform.gles3.GL_ONE.toInt()
     actual val GL_ONE_MINUS_SRC_ALPHA: Int = platform.gles3.GL_ONE_MINUS_SRC_ALPHA.toInt()
     actual val GL_RENDERBUFFER: Int = platform.gles3.GL_RENDERBUFFER.toInt()
+    actual val GL_RGBA8: Int = platform.gles3.GL_RGBA8.toInt()
     actual val GL_RGB: Int = platform.gles3.GL_RGB.toInt()
     actual val GL_RGBA: Int = platform.gles3.GL_RGBA.toInt()
     actual val GL_SCISSOR_TEST: Int = platform.gles3.GL_SCISSOR_TEST.toInt()
@@ -113,6 +114,16 @@ actual object Gl {
     actual fun glLinkProgram(program: Int) = platform.gles3.glLinkProgram(program.toUInt())
     actual fun glRenderbufferStorage(target: Int, internalformat: Int, width: Int, height: Int) = platform.gles3.glRenderbufferStorage(target.toUInt(), internalformat.toUInt(), width, height)
     actual fun glScissor(x: Int, y: Int, width: Int, height: Int) = platform.gles3.glScissor(x, y, width, height)
+    actual fun glReadPixels(
+        x: Int, y: Int, width: Int, height: Int, format: Int, type: Int, pixels: ByteArray,
+    ) {
+        pixels.usePinned { pinned ->
+            platform.gles3.glReadPixels(
+                x, y, width, height, format.toUInt(), type.toUInt(), pinned.addressOf(0),
+            )
+        }
+    }
+
     actual fun glShaderSource(shader: Int, source: String) = iosShaderSource(shader, source)
     actual fun glTexParameteri(target: Int, pname: Int, param: Int) = platform.gles3.glTexParameteri(target.toUInt(), pname.toUInt(), param)
     actual fun glUniform1f(location: Int, x: Float) = platform.gles3.glUniform1f(location, x)

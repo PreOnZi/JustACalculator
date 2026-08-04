@@ -37,6 +37,7 @@ expect object Gl {
     val GL_ONE: Int
     val GL_ONE_MINUS_SRC_ALPHA: Int
     val GL_RENDERBUFFER: Int
+    val GL_RGBA8: Int
     val GL_RGB: Int
     val GL_RGBA: Int
     val GL_SCISSOR_TEST: Int
@@ -90,6 +91,12 @@ expect object Gl {
     fun glLinkProgram(program: Int)
     fun glRenderbufferStorage(target: Int, internalformat: Int, width: Int, height: Int)
     fun glScissor(x: Int, y: Int, width: Int, height: Int)
+    /**
+     * Reads the framebuffer into [pixels], which must hold `width * height * 4`
+     * bytes of RGBA. Rows come back **bottom-up**, as GL always delivers them.
+     */
+    fun glReadPixels(x: Int, y: Int, width: Int, height: Int, format: Int, type: Int, pixels: ByteArray)
+
     fun glShaderSource(shader: Int, source: String)
     fun glTexParameteri(target: Int, pname: Int, param: Int)
     fun glUniform1f(location: Int, x: Float)

@@ -1,33 +1,24 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
-import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.Matrix as AndroidMatrix
-import android.opengl.EGL14
-import android.opengl.EGLConfig
-import android.opengl.EGLContext
-import android.opengl.EGLDisplay
-import android.opengl.EGLSurface
-import android.opengl.GLES20
+import com.fictioncutshort.justacalculator.gl.Gl
+import com.fictioncutshort.justacalculator.gl.GlFloatBuffer
 import com.fictioncutshort.justacalculator.gl.Matrix
+import com.fictioncutshort.justacalculator.gl.OffscreenGl
+import com.fictioncutshort.justacalculator.gl.imageBitmapFromRgba
+import com.fictioncutshort.justacalculator.gl.toGlBuffer
+import com.fictioncutshort.justacalculator.platform.PlatformLock
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.platform.LocalContext
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.nio.FloatBuffer
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.pow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * ModelBitmap.kt
+ * ModelImageBitmap.kt
  *
  * Renders any Wavefront .obj (+ optional .mtl) to a still, transparent-background
- * bitmap for use as a flat 2D icon/sprite. Uses a throwaway offscreen EGL pbuffer
+ * bitmap for use as a flat 2D icon/sprite. Uses a throwaway offscreen GL context
  * so it never touches the main GLSurfaceView. ObjLoader gives positions only, so a
  * flat per-triangle normal is computed on the CPU for simple two-sided shading.
  * Results are cached per (obj, mtl, size, tilt, turn) — a model at a fixed pose
@@ -39,14 +30,17 @@ import kotlinx.coroutines.withContext
  */
 object ModelBitmapRenderer {
 
-    private val cache = ConcurrentHashMap<String, Bitmap>()
+    // Sprites are rendered on a background thread and read from composition, so
+    // the cache is guarded rather than concurrent — there is no multiplatform
+    // ConcurrentHashMap, and contention here is nil.
+    private val lock = PlatformLock()
+    private val cache = mutableMapOf<String, ImageBitmap>()
 
     /**
      * Cached sprite for a model; renders on first request (null on failure).
      * [tilt]/[turn] are degrees applied around X/Y for the 3/4 view.
      */
     fun get(
-        context: Context,
         objPath: String,
         mtlPath: String?,
         sizePx: Int = 128,
@@ -54,18 +48,21 @@ object ModelBitmapRenderer {
         turn: Float = 32f,
         colorGamma: Float = 1f,   // <1 brightens dark materials
         fitSpan: Float = 1.7f,    // model span after scaling (smaller = more margin)
-    ): Bitmap? {
+    ): ImageBitmap? {
         val key = "$objPath|$mtlPath|$sizePx|$tilt|$turn|$colorGamma|$fitSpan"
-        return cache[key] ?: runCatching { render(context, objPath, mtlPath, sizePx, tilt, turn, colorGamma, fitSpan) }
-            .getOrNull()
-            ?.also { cache[key] = it }
+        lock.withLock { cache[key] }?.let { return it }
+        val rendered = runCatching {
+            render(objPath, mtlPath, sizePx, tilt, turn, colorGamma, fitSpan)
+        }.getOrNull() ?: return null
+        lock.withLock { cache[key] = rendered }
+        return rendered
     }
 
     // ── Offscreen render ──────────────────────────────────────────────────────
     private fun render(
-        context: Context, objPath: String, mtlPath: String?,
+        objPath: String, mtlPath: String?,
         size: Int, tilt: Float, turn: Float, colorGamma: Float, fitSpan: Float,
-    ): Bitmap {
+    ): ImageBitmap {
         val groups = ObjLoader.load(objPath, mtlPath)
 
         // Bounding box for auto-fit centering + scaling.
@@ -85,22 +82,22 @@ object ModelBitmapRenderer {
         val extent = maxOf(maxX - minX, maxY - minY, maxZ - minZ).coerceAtLeast(1e-4f)
         val fit = fitSpan / extent   // model spans ~fitSpan units after scaling
 
-        val egl = Egl(size)
+        val gl = OffscreenGl(size)
         try {
-            egl.makeCurrent()
-            GLES20.glViewport(0, 0, size, size)
-            GLES20.glClearColor(0f, 0f, 0f, 0f)
-            GLES20.glEnable(GLES20.GL_DEPTH_TEST)
-            GLES20.glDisable(GLES20.GL_CULL_FACE)   // obj winding is unreliable
-            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+            if (!gl.makeCurrent()) error("offscreen GL unavailable")
+            Gl.glViewport(0, 0, size, size)
+            Gl.glClearColor(0f, 0f, 0f, 0f)
+            Gl.glEnable(Gl.GL_DEPTH_TEST)
+            Gl.glDisable(Gl.GL_CULL_FACE)   // obj winding is unreliable
+            Gl.glClear(Gl.GL_COLOR_BUFFER_BIT or Gl.GL_DEPTH_BUFFER_BIT)
 
             val prog = buildProgram()
-            GLES20.glUseProgram(prog)
-            val aPos = GLES20.glGetAttribLocation(prog, "aPos")
-            val aNrm = GLES20.glGetAttribLocation(prog, "aNormal")
-            val uMVP = GLES20.glGetUniformLocation(prog, "uMVP")
-            val uModel = GLES20.glGetUniformLocation(prog, "uModel")
-            val uColor = GLES20.glGetUniformLocation(prog, "uColor")
+            Gl.glUseProgram(prog)
+            val aPos = Gl.glGetAttribLocation(prog, "aPos")
+            val aNrm = Gl.glGetAttribLocation(prog, "aNormal")
+            val uMVP = Gl.glGetUniformLocation(prog, "uMVP")
+            val uModel = Gl.glGetUniformLocation(prog, "uModel")
+            val uColor = Gl.glGetUniformLocation(prog, "uColor")
 
             // model = tilt · turn · scale · center → shows a 3/4 view.
             val model = FloatArray(16)
@@ -117,8 +114,8 @@ object ModelBitmapRenderer {
             val vp = FloatArray(16); Matrix.multiplyMM(vp, 0, proj, 0, view, 0)
             val mvp = FloatArray(16); Matrix.multiplyMM(mvp, 0, vp, 0, model, 0)
 
-            GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
-            GLES20.glUniformMatrix4fv(uModel, 1, false, model, 0)
+            Gl.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
+            Gl.glUniformMatrix4fv(uModel, 1, false, model, 0)
 
             for (g in groups) {
                 val buf = buildInterleaved(g.verts) ?: continue
@@ -128,31 +125,27 @@ object ModelBitmapRenderer {
                 var gg = if (emptyMat) 0.6f else g.g
                 var b = if (emptyMat) 0.6f else g.b
                 if (colorGamma != 1f) { r = r.pow(colorGamma); gg = gg.pow(colorGamma); b = b.pow(colorGamma) }
-                GLES20.glUniform3f(uColor, r, gg, b)
+                Gl.glUniform3f(uColor, r, gg, b)
                 buf.position(0)
-                GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 6 * 4, buf)
-                GLES20.glEnableVertexAttribArray(aPos)
+                Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 6 * 4, buf)
+                Gl.glEnableVertexAttribArray(aPos)
                 buf.position(3)
-                GLES20.glVertexAttribPointer(aNrm, 3, GLES20.GL_FLOAT, false, 6 * 4, buf)
-                GLES20.glEnableVertexAttribArray(aNrm)
-                GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, g.verts.size / 3)
+                Gl.glVertexAttribPointer(aNrm, 3, Gl.GL_FLOAT, false, 6 * 4, buf)
+                Gl.glEnableVertexAttribArray(aNrm)
+                Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, g.verts.size / 3)
             }
 
-            // Read pixels (bottom-up) → Bitmap, then flip vertically.
-            val pix = ByteBuffer.allocateDirect(size * size * 4).order(ByteOrder.nativeOrder())
-            GLES20.glReadPixels(0, 0, size, size, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, pix)
-            pix.rewind()
-            val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-            bmp.copyPixelsFromBuffer(pix)
-            val flip = AndroidMatrix().apply { postScale(1f, -1f) }
-            return Bitmap.createBitmap(bmp, 0, 0, size, size, flip, false)
+            // GL hands rows back bottom-up; the seam flips them.
+            val pixels = ByteArray(size * size * 4)
+            Gl.glReadPixels(0, 0, size, size, Gl.GL_RGBA, Gl.GL_UNSIGNED_BYTE, pixels)
+            return imageBitmapFromRgba(size, size, pixels, flipVertically = true)
         } finally {
-            egl.release()
+            gl.release()
         }
     }
 
     /** Position(3)+flat-normal(3) interleaved buffer, one flat normal per triangle. */
-    private fun buildInterleaved(verts: FloatArray): FloatBuffer? {
+    private fun buildInterleaved(verts: FloatArray): GlFloatBuffer? {
         val triCount = verts.size / 9
         if (triCount == 0) return null
         val out = FloatArray(triCount * 3 * 6)
@@ -178,8 +171,7 @@ object ModelBitmapRenderer {
             }
             t++
         }
-        return ByteBuffer.allocateDirect(out.size * 4).order(ByteOrder.nativeOrder())
-            .asFloatBuffer().apply { put(out); position(0) }
+        return out.toGlBuffer()
     }
 
     private fun buildProgram(): Int {
@@ -206,62 +198,20 @@ object ModelBitmapRenderer {
                 gl_FragColor = vec4(uColor * shade, 1.0);
             }
         """.trimIndent()
-        val v = compile(GLES20.GL_VERTEX_SHADER, vs)
-        val f = compile(GLES20.GL_FRAGMENT_SHADER, fs)
-        val p = GLES20.glCreateProgram()
-        GLES20.glAttachShader(p, v); GLES20.glAttachShader(p, f); GLES20.glLinkProgram(p)
+        val v = compile(Gl.GL_VERTEX_SHADER, vs)
+        val f = compile(Gl.GL_FRAGMENT_SHADER, fs)
+        val p = Gl.glCreateProgram()
+        Gl.glAttachShader(p, v); Gl.glAttachShader(p, f); Gl.glLinkProgram(p)
         return p
     }
 
     private fun compile(type: Int, src: String): Int {
-        val s = GLES20.glCreateShader(type)
-        GLES20.glShaderSource(s, src); GLES20.glCompileShader(s)
+        val s = Gl.glCreateShader(type)
+        Gl.glShaderSource(s, src)
+        Gl.glCompileShader(s)
         return s
     }
 
-    // ── Minimal EGL pbuffer wrapper ───────────────────────────────────────────
-    private class Egl(size: Int) {
-        private val display: EGLDisplay
-        private val context: EGLContext
-        private val surface: EGLSurface
-
-        init {
-            display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
-            EGL14.eglInitialize(display, IntArray(2), 0, IntArray(2), 1)
-            val cfg = chooseConfig()
-            val ctxAttrs = intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE)
-            context = EGL14.eglCreateContext(display, cfg, EGL14.EGL_NO_CONTEXT, ctxAttrs, 0)
-            val surfAttrs = intArrayOf(EGL14.EGL_WIDTH, size, EGL14.EGL_HEIGHT, size, EGL14.EGL_NONE)
-            surface = EGL14.eglCreatePbufferSurface(display, cfg, surfAttrs, 0)
-        }
-
-        private fun chooseConfig(): EGLConfig {
-            val base = intArrayOf(
-                EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
-                EGL14.EGL_SURFACE_TYPE, EGL14.EGL_PBUFFER_BIT,
-                EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8,
-                EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8,
-                EGL14.EGL_DEPTH_SIZE, 16,
-            )
-            val out = arrayOfNulls<EGLConfig>(1)
-            val num = IntArray(1)
-            // Try with 4x MSAA for smoother edges; fall back if unavailable.
-            val msaa = base + intArrayOf(EGL14.EGL_SAMPLE_BUFFERS, 1, EGL14.EGL_SAMPLES, 4, EGL14.EGL_NONE)
-            if (EGL14.eglChooseConfig(display, msaa, 0, out, 0, 1, num, 0) && num[0] > 0) return out[0]!!
-            val plain = base + intArrayOf(EGL14.EGL_NONE)
-            EGL14.eglChooseConfig(display, plain, 0, out, 0, 1, num, 0)
-            return out[0]!!
-        }
-
-        fun makeCurrent() = EGL14.eglMakeCurrent(display, surface, surface, context)
-
-        fun release() {
-            EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
-            EGL14.eglDestroySurface(display, surface)
-            EGL14.eglDestroyContext(display, context)
-            EGL14.eglTerminate(display)
-        }
-    }
 }
 
 /** Compose helper: renders (off the main thread) and caches an arbitrary model sprite. */
@@ -275,10 +225,9 @@ fun rememberModelBitmap(
     colorGamma: Float = 1f,
     fitSpan: Float = 1.7f,
 ): ImageBitmap? {
-    val context = LocalContext.current
     val state = produceState<ImageBitmap?>(initialValue = null, objPath, mtlPath, sizePx, tilt, turn, colorGamma, fitSpan) {
         value = withContext(Dispatchers.Default) {
-            ModelBitmapRenderer.get(context, objPath, mtlPath, sizePx, tilt, turn, colorGamma, fitSpan)?.asImageBitmap()
+            ModelBitmapRenderer.get(objPath, mtlPath, sizePx, tilt, turn, colorGamma, fitSpan)
         }
     }
     return state.value
