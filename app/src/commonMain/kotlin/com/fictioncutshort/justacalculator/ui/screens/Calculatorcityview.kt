@@ -2563,10 +2563,11 @@ fun CalculatorCityView(
                     ) { change, drag ->
                         change.consume()
                         camYaw += drag.x * LOOK_SENSITIVITY
-                        // Screen y grows downward, so dragging down should tip
-                        // the view down: negate to keep it natural rather than
-                        // inverted.
-                        camPitch = (camPitch - drag.y * LOOK_SENSITIVITY)
+                        // Drag up to look up. The sign here is empirical — it is
+                        // the one that reads correctly on a device, whatever the
+                        // combination of screen-space y, the look-at target and
+                        // the view matrix works out to.
+                        camPitch = (camPitch + drag.y * LOOK_SENSITIVITY)
                             .coerceIn(-PITCH_LIMIT, PITCH_LIMIT)
                     }
                 },
