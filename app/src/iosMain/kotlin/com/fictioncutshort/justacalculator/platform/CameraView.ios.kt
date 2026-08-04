@@ -8,7 +8,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.interop.UIKitView
+import androidx.compose.ui.graphics.asComposeImageBitmap
+import org.jetbrains.skia.Bitmap
+import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.UByteVar
 import kotlinx.cinterop.get
@@ -88,16 +92,20 @@ private class CameraSession {
 private class FrameDelegate(
     private val rows: Int,
     private val cols: Int,
+    private val mirror: Boolean,
 ) : NSObject(), AVCaptureVideoDataOutputSampleBufferDelegateProtocol {
 
     var onSamples: ((IntArray) -> Unit)? = null
+    var onFaceFrame: ((FaceFrame) -> Unit)? = null
 
     override fun captureOutput(
         output: AVCaptureOutput,
         didOutputSampleBuffer: CMSampleBufferRef?,
         fromConnection: AVCaptureConnection,
     ) {
-        val callback = onSamples ?: return
+        val samples = onSamples
+        val faces = onFaceFrame
+        if (samples == null && faces == null) return
         val pixelBuffer = CMSampleBufferGetImageBuffer(didOutputSampleBuffer) ?: return
 
         CVPixelBufferLockBaseAddress(pixelBuffer, 0u)
@@ -109,22 +117,42 @@ private class FrameDelegate(
             val stride = CVPixelBufferGetBytesPerRow(pixelBuffer).toInt()
             if (width <= 0 || height <= 0) return
 
-            val out = IntArray(rows * cols)
-            val cellW = width / cols
-            val cellH = height / rows
-            for (row in 0 until rows) {
-                for (col in 0 until cols) {
-                    val px = (col * cellW + cellW / 2).coerceAtMost(width - 1)
-                    val py = (row * cellH + cellH / 2).coerceAtMost(height - 1)
-                    val offset = py * stride + px * 4
-                    // 32BGRA: blue, green, red, alpha.
-                    val b = bytes[offset].toInt()
-                    val g = bytes[offset + 1].toInt()
-                    val r = bytes[offset + 2].toInt()
-                    out[row * cols + col] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+            if (samples != null && rows > 0 && cols > 0) {
+                val out = IntArray(rows * cols)
+                val cellW = width / cols
+                val cellH = height / rows
+                for (row in 0 until rows) {
+                    for (col in 0 until cols) {
+                        val px = (col * cellW + cellW / 2).coerceAtMost(width - 1)
+                        val py = (row * cellH + cellH / 2).coerceAtMost(height - 1)
+                        val offset = py * stride + px * 4
+                        // 32BGRA: blue, green, red, alpha.
+                        val b = bytes[offset].toInt()
+                        val g = bytes[offset + 1].toInt()
+                        val r = bytes[offset + 2].toInt()
+                        out[row * cols + col] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                    }
                 }
+                samples(out)
             }
-            callback(out)
+
+            if (faces != null) {
+                // The buffer is already upright — AVCaptureVideoDataOutput
+                // delivers the connection's orientation — so only the front
+                // camera's mirroring has to be applied, to both image and
+                // coordinates, so they agree.
+                val detected = detectFaces(pixelBuffer, width, height)
+                val image = bgraToImageBitmap(bytes, width, height, stride, mirror)
+                faces(
+                    FaceFrame(
+                        faces = detected
+                            .map { if (mirror) it.mirroredIn(width) else it }
+                            .sortedByDescending { it.area }
+                            .take(MAX_FACES),
+                        image = image,
+                    )
+                )
+            }
         } finally {
             CVPixelBufferUnlockBaseAddress(pixelBuffer, 0u)
         }
@@ -168,9 +196,11 @@ actual fun PlatformCameraSurface(
     scanCols: Int,
     onScanSamples: ((IntArray) -> Unit)?,
     autoCaptureLabel: String?,
+    onFaceFrame: ((FaceFrame) -> Unit)?,
 ) {
     val state = remember { CameraSession() }
     val samplesCallback by rememberUpdatedState(onScanSamples)
+    val faceCallback by rememberUpdatedState(onFaceFrame)
 
     UIKitView(
         factory = {
@@ -194,11 +224,12 @@ actual fun PlatformCameraSurface(
             CATransaction.commit()
 
             state.frameDelegate?.onSamples = samplesCallback
+            state.frameDelegate?.onFaceFrame = faceCallback
         },
     )
 
     // (Re-)bind the session whenever the requested camera changes.
-    LaunchedEffect(useFrontCamera, scanRows, scanCols) {
+    LaunchedEffect(useFrontCamera, scanRows, scanCols, onFaceFrame != null) {
         if (!hasPermission(AppInit.context, AppPermission.CAMERA)) return@LaunchedEffect
         if (state.boundFront == useFrontCamera) return@LaunchedEffect
         state.boundFront = useFrontCamera
@@ -217,7 +248,7 @@ actual fun PlatformCameraSurface(
             state.configured = true
             session.sessionPreset = AVCaptureSessionPresetHigh
 
-            if (scanRows > 0 && scanCols > 0) {
+            if ((scanRows > 0 && scanCols > 0) || onFaceFrame != null) {
                 val videoOutput = AVCaptureVideoDataOutput()
                 videoOutput.alwaysDiscardsLateVideoFrames = true
                 // BGRA rather than the default YUV, so the sampler reads colour
@@ -225,8 +256,9 @@ actual fun PlatformCameraSurface(
                 videoOutput.videoSettings = mapOf(
                     kCVPixelBufferPixelFormatTypeKey to kCVPixelFormatType_32BGRA,
                 )
-                val delegate = FrameDelegate(scanRows, scanCols)
+                val delegate = FrameDelegate(scanRows, scanCols, mirror = useFrontCamera)
                 delegate.onSamples = samplesCallback
+                delegate.onFaceFrame = faceCallback
                 videoOutput.setSampleBufferDelegate(
                     delegate,
                     queue = dispatch_queue_create("camera.scan", null),
@@ -262,6 +294,60 @@ actual fun PlatformCameraSurface(
         onDispose {
             if (state.session.isRunning()) state.session.stopRunning()
             state.frameDelegate?.onSamples = null
+            state.frameDelegate?.onFaceFrame = null
         }
     }
+}
+
+private const val MAX_FACES = 8
+
+/** Reflects a face's geometry about the vertical centre line of a [width]-wide frame. */
+private fun DetectedFace.mirroredIn(width: Int): DetectedFace {
+    val w = width.toFloat()
+    fun flip(p: FacePoint?) = p?.let { FacePoint(w - it.x, it.y) }
+    return copy(
+        left = w - right,
+        right = w - left,
+        leftEye = flip(leftEye),
+        rightEye = flip(rightEye),
+        // Mirroring reverses the sense of the tilt.
+        rollDegrees = -rollDegrees,
+    )
+}
+
+/**
+ * Copies a BGRA buffer into an ImageBitmap, optionally mirrored.
+ *
+ * Skia's N32 pixels are little-endian BGRA on this platform, which is exactly
+ * what the capture buffer already holds — so a mirrored frame is a per-row
+ * reversal and an un-mirrored one is a straight copy, with no channel swap
+ * either way. This full-frame copy is the expensive part of face mode, which is
+ * why only the vanity room asks for it.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private fun bgraToImageBitmap(
+    bytes: CPointer<UByteVar>,
+    width: Int,
+    height: Int,
+    stride: Int,
+    mirror: Boolean,
+): ImageBitmap {
+    val out = ByteArray(width * height * 4)
+    for (y in 0 until height) {
+        val rowStart = y * stride
+        val destRow = y * width * 4
+        for (x in 0 until width) {
+            val src = rowStart + x * 4
+            val dest = destRow + (if (mirror) width - 1 - x else x) * 4
+            out[dest] = bytes[src].toByte()
+            out[dest + 1] = bytes[src + 1].toByte()
+            out[dest + 2] = bytes[src + 2].toByte()
+            out[dest + 3] = 0xFF.toByte()
+        }
+    }
+
+    val bitmap = Bitmap()
+    bitmap.allocN32Pixels(width, height, opaque = true)
+    bitmap.installPixels(out)
+    return bitmap.asComposeImageBitmap()
 }

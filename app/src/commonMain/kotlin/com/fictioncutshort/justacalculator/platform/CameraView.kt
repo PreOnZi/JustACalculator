@@ -20,6 +20,10 @@ import androidx.compose.ui.Modifier
  *   frame, with a fresh array each time.
  * @param autoCaptureLabel when non-null, one photo is taken a couple of seconds
  *   after the session binds and saved to the gallery, named with this label.
+ * @param onFaceFrame when non-null, face detection runs and each analysed frame
+ *   is delivered upright (and mirrored for the front camera) with the faces
+ *   found in it. Called on a camera thread. Much more expensive than
+ *   [onScanSamples], so only the vanity room asks for it.
  */
 @Composable
 expect fun PlatformCameraSurface(
@@ -29,4 +33,5 @@ expect fun PlatformCameraSurface(
     scanCols: Int = 0,
     onScanSamples: ((IntArray) -> Unit)? = null,
     autoCaptureLabel: String? = null,
+    onFaceFrame: ((FaceFrame) -> Unit)? = null,
 )

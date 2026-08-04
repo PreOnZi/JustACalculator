@@ -188,6 +188,33 @@ table. What is left, largest first:
 | `Building7VanityRoom` | 1,071 | CameraX + ML Kit → AVFoundation + Vision |
 | `ModelBitmap` | 285 | offscreen EGL pbuffer |
 
+**Face tracking is seamed but `Building7VanityRoom` is not ported yet.**
+`PlatformCameraSurface` gained an `onFaceFrame` callback: ML Kit on Android,
+Vision on iOS, both reporting a shared `DetectedFace`. Four conventions differ
+between the two, and each one would mis-place stickers while otherwise looking
+fine:
+
+| | ML Kit | Vision |
+|---|---|---|
+| coordinates | pixels | normalised 0..1 |
+| origin | top-left | bottom-left |
+| landmark points | image space | relative to the face's own box |
+| eye naming | the subject's left/right | the viewer's |
+
+Vision's roll is in radians and clockwise-positive where `headEulerAngleZ` is
+counter-clockwise. All of it is absorbed in `FaceTracking.ios.kt`.
+
+The frame arrives **already upright and mirrored for the front camera**, with
+face coordinates in that same space — which is what lets the caller drop the
+rotation bookkeeping the Android original carried around. On iOS the copy goes
+straight from the capture buffer into a Skia bitmap with no channel swap:
+Skia's N32 is little-endian BGRA there, which is what the buffer already holds.
+
+What remains for the room itself is the compositing: `ColorMatrixColorFilter`,
+`RadialGradient`, `RenderEffect` blur and a stack of `android.graphics.Canvas`
+work, all of which have Compose counterparts (`ColorFilter.colorMatrix`,
+`Brush.radialGradient`, `Modifier.blur`). Mechanical, but ~250 lines of it.
+
 The camera cluster (`Camerapreview`, `PhoneCameraApp`, `PhonePicturesApp`) came
 down to one narrow seam, `PlatformCameraSurface`. The viewfinder is mostly
 Compose drawing — the scan grid, the sweep line, the HUD brackets and the colour

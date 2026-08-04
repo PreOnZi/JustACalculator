@@ -21,9 +21,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.Face
+import com.google.mlkit.vision.face.FaceDetection
+import com.google.mlkit.vision.face.FaceDetectorOptions
+import com.google.mlkit.vision.face.FaceLandmark
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
 import java.util.concurrent.Executors
@@ -36,6 +42,7 @@ actual fun PlatformCameraSurface(
     scanCols: Int,
     onScanSamples: ((IntArray) -> Unit)?,
     autoCaptureLabel: String?,
+    onFaceFrame: ((FaceFrame) -> Unit)?,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -46,6 +53,19 @@ actual fun PlatformCameraSurface(
     // The analyser outlives a recomposition, so it reads the latest callback
     // rather than the one that was current when it was installed.
     val samplesCallback by rememberUpdatedState(onScanSamples)
+    val faceCallback by rememberUpdatedState(onFaceFrame)
+
+    // Built once and reused; constructing a detector per frame is what makes
+    // ML Kit look slow.
+    val detector = remember(onFaceFrame != null) {
+        if (onFaceFrame == null) null else FaceDetection.getClient(
+            FaceDetectorOptions.Builder()
+                .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+                .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+                .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
+                .build()
+        )
+    }
 
     // ImageCapture handle so we can take a photo after binding
     val imageCaptureRef = remember { mutableStateOf<ImageCapture?>(null) }
@@ -66,15 +86,39 @@ actual fun PlatformCameraSurface(
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .build()
 
-                if (scanRows > 0 && scanCols > 0) {
+                if ((scanRows > 0 && scanCols > 0) || detector != null) {
                     imageAnalysis.setAnalyzer(analysisExecutor) { imageProxy ->
-                        try {
-                            samplesCallback?.invoke(
-                                sampleGrid(imageProxy.toBitmap(), scanRows, scanCols)
-                            )
-                        } finally {
+                        val rotation = imageProxy.imageInfo.rotationDegrees
+                        val raw = try { imageProxy.toBitmap() } catch (_: Exception) { null }
+                        if (raw == null) {
                             imageProxy.close()
+                            return@setAnalyzer
                         }
+                        if (scanRows > 0 && scanCols > 0) {
+                            samplesCallback?.invoke(sampleGrid(raw, scanRows, scanCols))
+                        }
+                        if (detector == null) {
+                            imageProxy.close()
+                            return@setAnalyzer
+                        }
+                        // ML Kit reports coordinates in the upright frame, which
+                        // is also the space the caller draws in — so the frame
+                        // it receives is corrected to match.
+                        val upright = makeUprightMirrored(raw, rotation, useFrontCamera)
+                        detector.process(InputImage.fromBitmap(upright, 0))
+                            .addOnSuccessListener { detected ->
+                                faceCallback?.invoke(
+                                    FaceFrame(
+                                        faces = detected.map { it.toDetectedFace() }
+                                            // Largest first, so the caller's
+                                            // "primary" face is the nearest person.
+                                            .sortedByDescending { f -> f.area }
+                                            .take(MAX_FACES),
+                                        image = upright.asImageBitmap(),
+                                    )
+                                )
+                            }
+                            .addOnCompleteListener { imageProxy.close() }
                     }
                 }
 
@@ -163,4 +207,34 @@ private fun sampleGrid(bitmap: Bitmap, rows: Int, cols: Int): IntArray {
     } catch (_: Exception) {
         out
     }
+}
+
+private const val MAX_FACES = 8
+
+private fun Face.toDetectedFace(): DetectedFace {
+    val box = boundingBox
+    fun point(landmark: FaceLandmark?): FacePoint? =
+        landmark?.position?.let { FacePoint(it.x, it.y) }
+    return DetectedFace(
+        left = box.left.toFloat(),
+        top = box.top.toFloat(),
+        right = box.right.toFloat(),
+        bottom = box.bottom.toFloat(),
+        leftEye = point(getLandmark(FaceLandmark.LEFT_EYE)),
+        rightEye = point(getLandmark(FaceLandmark.RIGHT_EYE)),
+        rollDegrees = headEulerAngleZ,
+    )
+}
+
+/**
+ * Rotates a sensor frame upright and mirrors it for the front camera, so it
+ * matches what the preview shows.
+ */
+private fun makeUprightMirrored(raw: Bitmap, rotation: Int, front: Boolean): Bitmap {
+    if (rotation == 0 && !front) return raw
+    val matrix = android.graphics.Matrix().apply {
+        postRotate(rotation.toFloat())
+        if (front) postScale(-1f, 1f)
+    }
+    return Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
 }
