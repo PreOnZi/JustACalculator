@@ -27,13 +27,8 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
-	<!-- Required by Compose Multiplatform: without it UIKit caps the app at 60fps
-	     on ProMotion displays, and Compose's own plist sanity check aborts at launch. -->
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
-	<!-- Step 112 drops a file the player must find in a file browser. Both keys
-	     are required: the first exposes Documents to the Files app, the second
-	     lets it be opened in place. Without them the puzzle is unsolvable. -->
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
@@ -44,8 +39,6 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<!-- Usage strings for the parity features. Each must be present before the
-	     corresponding phase ships, or the app crashes on first permission use. -->
 	<key>NSCameraUsageDescription</key>
 	<string>The story uses your camera for the mirror and photo scenes.</string>
 	<key>NSMicrophoneUsageDescription</key>
@@ -56,5 +49,12 @@
 	<string>The in-story phone shows names from your contacts.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>One chapter shows a map of where you are.</string>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
 </dict>
 </plist>
