@@ -149,6 +149,43 @@ class CityGLRenderer : GlRenderer {
     )
     private val meshes = mutableListOf<Mesh>()
 
+    /**
+     * Reusable upload buffer for geometry that changes every frame — the wall
+     * gun, the held gun, boulders, monster faces.
+     *
+     * These used to call `toFB()` at the draw site, allocating a fresh buffer
+     * per mesh per frame. On Android that is merely wasteful; on iOS every
+     * GlFloatBuffer pins a FloatArray for its lifetime and nothing disposed
+     * them, so the pinned set grew by a few hundred arrays a second. Pinned
+     * objects can never be moved or freed, so the GC's work per collection
+     * climbed without bound — the city ran fine for a moment, then collapsed to
+     * seconds per frame at 100% CPU.
+     *
+     * Each grows to the largest mesh asked for and is then reused forever.
+     * [slot] exists because a couple of draws hold two buffers live at once —
+     * sharing one would have the second overwrite the first.
+     */
+    private val scratchFbs = arrayOfNulls<GlFloatBuffer>(SCRATCH_SLOTS)
+
+    /** The full-screen night scrim. Constant geometry, so built once. */
+    private val nightScrimQuad: GlFloatBuffer by lazy {
+        floatArrayOf(-1f, -1f, 0f, 1f, -1f, 0f, 1f, 1f, 0f, -1f, 1f, 0f).toGlBuffer()
+    }
+
+    private fun scratch(arr: FloatArray, slot: Int = 0): GlFloatBuffer {
+        val existing = scratchFbs[slot]
+        val fb = if (existing != null && existing.capacity >= arr.size) {
+            existing
+        } else {
+            existing?.dispose()
+            FloatArray(arr.size).toGlBuffer().also { scratchFbs[slot] = it }
+        }
+        fb.clear()
+        fb.put(arr, 0, arr.size)
+        fb.position(0)
+        return fb
+    }
+
     // Building 10 (the mute button) in world space — its centre and outer radius.
     // Set by addRadButton; used each frame to tell whether the camera is inside it
     // (in which case its shell is drawn transparent, so the city still reads).
@@ -961,7 +998,7 @@ class CityGLRenderer : GlRenderer {
             Gl.glBlendFunc(Gl.GL_SRC_ALPHA, Gl.GL_ONE_MINUS_SRC_ALPHA)
             val a = (darknessLevel * 0.70f).coerceIn(0f, 1f)
             Gl.glUniform4f(uCol, 0.010f, 0.016f, 0.045f, a)
-            val quad = floatArrayOf(-1f,-1f,0f,  1f,-1f,0f,  1f,1f,0f,  -1f,1f,0f).toFB()
+            val quad = nightScrimQuad
             quad.position(0)
             Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, quad)
             Gl.glEnableVertexAttribArray(aPos)
@@ -1161,7 +1198,7 @@ class CityGLRenderer : GlRenderer {
                     k += 3
                 }
             }
-            val v = quad.toFB()
+            val v = scratch(quad)
             Gl.glUniform4f(uCol, r, g, b, 1f)
             v.position(0)
             Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, v)
@@ -1243,7 +1280,7 @@ class CityGLRenderer : GlRenderer {
         }
         if (verts.isEmpty()) return
         val arr = FloatArray(verts.size) { verts[it] }
-        val fb = arr.toFB()
+        val fb = scratch(arr)
         Gl.glUniform1f(uFog, 0f)
         Gl.glUniform4f(uCol, 1.0f, 0.74f, 0.32f, 0.62f * lvl * pulse)
         fb.position(0)
@@ -2742,7 +2779,7 @@ class CityGLRenderer : GlRenderer {
             tri(top,e,n),tri(top,n,w),tri(top,w,s),tri(top,s,e),
             tri(bot,n,e),tri(bot,w,n),tri(bot,s,w),tri(bot,e,s)
         ).flatMap{it.toList()}.toFloatArray()
-        val fb = verts.toFB()
+        val fb = scratch(verts, slot = 0)
         val top2=floatArrayOf(cx,cy+r*1.7f,cz); val bot2=floatArrayOf(cx,cy-r*1.7f,cz)
         val n2=floatArrayOf(cx,cy,cz-r*1.7f); val s2=floatArrayOf(cx,cy,cz+r*1.7f)
         val e2=floatArrayOf(cx+r*1.7f,cy,cz); val w2=floatArrayOf(cx-r*1.7f,cy,cz)
@@ -2750,7 +2787,7 @@ class CityGLRenderer : GlRenderer {
             tri(top2,e2,n2),tri(top2,n2,w2),tri(top2,w2,s2),tri(top2,s2,e2),
             tri(bot2,n2,e2),tri(bot2,w2,n2),tri(bot2,s2,w2),tri(bot2,e2,s2)
         ).flatMap{it.toList()}.toFloatArray()
-        val hfb = halo.toFB()
+        val hfb = scratch(halo, slot = 1)
 
         Gl.glUniform4f(uCol, 0.55f,0.20f,0.90f,1f)
         Gl.glUniform1f(uFog, 0.0f)
@@ -3673,7 +3710,7 @@ class CityGLRenderer : GlRenderer {
                 arr[i + 2] = rz + oz
                 i += 3
             }
-            val fb = arr.toFB()
+            val fb = scratch(arr)
             // Body is authored pure black — lift it just enough that it reads as
             // a dark shape. It's drawn before the overlay, so the night dims it
             // down to a shadow rather than a bright cut-out.
@@ -3698,7 +3735,7 @@ class CityGLRenderer : GlRenderer {
         val k = (0.6f * dkLvl).coerceIn(0f, 1f)
         for ((arr, col) in monsterFaceArrs) {
             if (arr.isEmpty()) continue
-            val fb = arr.toFB()
+            val fb = scratch(arr)
             Gl.glUniform4f(uCol, col[0], col[1], col[2], k)
             fb.position(0)
             Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
@@ -3720,7 +3757,7 @@ class CityGLRenderer : GlRenderer {
             val gg = if (emptyMat) 0.55f else g.g
             val b  = if (emptyMat) 0.58f else g.b
             Gl.glUniform4f(uCol, r, gg, b, 1f)
-            val fb = arr.toFB(); fb.position(0)
+            val fb = scratch(arr)
             Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
             Gl.glEnableVertexAttribArray(aPos)
             Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, g.verts.size / 3)
@@ -3738,7 +3775,7 @@ class CityGLRenderer : GlRenderer {
             if (g.verts.isEmpty()) continue
             val arr = wallGunVerts(g)
             Gl.glUniform4f(uCol, 0.42f, 0.46f, 0.55f, 0.40f)
-            val fb = arr.toFB(); fb.position(0)
+            val fb = scratch(arr)
             Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
             Gl.glEnableVertexAttribArray(aPos)
             Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, g.verts.size / 3)
@@ -3785,7 +3822,7 @@ class CityGLRenderer : GlRenderer {
                     val er = g.r == 0f && g.g == 0f && g.b == 0f
                     Gl.glUniform4f(uCol, if (er) 0.62f else g.r, if (er) 0.60f else g.g, if (er) 0.56f else g.b, 1f)
                 }
-                val fb = arr.toFB(); fb.position(0)
+                val fb = scratch(arr)
                 Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
                 Gl.glEnableVertexAttribArray(aPos)
                 Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, src.size / 3)
@@ -3849,7 +3886,7 @@ class CityGLRenderer : GlRenderer {
                 (0.34f + mr * 0.6f).coerceAtMost(1f),
                 (0.34f + mg * 0.6f).coerceAtMost(1f),
                 (0.36f + mb * 0.6f).coerceAtMost(1f), 1f)
-            val fb = arr.toFB(); fb.position(0)
+            val fb = scratch(arr)
             Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
             Gl.glEnableVertexAttribArray(aPos)
             Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, src.size / 3)
@@ -3957,7 +3994,7 @@ class CityGLRenderer : GlRenderer {
         for (gi in cameraOnGroups.indices) {
             val arr = perGroup[gi].toFloatArray()
             if (arr.isEmpty()) continue
-            val fb = arr.toFB()
+            val fb = scratch(arr)
             val g = cameraOnGroups[gi]
             // Cross-fade to the night Kd for the same material, if cameranight provides one.
             val night = cameraNightColors[g.materialName]
@@ -3990,7 +4027,7 @@ class CityGLRenderer : GlRenderer {
         Gl.glUniform4f(uCol, 1.0f, 0.06f, 0.07f, (0.95f * dkLvl).coerceIn(0f, 1f))
         for (arr in cameraLightArrs) {
             if (arr.isEmpty()) continue
-            val fb = arr.toFB()
+            val fb = scratch(arr)
             fb.position(0)
             Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
             Gl.glEnableVertexAttribArray(aPos)
@@ -4031,7 +4068,7 @@ class CityGLRenderer : GlRenderer {
         Gl.glUniform1f(uAerial, aerialBlend)
 
         val bodyArr = bodyVerts.toFloatArray()
-        val bodyFb  = bodyArr.toFB()
+        val bodyFb  = scratch(bodyArr, slot = 0)
         Gl.glUniform4f(uCol, 0.18f, 0.18f, 0.20f, 1f)
         bodyFb.position(0)
         Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, bodyFb)
@@ -4039,7 +4076,7 @@ class CityGLRenderer : GlRenderer {
         Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, bodyArr.size / 3)
 
         val lensArr = lensVerts.toFloatArray()
-        val lensFb  = lensArr.toFB()
+        val lensFb  = scratch(lensArr, slot = 1)
         Gl.glUniform4f(uCol, 0.85f, 0.10f, 0.10f, 1f)
         lensFb.position(0)
         Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, lensFb)
@@ -4136,7 +4173,7 @@ class CityGLRenderer : GlRenderer {
         for (gi in doorGroups.indices) {
             val arr = perGroup[gi].toFloatArray()
             if (arr.isEmpty()) continue
-            val fb = arr.toFB()
+            val fb = scratch(arr)
             val g = doorGroups[gi]
             // Doors are darker than their raw Kd in the MTL — the building exteriors
             // are already cream/beige so a near-black panel reads as a real door.
@@ -4559,6 +4596,8 @@ class CityGLRenderer : GlRenderer {
     private val PI = kotlin.math.PI
     private fun lerp(a:Float, b:Float, t:Float) = a+(b-a)*t
 }
+
+private const val SCRATCH_SLOTS = 2
 
 private fun FloatArray.toFB(): GlFloatBuffer =
     this.toGlBuffer()

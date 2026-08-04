@@ -184,6 +184,20 @@ a rewrite rather than a port, and it is one screen.
 
 Still open, none of it porting work:
 
+- **Never create a `GlFloatBuffer` inside a draw call.** On Android
+  `toGlBuffer()` allocates a direct `ByteBuffer` per frame — wasteful but ART
+  reclaims it. On iOS each buffer **pins a FloatArray for its lifetime**, and
+  pinned objects can never be moved or freed. The city renderer created ~6 per
+  frame at its draw sites; at 33 fps that is a few hundred permanently-pinned
+  arrays a second, so the GC's work per collection climbed without bound. The
+  city looked fine for a moment, then collapsed to seconds per frame at 100%
+  CPU — and looked like a frame-pacing problem, which it was not.
+
+  Per-frame geometry now goes through the renderer's slotted `scratch()`
+  buffers, which grow once and are reused. Constant geometry (the night scrim
+  quad) is built lazily and held. If a draw path ever needs a new buffer,
+  something is wrong.
+
 - **The whole iOS build is unrun.** It compiles and links; nothing in it has
   been exercised on a device or simulator. The highest-risk parts are the ones
   with no compile-time check on their correctness: the `CVOpenGLESTextureCache`

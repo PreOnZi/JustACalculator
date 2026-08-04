@@ -20,9 +20,16 @@ actual class GlFloatBuffer(private val data: FloatArray) {
     private var pinned: Pinned<FloatArray>? = data.pin()
     private var pos: Int = 0
 
-    /** The address GL reads from, offset to the current position. */
+    /**
+     * The address GL reads from, offset to the current position.
+     *
+     * The offset matters: the interleaved-vertex call sites set `position(3)`
+     * between the position and texcoord attributes and expect the pointer to
+     * move with it, the way a java.nio FloatBuffer's does. Returning
+     * addressOf(0) unconditionally made every attribute read the same data.
+     */
     val pointer: CPointer<FloatVar>?
-        get() = pinned?.addressOf(0)
+        get() = if (data.isEmpty()) null else pinned?.addressOf(pos)
 
     /** Direct access for the paths that copy rather than hand over a pointer. */
     val array: FloatArray get() = data
