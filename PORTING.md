@@ -366,9 +366,11 @@ Still open, in rough order of likely benefit:
   roughly double the fragment work. It is off deliberately — the .obj winding
   is unreliable, as `ModelBitmap` notes — so enabling it needs a careful look
   at every building for holes before it can ship.
-- **No frustum culling on the main camera pass.** `inFeedFrustum` exists but is
-  only used for the CCTV feed. Every mesh is submitted every frame regardless
-  of whether it is on screen.
+- **Frustum culling now runs on the main camera pass** as well as the CCTV
+  feed — it reuses the bounding spheres and `inFeedFrustum` that were already
+  built for the feed. Skipped in aerial mode, where nearly everything is in
+  shot, and never applied to a toppling building, which sweeps far outside the
+  bounds recorded for it.
 - Sensors, location and camera sessions were checked and all stop correctly on
   dispose.
 

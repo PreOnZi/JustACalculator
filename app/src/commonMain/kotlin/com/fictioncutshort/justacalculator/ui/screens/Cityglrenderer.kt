@@ -898,6 +898,18 @@ class CityGLRenderer : GlRenderer {
         Gl.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
         Gl.glUniform1f(uAerial, aerialBlend)
 
+        // Frustum for the main camera, so the mesh passes below can skip
+        // anything off screen. The machinery already existed for the CCTV feed;
+        // the camera the player actually looks through never used it, so every
+        // mesh in the city was submitted every frame no matter where they were
+        // facing. That is draw-call cost, which is what pins the CPU.
+        //
+        // Only meaningful on the ground: from the aerial view almost everything
+        // is in shot, and the collapse animation sweeps buildings far outside
+        // the bounds recorded for them.
+        extractFrustum(mvp)
+        val cullMeshes = !aerialMode
+
         val radA = ((radAngle % 360f) + 360f) % 360f
         val dkLvl = darknessLevel.coerceIn(0f, 1f)
 
@@ -932,13 +944,20 @@ class CityGLRenderer : GlRenderer {
         var curAerial = aerialBlend
         for ((meshIdx, m) in meshes.withIndex()) {
             // A building that has finished falling is simply not drawn any more.
+            var falling = false
             if (groupOf != null) {
                 val g = groupOf[meshIdx]
                 if (g != null) {
                     if (!collapseXform(g, col, xf)) continue
                     setXform(xf)
+                    falling = true
                 } else setXform(null)
             }
+            // Off-screen meshes cost a draw call each and nothing else. Skip
+            // them — but never a toppling building, which sweeps far outside
+            // the bounds recorded for it and would vanish exactly when it is
+            // the thing worth watching.
+            if (cullMeshes && !falling && !inFeedFrustum(meshIdx, 0f, 0f, 0f)) continue
             // Hide aerialSkip detail until the city has spread to its final
             // CELL=260 layout (cellStage == 3), OR whenever the renderer is
             // in aerialMode (the forceAerial post-minigame fly-over). The
@@ -1119,6 +1138,10 @@ class CityGLRenderer : GlRenderer {
             Gl.glDepthFunc(Gl.GL_LEQUAL)
             for ((meshIdx, m) in meshes.withIndex()) {
                 if (m.aerialSkip && (cellStage < 3 || aerialMode)) continue
+                // Same cull as the main pass. Glows ride their building down, so
+                // the collapse guard below still gets the last word.
+                if (cullMeshes && groupOf?.get(meshIdx) == null &&
+                    !inFeedFrustum(meshIdx, 0f, 0f, 0f)) continue
                 // Lit (un-completed) windows also glow here so they punch through
                 // the night as genuine light sources, not just dim tinted panes.
                 val litWindow = m.windowDigit in 1..9 &&
