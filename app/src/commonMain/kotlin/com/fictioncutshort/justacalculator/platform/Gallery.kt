@@ -29,3 +29,13 @@ expect fun formatDateTime(millis: Long): String
  * library access, which is a much larger ask for a fake phone's photo grid.
  */
 expect fun capturedImagePaths(max: Int = 200): List<String>
+
+/**
+ * Keeps a durable private copy of a vanity-room capture and returns its path.
+ *
+ * Separate from [saveImageToGallery] because the two answer different needs:
+ * the gallery copy is the player's, and they can delete it; this one is the
+ * game's, and Building 3 replays it later. Only the newest [keepNewest] are
+ * kept, so a long session cannot fill the device.
+ */
+expect fun saveCaptureLocally(name: String, image: ImageBitmap, keepNewest: Int = 8): String?

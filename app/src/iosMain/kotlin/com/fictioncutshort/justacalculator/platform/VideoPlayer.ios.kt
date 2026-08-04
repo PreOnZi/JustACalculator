@@ -58,7 +58,7 @@ actual fun PlatformVideoPlayer(assetPath: String, modifier: Modifier) {
 }
 
 /** The camera room is not ported, so there are never any captures yet. */
-actual fun savedSelfiePaths(max: Int): List<String> = emptyList()
+actual fun savedSelfiePaths(max: Int): List<String> = CaptureStore.paths(max, suffix = VANITY_PREFIX)
 
 /**
  * Keeps the AVPlayerLayer matched to the view's bounds. CALayer has no

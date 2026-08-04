@@ -23,10 +23,6 @@ expect fun PlatformModelViewer(modelFile: String, modifier: Modifier = Modifier)
 @Composable
 expect fun PlatformDoor4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {})
 
-/** Building 7's vanity room — CameraX plus ML Kit face landmarks. */
-@Composable
-expect fun PlatformBuilding7VanityRoom(modifier: Modifier = Modifier, onComplete: () -> Unit = {})
-
 /**
  * Renders an OBJ model to a bitmap for use as a 2D icon. Android uses an
  * offscreen EGL pbuffer; iOS returns null, and callers already treat that as

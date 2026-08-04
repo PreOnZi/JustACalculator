@@ -170,7 +170,6 @@ and one of those was blocking entry to the whole city.
 | Stub | Waiting on |
 |---|---|
 | `PlatformDoor4Room` | `CVOpenGLESTextureCache` camera texture |
-| `PlatformBuilding7VanityRoom` | AVFoundation + Vision face landmarks |
 | `PlatformModelViewer` / `rememberModelIcon` | SceneKit, or offscreen GL |
 
 ## Remaining
@@ -185,11 +184,10 @@ table. What is left, largest first:
 | File | Lines | Needs |
 |---|---|---|
 | `Door4Room` | 1,782 | `GL_TEXTURE_EXTERNAL_OES` + `SurfaceTexture` (26 uses) → `CVOpenGLESTextureCache` |
-| `Building7VanityRoom` | 1,071 | CameraX + ML Kit → AVFoundation + Vision |
 | `ModelBitmap` | 285 | offscreen EGL pbuffer |
 
-**Face tracking is seamed but `Building7VanityRoom` is not ported yet.**
-`PlatformCameraSurface` gained an `onFaceFrame` callback: ML Kit on Android,
+`Building7VanityRoom` is ported. `PlatformCameraSurface` gained an
+`onFaceFrame` callback: ML Kit on Android,
 Vision on iOS, both reporting a shared `DetectedFace`. Four conventions differ
 between the two, and each one would mis-place stickers while otherwise looking
 fine:
@@ -229,10 +227,19 @@ Two of the room's pieces are already shared:
   order-matters test using the Noir pair passes either way and proves nothing —
   the real test uses a scale and an offset.
 
-What remains for the room itself is the compositing: `ColorMatrixColorFilter`,
-`RadialGradient`, `RenderEffect` blur and a stack of `android.graphics.Canvas`
-work, all of which have Compose counterparts (`ColorFilter.colorMatrix`,
-`Brush.radialGradient`, `Modifier.blur`). Mechanical, but ~250 lines of it.
+The compositing moved to Compose wholesale — `ColorFilter.colorMatrix`,
+`Brush.radialGradient`, `clipPath`, `withTransform`. **The Android original had
+two copies of every drawing routine**, one against `DrawScope` for the live view
+and one against `android.graphics.Canvas` for the saved photo.
+`CanvasDrawScope` can render into an off-screen `ImageBitmap`, so there is now
+one copy and the saved photo is by construction what the player was looking at.
+
+**The one thing neither platform can do portably is grade its own preview.**
+Android's `RenderEffect` needs a TextureView and API 31; iOS cannot filter a
+capture preview layer at all. So when a Look is active the analysed frame is
+redrawn over the preview with the colour matrix applied — meaning the graded
+feed runs at the analysis rate, not the preview's. "None", the common case,
+leaves the native preview untouched.
 
 The camera cluster (`Camerapreview`, `PhoneCameraApp`, `PhonePicturesApp`) came
 down to one narrow seam, `PlatformCameraSurface`. The viewfinder is mostly

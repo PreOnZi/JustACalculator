@@ -1,7 +1,14 @@
 package com.fictioncutshort.justacalculator.platform
 
 import kotlinx.cinterop.ExperimentalForeignApi
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asSkiaBitmap
+import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.usePinned
+import org.jetbrains.skia.EncodedImageFormat
+import org.jetbrains.skia.Image
 import platform.Foundation.NSData
+import platform.Foundation.create
 import platform.Foundation.NSDocumentDirectory
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSSearchPathForDirectoriesInDomains
@@ -40,6 +47,13 @@ internal object CaptureStore {
         return if (data.writeToFile(path, atomically = true)) path else null
     }
 
+    /** Deletes all but the newest [keep] captures matching [suffix]. */
+    fun prune(suffix: String, keep: Int) {
+        val stale = paths(Int.MAX_VALUE, suffix).drop(keep)
+        val manager = NSFileManager.defaultManager
+        for (path in stale) manager.removeItemAtPath(path, null)
+    }
+
     /** Stored capture paths, newest first, at most [max]. */
     fun paths(max: Int, suffix: String? = null): List<String> {
         val dir = directory ?: return emptyList()
@@ -59,3 +73,21 @@ internal object CaptureStore {
 }
 
 actual fun capturedImagePaths(max: Int): List<String> = CaptureStore.paths(max)
+
+@OptIn(ExperimentalForeignApi::class)
+private fun ByteArray.toNSData(): NSData = usePinned {
+    NSData.create(bytes = it.addressOf(0), length = size.toULong())
+}
+
+/** Marks a capture as coming from the vanity room, so Building 3 can find it. */
+internal const val VANITY_PREFIX = "vanity_"
+
+actual fun saveCaptureLocally(name: String, image: ImageBitmap, keepNewest: Int): String? {
+    val jpeg = Image.makeFromBitmap(image.asSkiaBitmap())
+        .encodeToData(EncodedImageFormat.JPEG, 90)
+        ?.bytes
+        ?: return null
+    val path = CaptureStore.save(name, jpeg.toNSData())
+    CaptureStore.prune(VANITY_PREFIX, keepNewest)
+    return path
+}

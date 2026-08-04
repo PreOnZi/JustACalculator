@@ -9,6 +9,7 @@ import android.provider.MediaStore
 import android.widget.Toast
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -86,4 +87,33 @@ actual fun capturedImagePaths(max: Int): List<String> {
         // No media-images permission — return what we have (likely empty).
     }
     return out
+}
+
+private const val VANITY_DIR = "vanity_captures"
+
+actual fun saveCaptureLocally(name: String, image: ImageBitmap, keepNewest: Int): String? = try {
+    val dir = File(AppInit.context.filesDir, VANITY_DIR).apply { mkdirs() }
+    val file = File(dir, name)
+    file.outputStream().use {
+        image.asAndroidBitmap().compress(Bitmap.CompressFormat.JPEG, 90, it)
+    }
+    dir.listFiles()
+        ?.sortedByDescending { it.lastModified() }
+        ?.drop(keepNewest)
+        ?.forEach { it.delete() }
+    file.absolutePath
+} catch (e: Exception) {
+    logWarn("Gallery", "private store save failed: ${e.message}")
+    null
+}
+
+/** Most-recent vanity captures, newest first, for reuse in Building 3. */
+internal fun localCapturePaths(max: Int): List<String> {
+    val dir = File(AppInit.context.filesDir, VANITY_DIR)
+    if (!dir.exists()) return emptyList()
+    return dir.listFiles { f -> f.extension.equals("jpg", ignoreCase = true) }
+        ?.sortedByDescending { it.lastModified() }
+        ?.take(max)
+        ?.map { it.absolutePath }
+        ?: emptyList()
 }

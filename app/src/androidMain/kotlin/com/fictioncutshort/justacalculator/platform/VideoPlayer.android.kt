@@ -5,7 +5,6 @@ import android.widget.VideoView
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
-import com.fictioncutshort.justacalculator.ui.screens.loadVanityCapturePaths
 
 @Composable
 actual fun PlatformVideoPlayer(assetPath: String, modifier: Modifier) {
@@ -25,5 +24,4 @@ actual fun PlatformVideoPlayer(assetPath: String, modifier: Modifier) {
     )
 }
 
-actual fun savedSelfiePaths(max: Int): List<String> =
-    loadVanityCapturePaths(AppInit.context, max)
+actual fun savedSelfiePaths(max: Int): List<String> = localCapturePaths(max)

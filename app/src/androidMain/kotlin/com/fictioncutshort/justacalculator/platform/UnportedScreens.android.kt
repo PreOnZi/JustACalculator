@@ -14,10 +14,6 @@ actual fun PlatformDoor4Room(modifier: Modifier, onComplete: () -> Unit) =
     com.fictioncutshort.justacalculator.ui.screens.Door4Room(modifier, onComplete)
 
 @Composable
-actual fun PlatformBuilding7VanityRoom(modifier: Modifier, onComplete: () -> Unit) =
-    com.fictioncutshort.justacalculator.ui.screens.Building7VanityRoom(modifier, onComplete)
-
-@Composable
 actual fun rememberModelIcon(
     objPath: String,
     mtlPath: String?,

@@ -13,7 +13,7 @@ expect fun PlatformVideoPlayer(assetPath: String, modifier: Modifier = Modifier)
 /**
  * Paths of selfies the player saved in Building 7's vanity room, newest first.
  *
- * Empty on iOS until the camera room is ported — callers already fall back to
- * a stock image when there is no capture, so the feed still renders.
+ * Empty until the player has used the vanity room; callers fall back to a stock
+ * image, so the feed still renders either way.
  */
 expect fun savedSelfiePaths(max: Int = 2): List<String>

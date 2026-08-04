@@ -1,6 +1,5 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
-import com.fictioncutshort.justacalculator.platform.PlatformBuilding7VanityRoom
 import com.fictioncutshort.justacalculator.platform.PlatformDoor4Room
 import com.fictioncutshort.justacalculator.platform.currentTimeOfDay
 import com.fictioncutshort.justacalculator.platform.Prefs
@@ -2971,7 +2970,7 @@ fun CalculatorCityView(
 
         // ── Building 7 — vanity face-filter mirror ────────────────────────────
         if (showBuilding7Filter) {
-            PlatformBuilding7VanityRoom(
+            Building7VanityRoom(
                 onComplete = {
                     showBuilding7Filter = false
                     entryProgress++
