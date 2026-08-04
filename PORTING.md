@@ -361,6 +361,27 @@ The channels carry genuinely different content — the L−R difference peaks at
 not dual-mono. Collapsing them loses audio and can phase-cancel. Lowering the
 stereo bitrate is the safe lever if the ~19 MB of voiceover ever has to shrink.
 
+**Watch decoded size, not file size.** Several images were trivial on disk but
+enormous in memory — `filters/background.jpg` was 3870x5796, which is 85 MB
+once decoded to ARGB. All five have been scaled to display size:
+
+| | was | now | decoded |
+|---|---|---|---|
+| `background.jpg` | 3870x5796 | 1240x1858 | 85.6 → 8.8 MB |
+| `social01.webp` | 4000x3000 | 1080x810 | 45.8 → 3.3 MB |
+| `kytka.webp` | 3504x2336 | 1080x720 | 31.2 → 3.0 MB |
+| `news2.png` | 2560x2110 | 1024x844 | 20.6 → 3.3 MB |
+| `news5.png` | 2486x1566 | 1024x646 | 14.9 → 2.5 MB |
+
+The quiz articles (`articles/0*.png`, 1920x1920) were **left alone on purpose**:
+they are ~50 KB each already, only one is on screen at a time, and re-encoding
+them through ffmpeg ballooned them from 0.4 MB to 2.9 MB — the originals are
+optimised PNGs and a naive re-encode writes full RGB. Same applies to
+`sprites/keys/` (21 files, 33 KB each).
+
+The social-feed videos are already lean — `socialvid01` is 1.0 MB / 8.6s and
+`socialvid02` 0.3 MB / 1.6s. Nothing to do there.
+
 `models/mutebutton.obj` is 3.9 MB and looks like an over-tessellated button.
 It is not: the mute button is the *outside* of an entire room, and the geometry
 is the interior. Leave it.
