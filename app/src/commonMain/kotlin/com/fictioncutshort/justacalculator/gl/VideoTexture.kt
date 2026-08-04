@@ -55,6 +55,21 @@ interface GlVideoSource : GlVideoTexture {
     fun setVolume(volume: Float)
     val durationMs: Int
     val isPlaying: Boolean
+
+    /**
+     * The video's display size, already corrected for any rotation flag, so the
+     * caller can shape the panel it is drawn on. Falls back to 1280x720 when
+     * the file does not say.
+     */
+    val videoWidth: Int
+    val videoHeight: Int
+
+    /**
+     * Best-effort hall reverb, for the sense of a room. Silently does nothing
+     * where the platform has no cheap equivalent — it is atmosphere, not a beat,
+     * so failing to apply it is not worth failing the video for.
+     */
+    fun setReverb(enabled: Boolean)
 }
 
 /**
@@ -66,13 +81,30 @@ expect val videoSamplerPreamble: String
 expect val videoSamplerType: String
 
 /**
- * Opens the front or rear camera as a texture, or null if it is unavailable.
+ * Both camera walls at once.
  *
- * Both cameras at once is what the door room asks for, and neither platform
- * guarantees it — Android needs concurrent-camera support, iOS a multi-cam
- * capable device — so callers must cope with the second one being null.
+ * Deliberately a pair rather than two independent calls: running the front and
+ * rear cameras simultaneously is a single decision on both platforms — Android
+ * needs its concurrent-camera API, iOS an `AVCaptureMultiCamSession` and a
+ * device that supports it. Opening them one at a time would silently stop the
+ * first.
+ *
+ * Where the hardware cannot manage both, the implementation is free to
+ * alternate which one is live; [isLive] says which is currently delivering, and
+ * the caller draws the other wall blank.
  */
-expect fun createCameraTexture(front: Boolean): GlVideoTexture?
+interface DualCameraTextures {
+    val rear: GlVideoTexture?
+    val front: GlVideoTexture?
+
+    /** Whether that camera is delivering frames right now. */
+    fun isLive(front: Boolean): Boolean
+
+    fun release()
+}
+
+/** Null when the camera is unavailable or permission was refused. */
+expect fun createDualCameraTextures(): DualCameraTextures?
 
 /** Opens a video from the shared asset tree as a texture, or null. */
 expect fun createVideoTexture(assetPath: String): GlVideoSource?

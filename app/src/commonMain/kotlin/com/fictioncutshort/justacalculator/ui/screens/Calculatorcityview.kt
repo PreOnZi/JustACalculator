@@ -1,6 +1,5 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
-import com.fictioncutshort.justacalculator.platform.PlatformDoor4Room
 import com.fictioncutshort.justacalculator.platform.currentTimeOfDay
 import com.fictioncutshort.justacalculator.platform.Prefs
 import com.fictioncutshort.justacalculator.platform.AppContext
@@ -2888,7 +2887,7 @@ fun CalculatorCityView(
         }
         // ── Door 4 surveillance & time exhibition room ────────────────────────
         if (showDoor4) {
-            PlatformDoor4Room(
+            Door4Room(
                 onComplete = {
                     showDoor4 = false
                     entryProgress++

@@ -19,7 +19,3 @@ import androidx.compose.ui.graphics.ImageBitmap
 @Composable
 expect fun PlatformModelViewer(modelFile: String, modifier: Modifier = Modifier)
 
-/** Building 4's door room — GL plus a camera-fed external texture. */
-@Composable
-expect fun PlatformDoor4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {})
-

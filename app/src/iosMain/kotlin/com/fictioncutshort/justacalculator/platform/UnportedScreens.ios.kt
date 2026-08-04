@@ -21,10 +21,6 @@ import androidx.compose.ui.unit.sp
 actual fun PlatformModelViewer(modelFile: String, modifier: Modifier) =
     NotPortedYet("3D model viewer", "SceneView/Filament has no iOS counterpart.", {})
 
-@Composable
-actual fun PlatformDoor4Room(modifier: Modifier, onComplete: () -> Unit) =
-    NotPortedYet("Building 4", "GL door room with a camera-fed texture.", onComplete)
-
 /** Silent until the AVAudioEngine mic echo is ported; the story still advances. */
 @Composable
 private fun NotPortedYet(title: String, detail: String, onSkip: () -> Unit) {

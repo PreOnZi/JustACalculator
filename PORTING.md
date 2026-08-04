@@ -174,194 +174,27 @@ and one of those was blocking entry to the whole city.
 
 ## Remaining
 
-Roughly **46.7k lines are shared**; **8.2k remain in `androidMain`**, of which
-~1.2k are Android actuals that stay there by design. Items 1–3 below (assets,
-Coil 3, audio) are **done**, as is the bulk of item 4.
+**Every screen is ported.** `commonMain` holds ~52.7k lines; the ~2.7k left in
+`androidMain` are platform actuals, `MainActivity`, and the broadcast receivers
+Android needs for scheduled notifications. There is no porting backlog.
 
-The whole story runs on iOS end to end except the seven screens in the stub
-table. What is left, largest first:
+One stub survives on purpose: `PlatformModelViewer`, the single interactive 3D
+model viewer, which uses SceneView/Filament. Its iOS counterpart is SceneKit —
+a rewrite rather than a port, and it is one screen.
 
-| File | Lines | Needs |
-|---|---|---|
-| `Door4Room` | 1,782 | convert onto `gl/VideoTexture.kt` (the seam is done) |
+Still open, none of it porting work:
 
-`ModelBitmap` ported behind `gl/OffscreenGl.kt`. **iOS has no pbuffer** — an
-`EAGLContext` draws into a framebuffer, so the offscreen target is a plain FBO
-with colour and depth renderbuffers, and `glReadPixels` reads from whatever is
-bound. Two things differ from Android on purpose:
-
-- **No multisampling.** The EGL path asks for 4x MSAA and falls back when it is
-  unavailable; the iOS equivalent needs a second framebuffer and an explicit
-  resolve, which is a lot of machinery for 128px icons.
-- **`release()` restores the previous context** rather than tearing the display
-  down, because the caller may have borrowed this from inside another render
-  pass.
-
-The vertical flip lives in shared code (`flipRows`): `glReadPixels` always
-hands rows back bottom-up, and doing it here rather than with a platform image
-transform stops the two from disagreeing about which way up a sprite is.
-
-`Building7VanityRoom` is ported. `PlatformCameraSurface` gained an
-`onFaceFrame` callback: ML Kit on Android,
-Vision on iOS, both reporting a shared `DetectedFace`. Four conventions differ
-between the two, and each one would mis-place stickers while otherwise looking
-fine:
-
-| | ML Kit | Vision |
-|---|---|---|
-| coordinates | pixels | normalised 0..1 |
-| origin | top-left | bottom-left |
-| landmark points | image space | relative to the face's own box |
-| eye naming | the subject's left/right | the viewer's |
-
-Vision's roll is in radians and clockwise-positive where `headEulerAngleZ` is
-counter-clockwise. All of it is absorbed in `FaceTracking.ios.kt`.
-
-The frame arrives **already upright and mirrored for the front camera**, with
-face coordinates in that same space — which is what lets the caller drop the
-rotation bookkeeping the Android original carried around. On iOS the copy goes
-straight from the capture buffer into a Skia bitmap with no channel swap:
-Skia's N32 is little-endian BGRA there, which is what the buffer already holds.
-
-Two of the room's pieces are already shared:
-
-- **`renderSvgAsset`** — the stickers are vectors so they stay sharp anchored to
-  a face at any distance. AndroidSVG on Android; on iOS, Skia's own `SVGDOM`,
-  which is already linked in because Compose draws through Skia there. Prefer
-  the viewBox for the aspect ratio: an SVG's width/height attributes are often
-  absent or in physical units that say nothing about its proportions.
-- **`VanityLooks.kt`** — the nine colour grades. Compose's `ColorMatrix` has the
-  same 4x5 row-major layout as the `android.graphics` one, so the coefficients
-  port verbatim; the Android screen bridges with a one-line `toAndroid()`.
-
-  **What does not port is the concatenation.** Android's `postConcat` and
-  Compose's `timesAssign` multiply in opposite orders, and a grade built the
-  wrong way round still looks plausible. `after` spells the order out, and
-  **7 tests** pin it. Worth knowing: saturation and contrast *commute* (contrast
-  is affine per channel and luminance weights sum to 1), so the obvious
-  order-matters test using the Noir pair passes either way and proves nothing —
-  the real test uses a scale and an offset.
-
-The compositing moved to Compose wholesale — `ColorFilter.colorMatrix`,
-`Brush.radialGradient`, `clipPath`, `withTransform`. **The Android original had
-two copies of every drawing routine**, one against `DrawScope` for the live view
-and one against `android.graphics.Canvas` for the saved photo.
-`CanvasDrawScope` can render into an off-screen `ImageBitmap`, so there is now
-one copy and the saved photo is by construction what the player was looking at.
-
-**The one thing neither platform can do portably is grade its own preview.**
-Android's `RenderEffect` needs a TextureView and API 31; iOS cannot filter a
-capture preview layer at all. So when a Look is active the analysed frame is
-redrawn over the preview with the colour matrix applied — meaning the graded
-feed runs at the analysis rate, not the preview's. "None", the common case,
-leaves the native preview untouched.
-
-The camera cluster (`Camerapreview`, `PhoneCameraApp`, `PhonePicturesApp`) came
-down to one narrow seam, `PlatformCameraSurface`. The viewfinder is mostly
-Compose drawing — the scan grid, the sweep line, the HUD brackets and the colour
-classification are all shared — so the seam carries only pixels on screen, a
-coarse colour readout, and one saved photo.
-
-- **The colour readout is a flat `IntArray` of packed ARGB**, one entry per grid
-  cell, filled platform-side. iOS samples straight out of the BGRA pixel buffer
-  rather than building an image: this runs per frame on the capture queue, and
-  allocating a full-size bitmap to read a hundred-odd pixels would cost more
-  than everything else the preview does.
-- **`AVCaptureVideoPreviewLayer` does not resize with its host view**, so it is
-  reframed in the `update` pass. Skipping that leaves it zero-sized and nothing
-  appears — no error, just a black rectangle.
-- **iOS keeps its own copy of every capture** (`CaptureStore`). Adding to the
-  photo library needs only `NSPhotoLibraryAddUsageDescription`, but reading it
-  back would need full library access — a much larger ask for a fake phone's
-  photo grid. Android keeps reading MediaStore, where the captures really do
-  land. `capturedImagePaths` hides the difference.
-
-`Building5Map` split at the map surface: the destination picking, the Overpass
-and OSRM queries, and the whole console UI are shared, and only the map view
-itself is platform (`PlatformBuildingMapView`). It needed four new seam pieces —
-`platform/Geo.kt` (a shared `GeoPoint` plus location updates), `platform/Http.kt`,
-`openMapsAt`, and the map view — and two additions to `gl/Json.kt`.
-
-- **The geodesy came with it.** osmdroid's `distanceToAsDouble` and
-  `destinationPoint` are shared code now, on osmdroid's own earth radius so
-  distances match what Android has always computed — the round's 80–120 m
-  destination band is tuned to it. **8 tests** pin the radius, the bearing
-  signs, and that the two functions agree.
-- **`urlEncode` is written out rather than seamed**: `URLEncoder` and
-  `stringByAddingPercentEncoding` disagree about spaces (`+` versus `%20`) and
-  about which punctuation is reserved, and an Overpass query is mostly
-  punctuation.
-- **MapKit has no colour filter**, so where Android inverts OSM's light raster
-  tiles, iOS forces the view's dark appearance — same dark map, legible labels,
-  rather than a photographic negative.
-- **`MKPointAnnotation` has nowhere to hang per-pin state**, so the dim flag
-  rides in `subtitle`, and restyling a pin means removing and re-adding it —
-  the annotation view is only rebuilt on re-add.
-
-`Building5SoundProto` ported the same way `TalkAudioHandler` did — the FFT, the
-band analysis and the mosaic combination were already pure arithmetic. It added
-three seam pieces: `recordPcm` (a fixed-rate blocking capture), and
-`saveImageToGallery` / `showToast` / `formatDateTime` in `platform/Gallery.kt`.
-
-`recordPcm` honours the requested rate rather than reporting one, because the
-caller derives FFT band edges from it — a substituted rate would silently shift
-every frequency the mosaic reports. That costs an `AVAudioConverter` on iOS,
-since taps only ever deliver the input node's own format.
-
-The mosaic PNG is drawn with `CanvasDrawScope` into an `ImageBitmap` instead of
-`Bitmap`/`Canvas`/`Paint`. The one thing that does not translate directly is
-text: `drawText` takes a top-left corner, so the caption is measured with a
-`TextMeasurer` and centred by hand where `Paint.Align.CENTER` used to do it.
-The measurer only exists inside a composition, so it is captured in the gallery
-composable and passed down.
-
-`TalkAudioHandler` ported by splitting it in two: every waveform — the typing
-click, the static crackle, the feedback squeal, the echo delay line — is plain
-arithmetic and moved to `commonMain`, leaving only a PCM sink and a microphone
-behind `platform/Pcm.kt`. `Building5SoundProto` should reuse that seam rather
-than growing a second one.
-
-Two things the seam has to expose that Android never needed:
-- **The capture rate is a callback parameter, not a constant.** Android asked
-  AudioRecord for 22.05 kHz and got it; `AVAudioEngine` hands over whatever the
-  hardware is running at, and a delay line specified in milliseconds has to be
-  sized from the real rate.
-- **`AVAudioPlayerNode.scheduleBuffer` queues instead of blocking**, so unlike
-  `AudioTrack.write` it applies no back-pressure. Fine for the generators, which
-  write a bounded few seconds and stop.
-
-The typing click now holds one sink open instead of building a fresh one per
-keystroke — tearing down an `AudioTrack` each time was cheap, but the iOS
-equivalent is a whole `AVAudioEngine`.
-
-**`Door4Room`'s texture seam is done; the room is not converted yet.**
-`gl/VideoTexture.kt` covers both producers it needs — the live camera walls and
-the video screens. Three things leak through the interface on purpose, because
-hiding them would mean copying every frame:
-
-- **The texture target differs.** Android binds `GL_TEXTURE_EXTERNAL_OES` to a
-  `SurfaceTexture`; iOS has no such thing, so a `CVOpenGLESTextureCache` wraps
-  each `CVPixelBuffer` in an ordinary `GL_TEXTURE_2D`. The fragment shader has
-  to be built for whichever it is — hence `videoSamplerPreamble` and
-  `videoSamplerType`.
-- **`textureId` is only valid after `updateTexImage()` and can change every
-  frame**, because the iOS cache hands back a fresh texture each time. Caching
-  it works on Android and silently renders one stale frame forever on iOS.
-- **The two pull differently.** The camera is *pushed* frames by
-  `AVCaptureVideoDataOutput`, so the newest pixel buffer is retained until the
-  GL thread takes it — otherwise the producer recycles it mid-draw. Video is
-  *pulled* from `AVPlayerItemVideoOutput` at the item's current time, so nothing
-  is retained between calls.
-
-One binding wrinkle: CoreVideo's header only forward-declares `EAGLContext`, so
-`CVOpenGLESTextureCacheCreate` wants `objcnames.classes.EAGLContext` and the
-real one has to be cast to it — and the cast must be hoisted into a local,
-since Kotlin will not take it inline in a named argument.
-
-Both cameras at once is what the room asks for and neither platform guarantees
-it (Android needs concurrent-camera support, iOS a multi-cam device), so
-`createCameraTexture` returns null rather than throwing and the caller draws
-that wall blank.
+- **The whole iOS build is unrun.** It compiles and links; nothing in it has
+  been exercised on a device or simulator. The highest-risk parts are the ones
+  with no compile-time check on their correctness: the `CVOpenGLESTextureCache`
+  path in `Door4Room`, the face-landmark conventions in `Building7VanityRoom`,
+  and the MapKit view.
+- **iOS orientation lock** — `LockOrientationWhileVisible` sets a flag nothing
+  reads. The Swift AppDelegate needs to consult `IosOrientationLock` from
+  `supportedInterfaceOrientationsFor`, or the city will rotate on iOS.
+- **iOS polish** — app icon (`iosApp/iosApp/Assets.xcassets/AppIcon.appiconset`
+  is an empty placeholder), launch screen, and a real `DEVELOPMENT_TEAM` in
+  `iosApp/Configuration/Config.xcconfig` for device builds and TestFlight.
 
 ### OpenGL ES (~12k lines, 8 files) — **done except `Door4Room`.**
 

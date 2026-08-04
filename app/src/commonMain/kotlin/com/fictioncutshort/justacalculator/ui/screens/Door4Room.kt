@@ -1,41 +1,35 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
-import android.media.MediaPlayer
 import com.fictioncutshort.justacalculator.platform.createSoundPlayer
 import com.fictioncutshort.justacalculator.platform.Sounds
 import com.fictioncutshort.justacalculator.platform.SoundPlayer
-import android.Manifest
-import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.SurfaceTexture
-import android.graphics.Typeface
-import android.media.AudioAttributes
-import android.media.MediaMetadataRetriever
-import android.media.SoundPool
-import android.media.audiofx.PresetReverb
-import android.net.Uri
-import android.opengl.GLES11Ext
-import android.opengl.GLES20
-import android.opengl.GLSurfaceView
-import android.opengl.GLUtils
+import com.fictioncutshort.justacalculator.gl.GlVideoSource
+import com.fictioncutshort.justacalculator.gl.GlVideoTexture
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.text.rememberTextMeasurer
+import com.fictioncutshort.justacalculator.gl.Gl
+import com.fictioncutshort.justacalculator.gl.throttleRenderThread
+import com.fictioncutshort.justacalculator.platform.AppPermission
+import com.fictioncutshort.justacalculator.platform.nowMillis
+import com.fictioncutshort.justacalculator.platform.currentAppContext
+import com.fictioncutshort.justacalculator.platform.hasPermission
+import com.fictioncutshort.justacalculator.platform.rememberPermissionRequest
+import com.fictioncutshort.justacalculator.platform.screenMetrics
+import com.fictioncutshort.justacalculator.gl.GlFloatBuffer
+import com.fictioncutshort.justacalculator.gl.toGlBuffer
+import com.fictioncutshort.justacalculator.gl.GlRenderer
 import com.fictioncutshort.justacalculator.gl.Matrix
-import android.view.Surface
-import com.fictioncutshort.justacalculator.R
-import com.fictioncutshort.justacalculator.ui.components.RequestGamePermissionsOnEntry
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.Preview
-import androidx.camera.core.UseCaseGroup
-import androidx.camera.core.ConcurrentCamera.SingleCameraConfig
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.fictioncutshort.justacalculator.gl.PlatformGlSurface
+import com.fictioncutshort.justacalculator.gl.decodeImageAsset
+import com.fictioncutshort.justacalculator.gl.renderCenteredTextImage
+import com.fictioncutshort.justacalculator.gl.renderTightTextImage
+import com.fictioncutshort.justacalculator.gl.uploadTextureFromImage
+import com.fictioncutshort.justacalculator.platform.openExternalUrl
+import com.fictioncutshort.justacalculator.gl.DualCameraTextures
+import com.fictioncutshort.justacalculator.gl.createDualCameraTextures
+import com.fictioncutshort.justacalculator.gl.createVideoTexture
+import com.fictioncutshort.justacalculator.gl.videoSamplerPreamble
+import com.fictioncutshort.justacalculator.gl.videoSamplerType
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -48,23 +42,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import android.content.res.Configuration
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
-import javax.microedition.khronos.egl.EGLConfig
-import javax.microedition.khronos.opengles.GL10
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.nio.FloatBuffer
 import kotlin.math.*
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -226,28 +211,35 @@ private fun screenXMarkXZ(s: ScreenSpec, halfW: Float): Pair<Float, Float> {
 
 @Composable
 fun Door4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {}) {
-    val context = LocalContext.current
-    val configuration = LocalConfiguration.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val renderer = remember { Door4Renderer(context) }
+    val context = currentAppContext()
+    val configuration = screenMetrics()
+    val isLandscape = configuration.isLandscape
+    val renderer = remember { Door4Renderer() }
 
-    var hasCameraPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-                PackageManager.PERMISSION_GRANTED
+    // The room's three pieces of drawn text. Rendered here because a
+    // TextMeasurer needs a composition, then uploaded on the GL thread.
+    val textMeasurer = rememberTextMeasurer()
+    LaunchedEffect(Unit) {
+        renderer.textImages = Door4TextImages(
+            openMark = renderTightTextImage("[open]", 144.sp, textMeasurer),
+            leftWall = renderCenteredTextImage("Your perception.", 1024, 512, textMeasurer),
+            rightWall = renderCenteredTextImage("Who perceives you?", 1024, 512, textMeasurer),
+            exitSign = renderCenteredTextImage(
+                "EXIT", 512, 256, textMeasurer, color = Color(0xFF3BE07A),
+            ),
         )
     }
+
     // This building's surveillance tunnel needs CAMERA — request ONLY that,
     // not the rest of the game's permissions (mic / location / contacts /
-    // notifications), which belong to other beats. The result is mirrored
-    // into hasCameraPermission for the DisposableEffect that wires the live
-    // feeds.
-    RequestGamePermissionsOnEntry(
-        permissions = listOf(Manifest.permission.CAMERA),
-    ) { results ->
-        results[Manifest.permission.CAMERA]?.let { hasCameraPermission = it }
+    // notifications), which belong to other beats.
+    var hasCameraPermission by remember {
+        mutableStateOf(hasPermission(context, AppPermission.CAMERA))
     }
+    val requestCamera = rememberPermissionRequest(AppPermission.CAMERA) { granted ->
+        hasCameraPermission = granted
+    }
+    LaunchedEffect(Unit) { if (!hasCameraPermission) requestCamera() }
 
     // Camera / player state (camera IS the player).
     var pX     by remember { mutableStateOf(0f) }
@@ -296,282 +288,28 @@ fun Door4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {}) {
     }
     // MediaPlayers and reverb effects, one per video piece. Built lazily once
     // the renderer's SurfaceTextures exist (see DisposableEffect below).
-    val mediaPlayers = remember { arrayOfNulls<MediaPlayer>(SCREEN_COUNT) }
-    val mediaReverbs = remember { arrayOfNulls<PresetReverb>(SCREEN_COUNT) }
-    val mediaPrepared = remember { BooleanArray(SCREEN_COUNT) }
 
-    // ── Ambient clock loop ─────────────────────────────────────────────────────
-    // SoundPool decodes clock.mp3 to PCM in memory and loops seamlessly.
-    val clockSp = remember { mutableStateOf<SoundPool?>(null) }
-    val clockStream = remember { mutableIntStateOf(0) }
-    DisposableEffect(Unit) {
-        val sp = SoundPool.Builder()
-            .setMaxStreams(1)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_GAME)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
-            )
-            .build()
-        clockSp.value = sp
-        try {
-            val soundId = sp.load(context.assets.openFd(Sounds.path("clock").orEmpty()), 1)
-            sp.setOnLoadCompleteListener { _, id, status ->
-                if (status == 0 && id == soundId) {
-                    val s = sp.play(soundId, CLOCK_MIN, CLOCK_MIN, 1, -1, 1f)
-                    clockStream.intValue = s
-                }
-            }
-        } catch (_: Exception) {}
-        onDispose {
-            try { sp.release() } catch (_: Exception) {}
-            clockSp.value = null
-            clockStream.intValue = 0
+    // ── Ambient clock loop ────────────────────────────────────────────────────
+    // A looping player rather than a one-shot pool: this runs for the length of
+    // the room and its volume tracks the player's distance from the door.
+    val clockPlayer = remember { createSoundPlayer(Sounds.path("clock").orEmpty()) }
+    DisposableEffect(clockPlayer) {
+        clockPlayer?.apply {
+            setLooping(true)
+            setVolume(CLOCK_MIN, CLOCK_MIN)
+            start()
         }
-    }
-
-    // Keep renderer's lit count in sync; (re-)start any prepared video whose
-    // piece is now revealed.
-    LaunchedEffect(litCount) {
-        renderer.litCount = litCount
-        for (i in 0 until litCount) {
-            val mp = mediaPlayers[i] ?: continue
-            if (!mediaPrepared[i]) continue
-            try { if (!mp.isPlaying) mp.start() } catch (_: Throwable) {}
-        }
-    }
-    // Mirror foundCount to the renderer so the [X] marker hides for read pieces.
-    LaunchedEffect(foundCount) { renderer.foundCount = foundCount }
-
-    // Thump when the very first piece is revealed at entry.
-    LaunchedEffect(Unit) {
-        if (foundCount == 0) {
-            val (sx, sz) = screenCenterXZ(DOOR4_SCREENS[0])
-            val (l, r) = thumpPan(sx, sz, pX, pZ, camYaw)
-            playOneShotRaw(context, "thump", l, r)
-        }
-    }
-
-    // After the player closes a panel (foundCount increments), reveal the next
-    // piece NEXT_REVEAL_MS later (+ thump + start its video if applicable).
-    LaunchedEffect(foundCount) {
-        if (foundCount in 1 until SCREEN_COUNT && litCount == foundCount) {
-            delay(NEXT_REVEAL_MS)
-            if (litCount == foundCount) {
-                litCount = foundCount + 1
-                val nextIdx = foundCount
-                val (sx, sz) = screenCenterXZ(DOOR4_SCREENS[nextIdx])
-                val (l, r) = thumpPan(sx, sz, pX, pZ, camYaw)
-                playOneShotRaw(context, "thump", l, r)
-                val mp = mediaPlayers[nextIdx]
-                if (mp != null && mediaPrepared[nextIdx]) {
-                    try { if (!mp.isPlaying) mp.start() } catch (_: Throwable) {}
-                }
-            }
-        }
-    }
-
-    // Open the tunnel door once all pieces are read.
-    LaunchedEffect(foundCount) {
-        if (foundCount >= SCREEN_COUNT && renderer.doorOpen < 1f) {
-            val steps = 90
-            repeat(steps) { delay(16); renderer.doorOpen = (it + 1f) / steps }
-            renderer.doorOpen = 1f
-            tunnelReady = true
-        }
-    }
-
-    // ── Video MediaPlayers — wait for renderer's SurfaceTextures, then attach ──
-    DisposableEffect(Unit) {
-        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main)
-        val job = scope.launch {
-            // Wait until the GL thread has created all video SurfaceTextures.
-            while (true) {
-                val ready = (0 until SCREEN_COUNT).all { i ->
-                    !DOOR4_NEWS[i].isVideo || renderer.mediaSurfaceTexture[i] != null
-                }
-                if (ready) break
-                delay(60)
-            }
-            for (i in 0 until SCREEN_COUNT) {
-                val item = DOOR4_NEWS[i]
-                if (!item.isVideo) continue
-                val st = renderer.mediaSurfaceTexture[i] ?: continue
-                renderer.mediaPixelSize[i]?.let { (w, h) -> st.setDefaultBufferSize(w, h) }
-                val mp = MediaPlayer()
-                try {
-                    mp.setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
-                            .build()
-                    )
-                    val afd = context.assets.openFd(item.asset)
-                    try { mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length) }
-                    finally { afd.close() }
-                    mp.setSurface(Surface(st))
-                    mp.setLooping(true)
-                    mp.setVolume(0f, 0f)
-                    mp.setOnPreparedListener {
-                        mediaPrepared[i] = true
-                        if (i < renderer.litCount) try { mp.start() } catch (_: Throwable) {}
-                    }
-                    mp.prepareAsync()
-                } catch (_: Throwable) {
-                    try { mp.release() } catch (_: Throwable) {}
-                    continue
-                }
-                mediaPlayers[i] = mp
-                // Best-effort echo. Some devices lack PresetReverb; failing is fine.
-                try {
-                    val rv = PresetReverb(1, 0).apply {
-                        preset = PresetReverb.PRESET_LARGEHALL
-                        enabled = true
-                    }
-                    mp.attachAuxEffect(rv.id)
-                    mp.setAuxEffectSendLevel(0.7f)
-                    mediaReverbs[i] = rv
-                } catch (_: Throwable) {}
-            }
-        }
-        onDispose {
-            job.cancel(); scope.cancel()
-            for (i in mediaPlayers.indices) {
-                try { mediaPlayers[i]?.stop() } catch (_: Throwable) {}
-                try { mediaPlayers[i]?.release() } catch (_: Throwable) {}
-                mediaPlayers[i] = null
-            }
-            for (i in mediaReverbs.indices) {
-                try { mediaReverbs[i]?.release() } catch (_: Throwable) {}
-                mediaReverbs[i] = null
-            }
-        }
-    }
-
-    var levelDone by remember { mutableStateOf(false) }
-    var approachEnterMs by remember { mutableStateOf(0L) }
-
-    // ── Movement / camera loop + proximity → reveal / nudge / audio ───────────
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(16)
-            camYaw += joyX * YAW_SPD
-            val cr = Math.toRadians(camYaw.toDouble())
-            val fwd = -joyY
-            val dx = (sin(cr) * fwd * MOVE_SPD).toFloat()
-            val dz = (-cos(cr) * fwd * MOVE_SPD).toFloat()
-            val nx = pX + dx
-            val nz = pZ + dz
-            val doorIsOpen = renderer.doorOpen > 0.5f
-            if (!door4Blocked(nx, nz, doorIsOpen)) { pX = nx; pZ = nz }
-            else {
-                if (!door4Blocked(nx, pZ, doorIsOpen)) pX = nx
-                if (!door4Blocked(pX, nz, doorIsOpen)) pZ = nz
-            }
-
-            renderer.camX = pX; renderer.camZ = pZ; renderer.camYaw = camYaw
-            renderer.lookAtX = pX + sin(cr).toFloat()
-            renderer.lookAtZ = pZ - cos(cr).toFloat()
-
-            if (!levelDone && doorIsOpen && pZ < -ROOM_R - TUNNEL_LEN + 140f) {
-                levelDone = true
-                // News pieces read become cookies.
-                com.fictioncutshort.justacalculator.logic.CurrencyStore.award(
-                    context, com.fictioncutshort.justacalculator.logic.Currency.COOKIES, foundCount, "b4")
-                onComplete()
-            }
-
-            val target = foundCount  // next piece to be found
-            val targetValid = target < SCREEN_COUNT && target < litCount
-            val targetIsVideo = targetValid && DOOR4_NEWS[target].isVideo
-
-            // Distance to the target piece's center & to its [X] marker.
-            var dCenter = Float.MAX_VALUE
-            var dXMark = Float.MAX_VALUE
-            if (targetValid) {
-                val s = DOOR4_SCREENS[target]
-                val (sx, sz) = screenCenterXZ(s)
-                dCenter = sqrt((pX - sx) * (pX - sx) + (pZ - sz) * (pZ - sz))
-                val (halfW, _) = panelHalfExtents(renderer.mediaAspect[target])
-                val (mx, mz) = screenXMarkXZ(s, halfW)
-                dXMark = sqrt((pX - mx) * (pX - mx) + (pZ - mz) * (pZ - mz))
-            }
-
-            // Auto-open description when player reaches the [X].
-            if (targetValid && shownDescIndex == null && dXMark < READ_RADIUS_X) {
-                shownDescIndex = target
-                showNudge = false
-                approachEnterMs = 0L
-            }
-
-            // Nudge: 5s in approach zone without opening the panel.
-            if (targetValid && shownDescIndex == null) {
-                if (dCenter < APPROACH_RADIUS) {
-                    if (approachEnterMs == 0L) approachEnterMs = System.currentTimeMillis()
-                    else if (System.currentTimeMillis() - approachEnterMs > NUDGE_DELAY_MS) showNudge = true
-                } else {
-                    approachEnterMs = 0L
-                    showNudge = false
-                }
-            } else {
-                showNudge = false
-                approachEnterMs = 0L
-            }
-
-            // ── Clock volume ──
-            // Open panel → silent. Video target → ducked max. Image target → normal.
-            var clockVol = CLOCK_MIN
-            if (shownDescIndex != null) {
-                clockVol = 0f
-            } else if (targetValid) {
-                val close = ((CLOCK_FAR - dCenter) / (CLOCK_FAR - CLOCK_NEAR)).coerceIn(0f, 1f)
-                val maxVol = if (targetIsVideo) CLOCK_VIDEO_DUCK else CLOCK_MAX
-                clockVol = CLOCK_MIN + (maxVol - CLOCK_MIN) * close
-            }
-            val sp = clockSp.value; val sid = clockStream.intValue
-            if (sp != null && sid != 0) {
-                try { sp.setVolume(sid, clockVol, clockVol) } catch (_: Throwable) {}
-            }
-
-            // ── Video volumes (per-piece, distance-modulated) ──
-            for (i in 0 until SCREEN_COUNT) {
-                if (!DOOR4_NEWS[i].isVideo) continue
-                if (i >= litCount) continue
-                val mp = mediaPlayers[i] ?: continue
-                if (!mediaPrepared[i]) continue
-                if (muted[i]) {
-                    try { mp.setVolume(0f, 0f) } catch (_: Throwable) {}
-                    continue
-                }
-                val (sx, sz) = screenCenterXZ(DOOR4_SCREENS[i])
-                val d = sqrt((pX - sx) * (pX - sx) + (pZ - sz) * (pZ - sz))
-                val close = ((VIDEO_FAR - d) / (VIDEO_FAR - VIDEO_NEAR)).coerceIn(0f, 1f)
-                // VIDEO_CURVE squashes the low end so most volume gain happens
-                // in the last third of the approach — perceptually the player
-                // feels the piece "growing louder" only once they're committing.
-                val shaped = close.pow(VIDEO_CURVE)
-                var vol = VIDEO_MIN + (VIDEO_MAX - VIDEO_MIN) * shaped
-                if (shownDescIndex == i) vol *= VIDEO_DUCK_OPEN
-                try { mp.setVolume(vol, vol) } catch (_: Throwable) {}
-            }
-        }
+        onDispose { clockPlayer?.release() }
     }
 
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(
-            factory = { ctx ->
-                GLSurfaceView(ctx).apply {
-                    setEGLContextClientVersion(2)
-                    setEGLConfigChooser(8, 8, 8, 0, 24, 0)
-                    setRenderer(renderer)
-                    renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
-                }
-            },
-            modifier = Modifier.fillMaxSize()
+        PlatformGlSurface(
+            renderer = renderer,
+            modifier = Modifier.fillMaxSize(),
+            contextVersion = 2,
         )
 
-        val joySize = (configuration.screenWidthDp * 0.30f).dp.coerceIn(110.dp, 160.dp)
+        val joySize = (configuration.widthDp.value * 0.30f).dp.coerceIn(110.dp, 160.dp)
         CityJoystick(
             joyDp = joySize,
             modifier = if (isLandscape) Modifier.align(Alignment.CenterEnd).padding(end = 24.dp)
@@ -626,105 +364,24 @@ fun Door4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {}) {
                 onLeave = {
                     if (DOOR4_NEWS[idx].isVideo) {
                         muted[idx] = true
-                        try { mediaPlayers[idx]?.setVolume(0f, 0f) } catch (_: Throwable) {}
+                        renderer.mediaVideo[idx]?.setVolume(0f)
                     }
                     shownDescIndex = null
                     if (idx >= foundCount) foundCount = idx + 1
                 },
                 onOpenLink = {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(DOOR4_NEWS[idx].url))
-                    try { context.startActivity(intent) } catch (_: Throwable) {}
+                    openExternalUrl(context, DOOR4_NEWS[idx].url)
                 }
             )
         }
     }
 
-    // ── Live camera feeds for the tunnel walls (after the door opens) ──────────
+    // ── Live camera feeds for the tunnel walls (after the door opens) ─────────
+    // Creating them is the renderer's job — they are GL textures — so this only
+    // says when the room wants them running.
     DisposableEffect(tunnelReady, hasCameraPermission) {
-        if (!tunnelReady || !hasCameraPermission) return@DisposableEffect onDispose { }
-        val rearST = renderer.rearSurfaceTexture
-        val frontST = renderer.frontSurfaceTexture
-        if (rearST == null || frontST == null) return@DisposableEffect onDispose { }
-
-        val mainExecutor = ContextCompat.getMainExecutor(context)
-        var providerRef: ProcessCameraProvider? = null
-        var alternateJob: kotlinx.coroutines.Job? = null
-        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main)
-
-        fun previewFor(st: SurfaceTexture): Preview =
-            Preview.Builder().build().also { p ->
-                p.setSurfaceProvider { request ->
-                    st.setDefaultBufferSize(request.resolution.width, request.resolution.height)
-                    val surface = Surface(st)
-                    request.provideSurface(surface, mainExecutor) { surface.release() }
-                }
-            }
-
-        val future = ProcessCameraProvider.getInstance(context)
-        future.addListener({
-            try {
-                val provider = future.get()
-                providerRef = provider
-                provider.unbindAll()
-
-                val concurrentSupported = try {
-                    provider.availableConcurrentCameraInfos.isNotEmpty()
-                } catch (_: Throwable) { false }
-
-                var boundConcurrent = false
-                if (concurrentSupported) {
-                    try {
-                        val rearCfg = SingleCameraConfig(
-                            CameraSelector.DEFAULT_BACK_CAMERA,
-                            UseCaseGroup.Builder().addUseCase(previewFor(rearST)).build(),
-                            lifecycleOwner
-                        )
-                        val frontCfg = SingleCameraConfig(
-                            CameraSelector.DEFAULT_FRONT_CAMERA,
-                            UseCaseGroup.Builder().addUseCase(previewFor(frontST)).build(),
-                            lifecycleOwner
-                        )
-                        provider.bindToLifecycle(listOf(rearCfg, frontCfg))
-                        renderer.rearLive = true
-                        renderer.frontLive = true
-                        boundConcurrent = true
-                    } catch (_: Throwable) {
-                        provider.unbindAll()
-                        boundConcurrent = false
-                    }
-                }
-
-                if (!boundConcurrent) {
-                    alternateJob = scope.launch {
-                        var rear = true
-                        while (true) {
-                            try {
-                                provider.unbindAll()
-                                if (rear) {
-                                    provider.bindToLifecycle(
-                                        lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, previewFor(rearST))
-                                    renderer.rearLive = true; renderer.frontLive = false
-                                } else {
-                                    provider.bindToLifecycle(
-                                        lifecycleOwner, CameraSelector.DEFAULT_FRONT_CAMERA, previewFor(frontST))
-                                    renderer.rearLive = false; renderer.frontLive = true
-                                }
-                            } catch (_: Throwable) { }
-                            rear = !rear
-                            delay(5000)
-                        }
-                    }
-                }
-            } catch (_: Throwable) { }
-        }, mainExecutor)
-
-        onDispose {
-            alternateJob?.cancel()
-            scope.cancel()
-            try { providerRef?.unbindAll() } catch (_: Throwable) { }
-            renderer.rearLive = false
-            renderer.frontLive = false
-        }
+        renderer.camerasWanted = tunnelReady && hasCameraPermission
+        onDispose { renderer.camerasWanted = false }
     }
 }
 
@@ -908,7 +565,7 @@ private fun buildMazeSlabs(): List<FloatArray> {
 
 // Fire-and-forget one-shot (releases itself when finished). leftVol/rightVol allow
 // crude stereo panning so a sound can come from a direction in the space.
-private fun playOneShotRaw(context: Context, name: String, leftVol: Float = 1f, rightVol: Float = 1f) {
+private fun playOneShotRaw(name: String, leftVol: Float = 1f, rightVol: Float = 1f) {
     try {
         val player = createSoundPlayer(Sounds.path(name) ?: return) ?: return
         player.setVolume(leftVol, rightVol)
@@ -923,7 +580,7 @@ private fun thumpPan(sx: Float, sz: Float, pX: Float, pZ: Float, yawDeg: Float):
     val dx = sx - pX; val dz = sz - pZ
     val len = sqrt(dx * dx + dz * dz)
     if (len < 1f) return Pair(1f, 1f)
-    val yaw = Math.toRadians(yawDeg.toDouble())
+    val yaw = yawDeg.toDouble() * kotlin.math.PI / 180.0
     val rx = cos(yaw).toFloat(); val rz = sin(yaw).toFloat()   // player's "right" vector
     val pan = ((dx / len) * rx + (dz / len) * rz).coerceIn(-1f, 1f)
     val left = 1f - max(0f, pan) * 0.8f
@@ -935,29 +592,42 @@ private fun thumpPan(sx: Float, sz: Float, pX: Float, pZ: Float, yawDeg: Float):
 //  RENDERER
 // ═══════════════════════════════════════════════════════════════════════════════
 
-private class Door4Renderer(private val context: Context) : GLSurfaceView.Renderer {
+/** The room's drawn text, rendered in composition and uploaded on the GL thread. */
+private class Door4TextImages(
+    val openMark: ImageBitmap,
+    val leftWall: ImageBitmap,
+    val rightWall: ImageBitmap,
+    val exitSign: ImageBitmap,
+)
 
-    @Volatile var camX = 0f
-    @Volatile var camZ = 0f
-    @Volatile var camYaw = 0f
-    @Volatile var lookAtX = 0f
-    @Volatile var lookAtZ = -1f
-    @Volatile var litCount = 1          // panels with order < litCount are revealed
-    @Volatile var foundCount = 0        // panels with order < foundCount have been read
-    @Volatile var doorOpen = 0f
+private class Door4Renderer : GlRenderer {
 
-    @Volatile var rearLive = false
-    @Volatile var frontLive = false
-    @Volatile var rearSurfaceTexture: SurfaceTexture? = null
-    @Volatile var frontSurfaceTexture: SurfaceTexture? = null
+    @kotlin.concurrent.Volatile var camX = 0f
+    @kotlin.concurrent.Volatile var camZ = 0f
+    @kotlin.concurrent.Volatile var camYaw = 0f
+    @kotlin.concurrent.Volatile var lookAtX = 0f
+    @kotlin.concurrent.Volatile var lookAtZ = -1f
+    @kotlin.concurrent.Volatile var litCount = 1          // panels with order < litCount are revealed
+    @kotlin.concurrent.Volatile var foundCount = 0        // panels with order < foundCount have been read
+    @kotlin.concurrent.Volatile var doorOpen = 0f
+
+    /** Pre-rendered text, set by the composable before the surface is created. */
+    @kotlin.concurrent.Volatile var textImages: Door4TextImages? = null
+
+    /** Set by the composable once the door is open and permission is granted. */
+    @kotlin.concurrent.Volatile var camerasWanted = false
+
+    // Opened lazily on the GL thread the first frame after camerasWanted turns
+    // true, so the sessions do not run through the whole approach sequence.
+    private var cameras: DualCameraTextures? = null
 
     // Per-piece media. Populated on the GL thread in onSurfaceCreated:
-    //   videos → OES texture + SurfaceTexture (composable attaches a SoundPlayer).
+    //   videos → a GlVideoSource, which owns both its texture and its audio.
     //   images → GL_TEXTURE_2D, uploaded immediately from the asset.
     // mediaAspect drives panel geometry so each panel matches its media's
     // proportions exactly (no leftover background outside square/vertical media).
-    @Volatile var mediaSurfaceTexture: Array<SurfaceTexture?> = arrayOfNulls(SCREEN_COUNT)
-    @Volatile var mediaPixelSize: Array<Pair<Int, Int>?> = arrayOfNulls(SCREEN_COUNT)
+    val mediaVideo: Array<GlVideoSource?> = arrayOfNulls(SCREEN_COUNT)
+    @kotlin.concurrent.Volatile var mediaPixelSize: Array<Pair<Int, Int>?> = arrayOfNulls(SCREEN_COUNT)
     val mediaAspect = FloatArray(SCREEN_COUNT) { 16f / 9f }
     private val mediaTex = IntArray(SCREEN_COUNT)
     private val mediaIsVideo = BooleanArray(SCREEN_COUNT)
@@ -1004,10 +674,11 @@ private class Door4Renderer(private val context: Context) : GLSurfaceView.Render
             gl_Position = uMVP * aPosition;
             vTex = (uTexMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
         }""".trimIndent()
-    private val FST = """
-        #extension GL_OES_EGL_image_external : require
+    // The sampler type and any extension pragma come from the seam: Android
+    // samples an external-OES texture, iOS an ordinary 2D one.
+    private val FST = videoSamplerPreamble + """
         precision mediump float;
-        uniform samplerExternalOES uTex;
+        uniform $videoSamplerType uTex;
         varying vec2 vTex;
         void main(){ gl_FragColor = texture2D(uTex, vTex); }""".trimIndent()
 
@@ -1033,32 +704,31 @@ private class Door4Renderer(private val context: Context) : GLSurfaceView.Render
     private var texLeftWall = 0    // "Your perception."     fallback text on the left tunnel wall
     private var texRightWall = 0   // "Who perceives you?"   fallback text on the right tunnel wall
     private var texExit = 0        // green "EXIT" on the tunnel's end wall
-    private var exitSign: FloatBuffer? = null
-    private var wallLeftText: FloatBuffer? = null
-    private var wallRightText: FloatBuffer? = null
+    private var exitSign: GlFloatBuffer? = null
+    private var wallLeftText: GlFloatBuffer? = null
+    private var wallRightText: GlFloatBuffer? = null
 
-    private var texRear = 0; private var texFront = 0
-    @Volatile private var rearDirty = false; @Volatile private var rearHasContent = false
-    @Volatile private var frontDirty = false; @Volatile private var frontHasContent = false
+    @kotlin.concurrent.Volatile private var rearHasContent = false
+    @kotlin.concurrent.Volatile private var frontHasContent = false
     private val rearTexMtx = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
     private val frontTexMtx = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
-    private var wallLeft: FloatBuffer? = null
-    private var wallRight: FloatBuffer? = null
+    private var wallLeft: GlFloatBuffer? = null
+    private var wallRight: GlFloatBuffer? = null
 
     // Blue wireframe (GL_LINES)
-    private var roomLines: FloatBuffer? = null; private var roomLineCount = 0
+    private var roomLines: GlFloatBuffer? = null; private var roomLineCount = 0
     // Opaque dark surfaces
-    private var wallFill: FloatBuffer? = null; private var wallFillCount = 0
-    private var floorCeil: FloatBuffer? = null; private var floorCeilCount = 0   // black floor + ceiling
-    private var doorLeaf: FloatBuffer? = null; private var doorLeafCount = 0
-    private var tunnelFill: FloatBuffer? = null; private var tunnelFillCount = 0
-    private var tunnelLines: FloatBuffer? = null; private var tunnelLineCount = 0
+    private var wallFill: GlFloatBuffer? = null; private var wallFillCount = 0
+    private var floorCeil: GlFloatBuffer? = null; private var floorCeilCount = 0   // black floor + ceiling
+    private var doorLeaf: GlFloatBuffer? = null; private var doorLeafCount = 0
+    private var tunnelFill: GlFloatBuffer? = null; private var tunnelFillCount = 0
+    private var tunnelLines: GlFloatBuffer? = null; private var tunnelLineCount = 0
 
     private class PanelGeo(
-        val texFill: FloatBuffer,   // interleaved x,y,z,u,v (6 verts)
-        val border: FloatBuffer,
-        val xMark: FloatBuffer,     // [X] marker textured quad — interleaved x,y,z,u,v (6 verts)
-        val glow: FloatBuffer, val order: Int,
+        val texFill: GlFloatBuffer,   // interleaved x,y,z,u,v (6 verts)
+        val border: GlFloatBuffer,
+        val xMark: GlFloatBuffer,     // [X] marker textured quad — interleaved x,y,z,u,v (6 verts)
+        val glow: GlFloatBuffer, val order: Int,
         val r: Float, val g: Float, val b: Float
     )
     private val panels = mutableListOf<PanelGeo>()
@@ -1077,205 +747,115 @@ private class Door4Renderer(private val context: Context) : GLSurfaceView.Render
         floatArrayOf(0.70f, 1.0f, 0.20f),  // lime
     )
 
-    override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+    override fun onSurfaceCreated() {
         // The void behind the geometry is BLACK, to match the black floor/ceiling
         // (walls are grey, drawn as their own surfaces so the room stays navigable).
-        GLES20.glClearColor(0.0f, 0.0f, 0.0f, 1f)
-        GLES20.glEnable(GLES20.GL_DEPTH_TEST)
-        GLES20.glDepthFunc(GLES20.GL_LEQUAL)
-        GLES20.glDisable(GLES20.GL_CULL_FACE)
+        Gl.glClearColor(0.0f, 0.0f, 0.0f, 1f)
+        Gl.glEnable(Gl.GL_DEPTH_TEST)
+        Gl.glDepthFunc(Gl.GL_LEQUAL)
+        Gl.glDisable(Gl.GL_CULL_FACE)
         prog = buildProg(VS, FS)
-        aPos = GLES20.glGetAttribLocation(prog, "aPosition")
-        uMVP = GLES20.glGetUniformLocation(prog, "uMVP")
-        uCol = GLES20.glGetUniformLocation(prog, "uColor")
+        aPos = Gl.glGetAttribLocation(prog, "aPosition")
+        uMVP = Gl.glGetUniformLocation(prog, "uMVP")
+        uCol = Gl.glGetUniformLocation(prog, "uColor")
 
         progTex = buildProg(VST, FST)
-        aPosT = GLES20.glGetAttribLocation(progTex, "aPosition")
-        aTexT = GLES20.glGetAttribLocation(progTex, "aTexCoord")
-        uMVPT = GLES20.glGetUniformLocation(progTex, "uMVP")
-        uTexMatrix = GLES20.glGetUniformLocation(progTex, "uTexMatrix")
-        uSampler = GLES20.glGetUniformLocation(progTex, "uTex")
+        aPosT = Gl.glGetAttribLocation(progTex, "aPosition")
+        aTexT = Gl.glGetAttribLocation(progTex, "aTexCoord")
+        uMVPT = Gl.glGetUniformLocation(progTex, "uMVP")
+        uTexMatrix = Gl.glGetUniformLocation(progTex, "uTexMatrix")
+        uSampler = Gl.glGetUniformLocation(progTex, "uTex")
 
-        val ids = IntArray(2)
-        GLES20.glGenTextures(2, ids, 0)
-        texRear = ids[0]; texFront = ids[1]
-        for (t in ids) {
-            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, t)
-            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
-        }
-        rearSurfaceTexture = SurfaceTexture(texRear).also { it.setOnFrameAvailableListener { rearDirty = true } }
-        frontSurfaceTexture = SurfaceTexture(texFront).also { it.setOnFrameAvailableListener { frontDirty = true } }
+
 
         // 2D textured program
         progT2 = buildProg(VST2, FST2)
-        aPosT2 = GLES20.glGetAttribLocation(progT2, "aPosition")
-        aTexT2 = GLES20.glGetAttribLocation(progT2, "aTexCoord")
-        uMVPT2 = GLES20.glGetUniformLocation(progT2, "uMVP")
-        uSamplerT2 = GLES20.glGetUniformLocation(progT2, "uTex")
+        aPosT2 = Gl.glGetAttribLocation(progT2, "aPosition")
+        aTexT2 = Gl.glGetAttribLocation(progT2, "aTexCoord")
+        uMVPT2 = Gl.glGetUniformLocation(progT2, "uMVP")
+        uSamplerT2 = Gl.glGetUniformLocation(progT2, "uTex")
 
         // ── Per-piece media textures (one per news item) ──────────────────────
         val mediaIds = IntArray(SCREEN_COUNT)
-        GLES20.glGenTextures(SCREEN_COUNT, mediaIds, 0)
+        Gl.glGenTextures(SCREEN_COUNT, mediaIds, 0)
         for (i in 0 until SCREEN_COUNT) {
             mediaTex[i] = mediaIds[i]
             val item = DOOR4_NEWS[i]
             mediaIsVideo[i] = item.isVideo
             if (item.isVideo) {
-                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, mediaIds[i])
-                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
-                // Resolve video dimensions (accounting for rotation metadata) so
-                // the panel geometry below can be sized to the true aspect.
-                var w = 1280; var h = 720
-                try {
-                    val mmr = MediaMetadataRetriever()
-                    val afd = context.assets.openFd(item.asset)
-                    try { mmr.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length) }
-                    finally { afd.close() }
-                    w = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: w
-                    h = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: h
-                    val rot = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
-                    if (rot == 90 || rot == 270) { val tmp = w; w = h; h = tmp }
-                    try { mmr.release() } catch (_: Throwable) {}
-                } catch (_: Throwable) {}
+                val video = createVideoTexture(item.asset)?.apply {
+                    setLooping(true)
+                    // Silent until the player walks up to it; the movement loop
+                    // fades each piece in by distance.
+                    setVolume(0f)
+                    setReverb(true)
+                }
+                mediaVideo[i] = video
+                val w = video?.videoWidth ?: 1280
+                val h = video?.videoHeight ?: 720
                 mediaPixelSize[i] = Pair(w, h)
                 mediaAspect[i] = if (h > 0) w.toFloat() / h.toFloat() else 16f / 9f
-                val idx = i
-                val st = SurfaceTexture(mediaIds[i])
-                st.setDefaultBufferSize(w, h)
-                st.setOnFrameAvailableListener { mediaDirty[idx] = true }
-                mediaSurfaceTexture[i] = st
             } else {
-                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mediaIds[i])
-                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
-                try {
-                    val opts = BitmapFactory.Options().apply { inScaled = false }
-                    val bm = BitmapFactory.decodeStream(context.assets.open(item.asset), null, opts)
-                    if (bm != null) {
-                        mediaAspect[i] = if (bm.height > 0) bm.width.toFloat() / bm.height.toFloat() else 1f
-                        mediaPixelSize[i] = Pair(bm.width, bm.height)
-                        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bm, 0)
-                        bm.recycle()
-                        mediaHasContent[i] = true
-                    }
-                } catch (_: Throwable) {}
+                Gl.glBindTexture(Gl.GL_TEXTURE_2D, mediaIds[i])
+                Gl.glTexParameteri(Gl.GL_TEXTURE_2D, Gl.GL_TEXTURE_MIN_FILTER, Gl.GL_LINEAR)
+                Gl.glTexParameteri(Gl.GL_TEXTURE_2D, Gl.GL_TEXTURE_MAG_FILTER, Gl.GL_LINEAR)
+                Gl.glTexParameteri(Gl.GL_TEXTURE_2D, Gl.GL_TEXTURE_WRAP_S, Gl.GL_CLAMP_TO_EDGE)
+                Gl.glTexParameteri(Gl.GL_TEXTURE_2D, Gl.GL_TEXTURE_WRAP_T, Gl.GL_CLAMP_TO_EDGE)
+                decodeImageAsset(item.asset)?.let { img ->
+                    mediaAspect[i] = if (img.height > 0) img.width.toFloat() / img.height.toFloat() else 1f
+                    mediaPixelSize[i] = Pair(img.width, img.height)
+                    Gl.glTexImage2DRgba(img.width, img.height, img.rgba)
+                    mediaHasContent[i] = true
+                }
             }
         }
 
-        // "[open]" marker — rendered once as monospace text on a transparent
-        // bitmap and uploaded as a 2D texture. The bitmap aspect ratio is fed
-        // back to buildScreens so the world quad's proportions match the
-        // rendered glyph.
-        try {
-            val paint = Paint().apply {
-                color = 0xFFFFFFFF.toInt()
-                isAntiAlias = true
-                typeface = Typeface.MONOSPACE
-                textSize = 144f
-            }
-            val text = "[open]"
-            val tw = paint.measureText(text)
-            val fm = paint.fontMetrics
-            val th = fm.descent - fm.ascent
-            val pad = 8f
-            val bmW = kotlin.math.ceil(tw + pad * 2f).toInt()
-            val bmH = kotlin.math.ceil(th + pad * 2f).toInt()
-            val xBm = Bitmap.createBitmap(bmW, bmH, Bitmap.Config.ARGB_8888)
-            Canvas(xBm).drawText(text, pad, pad - fm.ascent, paint)
-            val ids2 = IntArray(1)
-            GLES20.glGenTextures(1, ids2, 0)
-            texXMark = ids2[0]
-            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texXMark)
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
-            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, xBm, 0)
-            xMarkAspect = bmW.toFloat() / bmH.toFloat()
-            xBm.recycle()
-        } catch (_: Throwable) {}
-
-        // Fallback text for the tunnel walls (shown if the camera feed is
-        // unavailable — e.g. the player denied the camera permission).
-        texLeftWall = makeCenteredTextTexture("Your perception.", 1024, 512)
-        texRightWall = makeCenteredTextTexture("Who perceives you?", 1024, 512)
-        texExit = makeCenteredTextTexture("EXIT", 512, 256, 0xFF3BE07A.toInt())
+        // "[open]" marker and the tunnel-wall fallback text. The aspect ratio
+        // is fed back to buildScreens so each world quad's proportions match
+        // the rendered glyph.
+        // A TextMeasurer only exists inside a composition, so the images
+        // arrive pre-rendered and are only uploaded here.
+        textImages?.let { images ->
+            texXMark = uploadTextureFromImage(images.openMark)
+            xMarkAspect = images.openMark.width.toFloat() / images.openMark.height.toFloat()
+            texLeftWall = uploadTextureFromImage(images.leftWall)
+            texRightWall = uploadTextureFromImage(images.rightWall)
+            texExit = uploadTextureFromImage(images.exitSign)
+        }
 
         buildScene()
     }
 
-    // Render a single line of monospace text centered in a transparent bitmap
-    // and upload it as a GL_TEXTURE_2D. Returns the texture id (0 on failure).
-    private fun makeCenteredTextTexture(text: String, bmW: Int, bmH: Int, argb: Int = 0xFFFFFFFF.toInt()): Int {
-        return try {
-            val paint = Paint().apply {
-                color = argb
-                isAntiAlias = true
-                typeface = Typeface.MONOSPACE
-                textSize = bmH * 0.42f
-            }
-            // Shrink text size until it fits the bitmap width with a margin.
-            while (paint.measureText(text) > bmW * 0.92f && paint.textSize > 8f) {
-                paint.textSize = paint.textSize * 0.94f
-            }
-            val bm = Bitmap.createBitmap(bmW, bmH, Bitmap.Config.ARGB_8888)
-            val fm = paint.fontMetrics
-            val tw = paint.measureText(text)
-            val baseline = (bmH - (fm.descent - fm.ascent)) / 2f - fm.ascent
-            Canvas(bm).drawText(text, (bmW - tw) / 2f, baseline, paint)
-            val ids = IntArray(1)
-            GLES20.glGenTextures(1, ids, 0)
-            val texId = ids[0]
-            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId)
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
-            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bm, 0)
-            bm.recycle()
-            texId
-        } catch (_: Throwable) { 0 }
-    }
-
-    override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
-        GLES20.glViewport(0, 0, w, h); sw = w; sh = h
+    override fun onSurfaceChanged(w: Int, h: Int) {
+        Gl.glViewport(0, 0, w, h); sw = w; sh = h
     }
 
     private var lastFrameMs = 0L
-    override fun onDrawFrame(gl: GL10?) {
+    override fun onDrawFrame() {
         // Frame-rate cap (~33 fps) to cut sustained GPU/CPU load (heat + battery).
-        val nowMs = android.os.SystemClock.uptimeMillis()
-        val since = nowMs - lastFrameMs
-        if (lastFrameMs != 0L && since in 0 until 30L) {
-            try { Thread.sleep(30L - since) } catch (_: InterruptedException) {}
-        }
-        lastFrameMs = android.os.SystemClock.uptimeMillis()
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
-        GLES20.glUseProgram(prog)
+        // A no-op on iOS, where the display link caps the loop instead — see
+        // PlatformGlSurface's targetFps.
+        val since = nowMillis() - lastFrameMs
+        if (lastFrameMs != 0L && since in 0 until 30L) throttleRenderThread(30L - since)
+        lastFrameMs = nowMillis()
+        Gl.glClear(Gl.GL_COLOR_BUFFER_BIT or Gl.GL_DEPTH_BUFFER_BIT)
+        Gl.glUseProgram(prog)
 
         val proj = FloatArray(16); val view = FloatArray(16); val mvp = FloatArray(16)
         Matrix.perspectiveM(proj, 0, 82f, sw.toFloat() / sh.toFloat(), 1f, 12000f)
         Matrix.setLookAtM(view, 0, camX, EYE_Y, camZ, lookAtX, EYE_Y, lookAtZ, 0f, 1f, 0f)
         Matrix.multiplyMM(mvp, 0, proj, 0, view, 0)
-        GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
+        Gl.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
 
         // Opaque dark surfaces first. Walls are grey; floor + ceiling are black.
-        floorCeil?.let { drawBuf(it, GLES20.GL_TRIANGLES, floorCeilCount, 0.0f, 0.0f, 0.0f, 1f) }
-        wallFill?.let { drawBuf(it, GLES20.GL_TRIANGLES, wallFillCount, 0.17f, 0.17f, 0.19f, 1f) }
+        floorCeil?.let { drawBuf(it, Gl.GL_TRIANGLES, floorCeilCount, 0.0f, 0.0f, 0.0f, 1f) }
+        wallFill?.let { drawBuf(it, Gl.GL_TRIANGLES, wallFillCount, 0.17f, 0.17f, 0.19f, 1f) }
         if (doorOpen < 0.5f) {
-            doorLeaf?.let { drawBuf(it, GLES20.GL_TRIANGLES, doorLeafCount, 0.03f, 0.03f, 0.05f, 1f) }
+            doorLeaf?.let { drawBuf(it, Gl.GL_TRIANGLES, doorLeafCount, 0.03f, 0.03f, 0.05f, 1f) }
         }
 
         // Blue wireframe
-        roomLines?.let { drawBuf(it, GLES20.GL_LINES, roomLineCount, 0.16f, 0.34f, 0.85f, 1f) }
+        roomLines?.let { drawBuf(it, Gl.GL_LINES, roomLineCount, 0.16f, 0.34f, 0.85f, 1f) }
 
         // Screens — lit ones show the placeholder image, unlit ones a faint border.
         // Borders first (colored program already active).
@@ -1284,7 +864,7 @@ private class Door4Renderer(private val context: Context) : GLSurfaceView.Render
             val br = if (lit) 1f else 0.10f
             val bg = if (lit) 1f else 0.20f
             val bb = if (lit) 1f else 0.45f
-            drawBuf(p.border, GLES20.GL_LINES, 8, br, bg, bb, 1f)
+            drawBuf(p.border, Gl.GL_LINES, 8, br, bg, bb, 1f)
         }
         // Textured fills for revealed panels. Images use the 2D sampler; videos
         // use the OES sampler (camera-feed program is reused). Then the "[X]"
@@ -1297,21 +877,21 @@ private class Door4Renderer(private val context: Context) : GLSurfaceView.Render
         }
 
         if (anyLitImg) {
-            GLES20.glUseProgram(progT2)
-            GLES20.glUniformMatrix4fv(uMVPT2, 1, false, mvp, 0)
-            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-            GLES20.glUniform1i(uSamplerT2, 0)
+            Gl.glUseProgram(progT2)
+            Gl.glUniformMatrix4fv(uMVPT2, 1, false, mvp, 0)
+            Gl.glActiveTexture(Gl.GL_TEXTURE0)
+            Gl.glUniform1i(uSamplerT2, 0)
             for (p in panels) {
                 if (p.order >= litCount || mediaIsVideo[p.order]) continue
                 if (!mediaHasContent[p.order]) continue
-                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mediaTex[p.order])
+                Gl.glBindTexture(Gl.GL_TEXTURE_2D, mediaTex[p.order])
                 p.texFill.position(0)
-                GLES20.glVertexAttribPointer(aPosT2, 3, GLES20.GL_FLOAT, false, 20, p.texFill)
-                GLES20.glEnableVertexAttribArray(aPosT2)
+                Gl.glVertexAttribPointer(aPosT2, 3, Gl.GL_FLOAT, false, 20, p.texFill)
+                Gl.glEnableVertexAttribArray(aPosT2)
                 p.texFill.position(3)
-                GLES20.glVertexAttribPointer(aTexT2, 2, GLES20.GL_FLOAT, false, 20, p.texFill)
-                GLES20.glEnableVertexAttribArray(aTexT2)
-                GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 6)
+                Gl.glVertexAttribPointer(aTexT2, 2, Gl.GL_FLOAT, false, 20, p.texFill)
+                Gl.glEnableVertexAttribArray(aTexT2)
+                Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, 6)
             }
         }
 
@@ -1323,162 +903,185 @@ private class Door4Renderer(private val context: Context) : GLSurfaceView.Render
                 // non-volatile mediaDirty flag (set from the frame-available callback
                 // thread) could be missed by the GL thread, freezing the video on its
                 // first frame while the audio kept playing.
-                mediaSurfaceTexture[i]?.let {
-                    try { it.updateTexImage(); it.getTransformMatrix(mediaTexMtx[i]) }
-                    catch (_: Throwable) {}
+                mediaVideo[i]?.let {
+                    if (it.updateTexImage()) {
+                        it.getTransformMatrix(mediaTexMtx[i])
+                        mediaHasContent[i] = true
+                    }
                 }
-                mediaHasContent[i] = true
-                mediaDirty[i] = false
             }
-            GLES20.glUseProgram(progTex)
-            GLES20.glUniformMatrix4fv(uMVPT, 1, false, mvp, 0)
-            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-            GLES20.glUniform1i(uSampler, 0)
+            Gl.glUseProgram(progTex)
+            Gl.glUniformMatrix4fv(uMVPT, 1, false, mvp, 0)
+            Gl.glActiveTexture(Gl.GL_TEXTURE0)
+            Gl.glUniform1i(uSampler, 0)
             for (p in panels) {
                 if (p.order >= litCount || !mediaIsVideo[p.order]) continue
                 if (!mediaHasContent[p.order]) continue
                 Matrix.multiplyMM(tmpTexMtx, 0, mediaTexMtx[p.order], 0, TEX_FLIP_V, 0)
-                GLES20.glUniformMatrix4fv(uTexMatrix, 1, false, tmpTexMtx, 0)
-                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, mediaTex[p.order])
+                Gl.glUniformMatrix4fv(uTexMatrix, 1, false, tmpTexMtx, 0)
+                val video = mediaVideo[p.order] ?: continue
+                // Re-read every frame: the iOS texture cache mints a new name
+                // per frame, so a cached id would freeze on the first one.
+                Gl.glBindTexture(video.textureTarget, video.textureId)
                 p.texFill.position(0)
-                GLES20.glVertexAttribPointer(aPosT, 3, GLES20.GL_FLOAT, false, 20, p.texFill)
-                GLES20.glEnableVertexAttribArray(aPosT)
+                Gl.glVertexAttribPointer(aPosT, 3, Gl.GL_FLOAT, false, 20, p.texFill)
+                Gl.glEnableVertexAttribArray(aPosT)
                 p.texFill.position(3)
-                GLES20.glVertexAttribPointer(aTexT, 2, GLES20.GL_FLOAT, false, 20, p.texFill)
-                GLES20.glEnableVertexAttribArray(aTexT)
-                GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 6)
+                Gl.glVertexAttribPointer(aTexT, 2, Gl.GL_FLOAT, false, 20, p.texFill)
+                Gl.glEnableVertexAttribArray(aTexT)
+                Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, 6)
             }
         }
 
         // "[X]" markers — show only for the current target (revealed but not
         // yet read). Premultiplied-alpha blend over the wall.
         if (foundCount < SCREEN_COUNT && foundCount < litCount) {
-            GLES20.glUseProgram(progT2)
-            GLES20.glUniformMatrix4fv(uMVPT2, 1, false, mvp, 0)
-            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-            GLES20.glUniform1i(uSamplerT2, 0)
-            GLES20.glEnable(GLES20.GL_BLEND)
-            GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
-            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texXMark)
+            Gl.glUseProgram(progT2)
+            Gl.glUniformMatrix4fv(uMVPT2, 1, false, mvp, 0)
+            Gl.glActiveTexture(Gl.GL_TEXTURE0)
+            Gl.glUniform1i(uSamplerT2, 0)
+            Gl.glEnable(Gl.GL_BLEND)
+            Gl.glBlendFunc(Gl.GL_ONE, Gl.GL_ONE_MINUS_SRC_ALPHA)
+            Gl.glBindTexture(Gl.GL_TEXTURE_2D, texXMark)
             for (p in panels) {
                 if (p.order != foundCount) continue
                 p.xMark.position(0)
-                GLES20.glVertexAttribPointer(aPosT2, 3, GLES20.GL_FLOAT, false, 20, p.xMark)
-                GLES20.glEnableVertexAttribArray(aPosT2)
+                Gl.glVertexAttribPointer(aPosT2, 3, Gl.GL_FLOAT, false, 20, p.xMark)
+                Gl.glEnableVertexAttribArray(aPosT2)
                 p.xMark.position(3)
-                GLES20.glVertexAttribPointer(aTexT2, 2, GLES20.GL_FLOAT, false, 20, p.xMark)
-                GLES20.glEnableVertexAttribArray(aTexT2)
-                GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 6)
+                Gl.glVertexAttribPointer(aTexT2, 2, Gl.GL_FLOAT, false, 20, p.xMark)
+                Gl.glEnableVertexAttribArray(aTexT2)
+                Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, 6)
             }
-            GLES20.glDisable(GLES20.GL_BLEND)
+            Gl.glDisable(Gl.GL_BLEND)
         }
 
         // Restore colored program for the glow pass below
-        GLES20.glUseProgram(prog)
-        GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
+        Gl.glUseProgram(prog)
+        Gl.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
 
         // Coloured "screen is on" glow — a frame AROUND the screen (screen cut out),
         // sitting slightly in front of the wall so it doesn't z-fight while walking.
-        GLES20.glEnable(GLES20.GL_BLEND)
-        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE)
-        GLES20.glDepthMask(false)
+        Gl.glEnable(Gl.GL_BLEND)
+        Gl.glBlendFunc(Gl.GL_SRC_ALPHA, Gl.GL_ONE)
+        Gl.glDepthMask(false)
         for (p in panels) {
-            if (p.order < litCount) drawBuf(p.glow, GLES20.GL_TRIANGLES, 24, p.r, p.g, p.b, 0.22f)
+            if (p.order < litCount) drawBuf(p.glow, Gl.GL_TRIANGLES, 24, p.r, p.g, p.b, 0.22f)
         }
-        GLES20.glDepthMask(true)
-        GLES20.glDisable(GLES20.GL_BLEND)
+        Gl.glDepthMask(true)
+        Gl.glDisable(Gl.GL_BLEND)
 
         // Tunnel (revealed as doorOpen rises)
         if (doorOpen > 0.001f) {
-            tunnelFill?.let { drawBuf(it, GLES20.GL_TRIANGLES, tunnelFillCount, 0.03f, 0.03f, 0.05f, 1f) }
-            tunnelLines?.let { drawBuf(it, GLES20.GL_LINES, tunnelLineCount, 0.16f, 0.34f, 0.85f, 1f) }
+            tunnelFill?.let { drawBuf(it, Gl.GL_TRIANGLES, tunnelFillCount, 0.03f, 0.03f, 0.05f, 1f) }
+            tunnelLines?.let { drawBuf(it, Gl.GL_LINES, tunnelLineCount, 0.16f, 0.34f, 0.85f, 1f) }
 
-            if (rearDirty) {
-                rearSurfaceTexture?.let { it.updateTexImage(); it.getTransformMatrix(rearTexMtx) }
-                rearHasContent = true; rearDirty = false
+            // The seam owns texture creation, because on iOS the texture is
+            // minted per frame by the pixel-buffer cache rather than allocated
+            // up front — so this has to happen on the GL thread.
+            if (camerasWanted && cameras == null) cameras = createDualCameraTextures()
+            if (!camerasWanted && cameras != null) {
+                cameras?.release()
+                cameras = null
+                rearHasContent = false
+                frontHasContent = false
             }
-            if (frontDirty) {
-                frontSurfaceTexture?.let { it.updateTexImage(); it.getTransformMatrix(frontTexMtx) }
-                frontHasContent = true; frontDirty = false
+            val cams = cameras
+            cams?.rear?.let {
+                if (it.updateTexImage()) {
+                    it.getTransformMatrix(rearTexMtx)
+                    rearHasContent = true
+                }
             }
-            val leftLive = rearLive && rearHasContent
-            val rightLive = frontLive && frontHasContent
+            cams?.front?.let {
+                if (it.updateTexImage()) {
+                    it.getTransformMatrix(frontTexMtx)
+                    frontHasContent = true
+                }
+            }
+            val leftLive = cams?.isLive(front = false) == true && rearHasContent
+            val rightLive = cams?.isLive(front = true) == true && frontHasContent
             if (!leftLive)  wallLeft?.let  { drawWallSolid(it, 0.05f, 0.09f, 0.09f) }
             if (!rightLive) wallRight?.let { drawWallSolid(it, 0.05f, 0.09f, 0.09f) }
             if (leftLive || rightLive) {
-                GLES20.glUseProgram(progTex)
-                GLES20.glUniformMatrix4fv(uMVPT, 1, false, mvp, 0)
-                if (leftLive)  wallLeft?.let  { drawWallTex(it, texRear, rearTexMtx) }
-                if (rightLive) wallRight?.let { drawWallTex(it, texFront, frontTexMtx) }
+                Gl.glUseProgram(progTex)
+                Gl.glUniformMatrix4fv(uMVPT, 1, false, mvp, 0)
+                if (leftLive) cams?.rear?.let { cam ->
+                    wallLeft?.let { drawWallTex(it, cam, rearTexMtx) }
+                }
+                if (rightLive) cams?.front?.let { cam ->
+                    wallRight?.let { drawWallTex(it, cam, frontTexMtx) }
+                }
             }
             // Fallback text on whichever wall isn't showing a live camera feed.
             if (!leftLive || !rightLive) {
-                GLES20.glUseProgram(progT2)
-                GLES20.glUniformMatrix4fv(uMVPT2, 1, false, mvp, 0)
-                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-                GLES20.glUniform1i(uSamplerT2, 0)
-                GLES20.glEnable(GLES20.GL_BLEND)
-                GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+                Gl.glUseProgram(progT2)
+                Gl.glUniformMatrix4fv(uMVPT2, 1, false, mvp, 0)
+                Gl.glActiveTexture(Gl.GL_TEXTURE0)
+                Gl.glUniform1i(uSamplerT2, 0)
+                Gl.glEnable(Gl.GL_BLEND)
+                Gl.glBlendFunc(Gl.GL_ONE, Gl.GL_ONE_MINUS_SRC_ALPHA)
                 if (!leftLive && texLeftWall != 0)  wallLeftText?.let  { drawWallTex2D(it, texLeftWall) }
                 if (!rightLive && texRightWall != 0) wallRightText?.let { drawWallTex2D(it, texRightWall) }
-                GLES20.glDisable(GLES20.GL_BLEND)
+                Gl.glDisable(Gl.GL_BLEND)
             }
 
             // EXIT sign on the end wall — always shown once the tunnel is open.
             if (texExit != 0) {
-                GLES20.glUseProgram(progT2)
-                GLES20.glUniformMatrix4fv(uMVPT2, 1, false, mvp, 0)
-                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-                GLES20.glUniform1i(uSamplerT2, 0)
-                GLES20.glEnable(GLES20.GL_BLEND)
-                GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+                Gl.glUseProgram(progT2)
+                Gl.glUniformMatrix4fv(uMVPT2, 1, false, mvp, 0)
+                Gl.glActiveTexture(Gl.GL_TEXTURE0)
+                Gl.glUniform1i(uSamplerT2, 0)
+                Gl.glEnable(Gl.GL_BLEND)
+                Gl.glBlendFunc(Gl.GL_ONE, Gl.GL_ONE_MINUS_SRC_ALPHA)
                 exitSign?.let { drawWallTex2D(it, texExit) }
-                GLES20.glDisable(GLES20.GL_BLEND)
+                Gl.glDisable(Gl.GL_BLEND)
             }
         }
     }
 
-    private fun drawBuf(buf: FloatBuffer, mode: Int, count: Int, r: Float, g: Float, b: Float, a: Float) {
-        GLES20.glUniform4f(uCol, r, g, b, a)
+    private fun drawBuf(buf: GlFloatBuffer, mode: Int, count: Int, r: Float, g: Float, b: Float, a: Float) {
+        Gl.glUniform4f(uCol, r, g, b, a)
         buf.position(0)
-        GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 12, buf)
-        GLES20.glEnableVertexAttribArray(aPos)
-        GLES20.glDrawArrays(mode, 0, count)
+        Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, buf)
+        Gl.glEnableVertexAttribArray(aPos)
+        Gl.glDrawArrays(mode, 0, count)
     }
 
-    private fun drawWallSolid(buf: FloatBuffer, r: Float, g: Float, b: Float) {
-        GLES20.glUniform4f(uCol, r, g, b, 1f)
+    private fun drawWallSolid(buf: GlFloatBuffer, r: Float, g: Float, b: Float) {
+        Gl.glUniform4f(uCol, r, g, b, 1f)
         buf.position(0)
-        GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 20, buf)
-        GLES20.glEnableVertexAttribArray(aPos)
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 6)
+        Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 20, buf)
+        Gl.glEnableVertexAttribArray(aPos)
+        Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, 6)
     }
 
-    private fun drawWallTex(buf: FloatBuffer, tex: Int, texMtx: FloatArray) {
-        GLES20.glUniformMatrix4fv(uTexMatrix, 1, false, texMtx, 0)
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, tex)
-        GLES20.glUniform1i(uSampler, 0)
+    private fun drawWallTex(buf: GlFloatBuffer, source: GlVideoTexture, texMtx: FloatArray) {
+        Gl.glUniformMatrix4fv(uTexMatrix, 1, false, texMtx, 0)
+        Gl.glActiveTexture(Gl.GL_TEXTURE0)
+        // Re-read every frame — see GlVideoTexture.
+        Gl.glBindTexture(source.textureTarget, source.textureId)
+        Gl.glUniform1i(uSampler, 0)
         buf.position(0)
-        GLES20.glVertexAttribPointer(aPosT, 3, GLES20.GL_FLOAT, false, 20, buf)
-        GLES20.glEnableVertexAttribArray(aPosT)
+        Gl.glVertexAttribPointer(aPosT, 3, Gl.GL_FLOAT, false, 20, buf)
+        Gl.glEnableVertexAttribArray(aPosT)
         buf.position(3)
-        GLES20.glVertexAttribPointer(aTexT, 2, GLES20.GL_FLOAT, false, 20, buf)
-        GLES20.glEnableVertexAttribArray(aTexT)
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 6)
+        Gl.glVertexAttribPointer(aTexT, 2, Gl.GL_FLOAT, false, 20, buf)
+        Gl.glEnableVertexAttribArray(aTexT)
+        Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, 6)
     }
 
     // 2D-textured wall quad — same interleaved x,y,z,u,v layout as drawWallTex
     // but sampled from a sampler2D (the progT2 program is expected to be active).
-    private fun drawWallTex2D(buf: FloatBuffer, tex: Int) {
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex)
+    private fun drawWallTex2D(buf: GlFloatBuffer, tex: Int) {
+        Gl.glBindTexture(Gl.GL_TEXTURE_2D, tex)
         buf.position(0)
-        GLES20.glVertexAttribPointer(aPosT2, 3, GLES20.GL_FLOAT, false, 20, buf)
-        GLES20.glEnableVertexAttribArray(aPosT2)
+        Gl.glVertexAttribPointer(aPosT2, 3, Gl.GL_FLOAT, false, 20, buf)
+        Gl.glEnableVertexAttribArray(aPosT2)
         buf.position(3)
-        GLES20.glVertexAttribPointer(aTexT2, 2, GLES20.GL_FLOAT, false, 20, buf)
-        GLES20.glEnableVertexAttribArray(aTexT2)
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 6)
+        Gl.glVertexAttribPointer(aTexT2, 2, Gl.GL_FLOAT, false, 20, buf)
+        Gl.glEnableVertexAttribArray(aTexT2)
+        Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, 6)
     }
 
     // ── Scene ──────────────────────────────────────────────────────────────────
@@ -1764,19 +1367,17 @@ private class Door4Renderer(private val context: Context) : GLSurfaceView.Render
     }
 
     private fun buildProg(vs: String, fs: String): Int {
-        val p = GLES20.glCreateProgram()
-        GLES20.glAttachShader(p, comp(GLES20.GL_VERTEX_SHADER, vs))
-        GLES20.glAttachShader(p, comp(GLES20.GL_FRAGMENT_SHADER, fs))
-        GLES20.glLinkProgram(p)
+        val p = Gl.glCreateProgram()
+        Gl.glAttachShader(p, comp(Gl.GL_VERTEX_SHADER, vs))
+        Gl.glAttachShader(p, comp(Gl.GL_FRAGMENT_SHADER, fs))
+        Gl.glLinkProgram(p)
         return p
     }
     private fun comp(type: Int, src: String): Int {
-        val s = GLES20.glCreateShader(type)
-        GLES20.glShaderSource(s, src); GLES20.glCompileShader(s)
+        val s = Gl.glCreateShader(type)
+        Gl.glShaderSource(s, src); Gl.glCompileShader(s)
         return s
     }
 }
 
-private fun FloatArray.toFB2(): FloatBuffer =
-    ByteBuffer.allocateDirect(size * 4).order(ByteOrder.nativeOrder())
-        .asFloatBuffer().also { it.put(this); it.position(0) }
+private fun FloatArray.toFB2(): GlFloatBuffer = toGlBuffer()

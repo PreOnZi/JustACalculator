@@ -48,3 +48,33 @@ fun textureAssetExists(path: String): Boolean = Assets.exists(path)
 fun loadImageBitmapAsset(path: String): ImageBitmap? = runCatching {
     Assets.readBytes(path).decodeToImageBitmap()
 }.getOrNull()
+
+/**
+ * Uploads an already-decoded image as a 2D texture, returning its name.
+ *
+ * `readPixels` normalises to ARGB ints on both platforms, so the byte shuffle
+ * below is the same everywhere — which is why text rendered through Compose can
+ * reach GL without a platform-specific bitmap type.
+ */
+fun uploadTextureFromImage(image: ImageBitmap): Int {
+    val argb = IntArray(image.width * image.height)
+    image.readPixels(argb)
+    val rgba = ByteArray(argb.size * 4)
+    for (i in argb.indices) {
+        val p = argb[i]
+        val o = i * 4
+        rgba[o] = ((p shr 16) and 0xFF).toByte()
+        rgba[o + 1] = ((p shr 8) and 0xFF).toByte()
+        rgba[o + 2] = (p and 0xFF).toByte()
+        rgba[o + 3] = ((p shr 24) and 0xFF).toByte()
+    }
+    val ids = IntArray(1)
+    Gl.glGenTextures(1, ids, 0)
+    Gl.glBindTexture(Gl.GL_TEXTURE_2D, ids[0])
+    Gl.glTexParameteri(Gl.GL_TEXTURE_2D, Gl.GL_TEXTURE_MIN_FILTER, Gl.GL_LINEAR)
+    Gl.glTexParameteri(Gl.GL_TEXTURE_2D, Gl.GL_TEXTURE_MAG_FILTER, Gl.GL_LINEAR)
+    Gl.glTexParameteri(Gl.GL_TEXTURE_2D, Gl.GL_TEXTURE_WRAP_S, Gl.GL_CLAMP_TO_EDGE)
+    Gl.glTexParameteri(Gl.GL_TEXTURE_2D, Gl.GL_TEXTURE_WRAP_T, Gl.GL_CLAMP_TO_EDGE)
+    Gl.glTexImage2DRgba(image.width, image.height, rgba)
+    return ids[0]
+}

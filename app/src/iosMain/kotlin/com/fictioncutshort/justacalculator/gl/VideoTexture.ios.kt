@@ -7,11 +7,15 @@ import com.fictioncutshort.justacalculator.platform.hasPermission
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.useContents
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.value
+import platform.AVFoundation.AVAssetTrack
 import platform.AVFoundation.AVCaptureConnection
 import platform.AVFoundation.AVCaptureDevice
 import platform.AVFoundation.AVCaptureDeviceInput
+import platform.AVFoundation.AVCaptureInput
+import platform.AVFoundation.AVCaptureMultiCamSession
 import platform.AVFoundation.AVCaptureDevicePositionBack
 import platform.AVFoundation.AVCaptureDevicePositionFront
 import platform.AVFoundation.AVCaptureOutput
@@ -27,6 +31,9 @@ import platform.AVFoundation.AVPlayerItemVideoOutput
 import platform.AVFoundation.addOutput
 import platform.AVFoundation.AVURLAsset
 import platform.AVFoundation.currentItem
+import platform.AVFoundation.naturalSize
+import platform.AVFoundation.preferredTransform
+import platform.AVFoundation.tracksWithMediaType
 import platform.AVFoundation.currentTime
 import platform.AVFoundation.duration
 import platform.AVFoundation.pause
@@ -71,6 +78,12 @@ import platform.gles3.GL_TEXTURE_WRAP_T
 import platform.gles3.GL_UNSIGNED_BYTE
 import platform.gles3.glBindTexture
 import platform.gles3.glTexParameteri
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.concurrent.Volatile
 import kotlin.math.roundToInt
 
@@ -221,64 +234,140 @@ private class CameraFrameDelegate(
 }
 
 @OptIn(ExperimentalForeignApi::class)
-private class CameraTexture(
-    private val session: AVCaptureSession,
-    private val sink: PixelBufferTexture,
-    private val delegate: CameraFrameDelegate,
-) : GlVideoTexture {
-
+private class CameraWall(private val sink: PixelBufferTexture) : GlVideoTexture {
     override val textureId: Int get() = sink.textureId
     override val textureTarget: Int = Gl.GL_TEXTURE_2D
     override fun updateTexImage(): Boolean = sink.update()
     override fun getTransformMatrix(out: FloatArray) = identity(out)
+    override fun release() = sink.release()
+}
+
+/**
+ * Both cameras through AVFoundation.
+ *
+ * `AVCaptureMultiCamSession` is the only way to run two at once, and it is
+ * unsupported on older hardware — [AVCaptureMultiCamSession.multiCamSupported]
+ * decides. Where it is missing, one plain session alternates between the two
+ * every few seconds, matching what Android does on devices without concurrent
+ * camera support.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private class AVDualCameraTextures : DualCameraTextures {
+
+    private val rearSink = PixelBufferTexture()
+    private val frontSink = PixelBufferTexture()
+    private val rearWall = CameraWall(rearSink)
+    private val frontWall = CameraWall(frontSink)
+    private val rearDelegate = CameraFrameDelegate(rearSink)
+    private val frontDelegate = CameraFrameDelegate(frontSink)
+
+    private var session: AVCaptureSession? = null
+    private var alternateJob: Job? = null
+    private val scope = CoroutineScope(Dispatchers.Main)
+
+    @Volatile private var rearLive = false
+    @Volatile private var frontLive = false
+
+    override val rear: GlVideoTexture get() = rearWall
+    override val front: GlVideoTexture get() = frontWall
+    override fun isLive(front: Boolean) = if (front) frontLive else rearLive
+
+    private fun deviceAt(front: Boolean): AVCaptureDevice? {
+        val wanted = if (front) AVCaptureDevicePositionFront else AVCaptureDevicePositionBack
+        return AVCaptureDevice.devicesWithMediaType(AVMediaTypeVideo)
+            ?.filterIsInstance<AVCaptureDevice>()
+            ?.firstOrNull { it.position == wanted }
+    }
+
+    private fun makeOutput(delegate: CameraFrameDelegate, label: String) =
+        AVCaptureVideoDataOutput().apply {
+            alwaysDiscardsLateVideoFrames = true
+            // BGRA is what the texture cache maps without a conversion pass.
+            videoSettings = mapOf(kCVPixelBufferPixelFormatTypeKey to kCVPixelFormatType_32BGRA)
+            setSampleBufferDelegate(delegate, queue = dispatch_queue_create(label, null))
+        }
+
+    fun start(): Boolean {
+        if (AVCaptureMultiCamSession.isMultiCamSupported()) {
+            val multi = AVCaptureMultiCamSession()
+            multi.beginConfiguration()
+            var ok = true
+            for (front in listOf(false, true)) {
+                val device = deviceAt(front) ?: run { ok = false; null } ?: break
+                val input = AVCaptureDeviceInput.deviceInputWithDevice(device, null)
+                    ?: run { ok = false; null } ?: break
+                val output = makeOutput(
+                    if (front) frontDelegate else rearDelegate,
+                    if (front) "door4.cam.front" else "door4.cam.rear",
+                )
+                if (!multi.canAddInput(input) || !multi.canAddOutput(output)) { ok = false; break }
+                multi.addInput(input)
+                multi.addOutput(output)
+            }
+            multi.commitConfiguration()
+            if (ok) {
+                session = multi
+                multi.startRunning()
+                rearLive = true
+                frontLive = true
+                return true
+            }
+        }
+
+        // Single session, alternating.
+        val single = AVCaptureSession()
+        single.sessionPreset = AVCaptureSessionPresetHigh
+        session = single
+        alternateJob = scope.launch {
+            var showRear = true
+            while (true) {
+                bind(single, front = !showRear)
+                showRear = !showRear
+                delay(5000)
+            }
+        }
+        return true
+    }
+
+    private fun bind(session: AVCaptureSession, front: Boolean) {
+        session.beginConfiguration()
+        for (input in session.inputs.toList()) {
+            (input as? AVCaptureInput)?.let { session.removeInput(it) }
+        }
+        for (output in session.outputs.toList()) {
+            (output as? AVCaptureOutput)?.let { session.removeOutput(it) }
+        }
+        val device = deviceAt(front)
+        val input = device?.let { AVCaptureDeviceInput.deviceInputWithDevice(it, null) }
+        if (input != null && session.canAddInput(input)) session.addInput(input)
+        val output = makeOutput(
+            if (front) frontDelegate else rearDelegate,
+            if (front) "door4.cam.front" else "door4.cam.rear",
+        )
+        if (session.canAddOutput(output)) session.addOutput(output)
+        session.commitConfiguration()
+        if (!session.isRunning()) session.startRunning()
+        rearLive = !front
+        frontLive = front
+    }
 
     override fun release() {
-        if (session.isRunning()) session.stopRunning()
-        sink.release()
+        alternateJob?.cancel()
+        alternateJob = null
+        scope.cancel()
+        session?.let { if (it.isRunning()) it.stopRunning() }
+        session = null
+        rearLive = false; frontLive = false
+        rearSink.release()
+        frontSink.release()
     }
 }
 
 @OptIn(ExperimentalForeignApi::class)
-actual fun createCameraTexture(front: Boolean): GlVideoTexture? {
+actual fun createDualCameraTextures(): DualCameraTextures? {
     if (!hasPermission(AppInit.context, AppPermission.CAMERA)) return null
-
-    val wanted = if (front) AVCaptureDevicePositionFront else AVCaptureDevicePositionBack
-    val device = AVCaptureDevice.devicesWithMediaType(AVMediaTypeVideo)
-        ?.filterIsInstance<AVCaptureDevice>()
-        ?.firstOrNull { it.position == wanted }
-        ?: return null
-
-    val input = AVCaptureDeviceInput.deviceInputWithDevice(device, null) ?: return null
-    val session = AVCaptureSession()
-    session.beginConfiguration()
-    session.sessionPreset = AVCaptureSessionPresetHigh
-    if (!session.canAddInput(input)) {
-        session.commitConfiguration()
-        return null
-    }
-    session.addInput(input)
-
-    val sink = PixelBufferTexture()
-    val delegate = CameraFrameDelegate(sink)
-    val output = AVCaptureVideoDataOutput()
-    output.alwaysDiscardsLateVideoFrames = true
-    // BGRA is what the texture cache maps without a conversion pass.
-    output.videoSettings = mapOf(
-        kCVPixelBufferPixelFormatTypeKey to kCVPixelFormatType_32BGRA,
-    )
-    output.setSampleBufferDelegate(
-        delegate,
-        queue = dispatch_queue_create(if (front) "door4.cam.front" else "door4.cam.rear", null),
-    )
-    if (!session.canAddOutput(output)) {
-        session.commitConfiguration()
-        return null
-    }
-    session.addOutput(output)
-    session.commitConfiguration()
-    session.startRunning()
-
-    return CameraTexture(session, sink, delegate)
+    val textures = AVDualCameraTextures()
+    return if (textures.start()) textures else null
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -290,6 +379,8 @@ private class VideoTexture(
     private val player: AVPlayer,
     private val output: AVPlayerItemVideoOutput,
     private val sink: PixelBufferTexture,
+    override val videoWidth: Int,
+    override val videoHeight: Int,
 ) : GlVideoSource {
 
     private var loopObserver: Any? = null
@@ -343,6 +434,12 @@ private class VideoTexture(
 
     override val isPlaying: Boolean get() = player.rate != 0f
 
+    /**
+     * No-op. Reverb on iOS means routing through AVAudioEngine, which would
+     * mean giving up AVPlayer's own audio path for a background flourish.
+     */
+    override fun setReverb(enabled: Boolean) = Unit
+
     override fun release() {
         loopObserver?.let { NSNotificationCenter.defaultCenter.removeObserver(it) }
         loopObserver = null
@@ -363,5 +460,24 @@ actual fun createVideoTexture(assetPath: String): GlVideoSource? {
     )
     item.addOutput(output)
     val player = AVPlayer(playerItem = item)
-    return VideoTexture(player, output, PixelBufferTexture())
+    val (width, height) = videoSize(asset)
+    return VideoTexture(player, output, PixelBufferTexture(), width, height)
+}
+
+/**
+ * Display size of the first video track, with its preferred transform applied
+ * — `naturalSize` alone ignores the rotation a portrait recording carries.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private fun videoSize(asset: AVURLAsset): Pair<Int, Int> {
+    val track = asset.tracksWithMediaType(AVMediaTypeVideo).firstOrNull() as? AVAssetTrack
+        ?: return 1280 to 720
+    val size = track.naturalSize.useContents { width to height }
+    val transform = track.preferredTransform.useContents { floatArrayOf(a.toFloat(), b.toFloat(), c.toFloat(), d.toFloat()) }
+    // A quarter-turn puts zeros on the diagonal and non-zeros off it.
+    val rotated = transform[0] == 0f && transform[3] == 0f &&
+        (transform[1] != 0f || transform[2] != 0f)
+    val w = size.first.roundToInt()
+    val h = size.second.roundToInt()
+    return if (rotated) h to w else w to h
 }
