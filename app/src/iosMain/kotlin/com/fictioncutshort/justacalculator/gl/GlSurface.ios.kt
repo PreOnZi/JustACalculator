@@ -2,7 +2,13 @@ package com.fictioncutshort.justacalculator.gl
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.fictioncutshort.justacalculator.platform.AppLifecycleEvent
+import com.fictioncutshort.justacalculator.platform.OnAppLifecycleEvent
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.UIKitView
 import kotlinx.cinterop.CValue
@@ -42,8 +48,31 @@ actual fun PlatformGlSurface(
     modifier: Modifier,
     contextVersion: Int,
     targetFps: Int,
+    paused: Boolean,
 ) {
     val holder = remember { GlSurfaceHolder(renderer) }
+
+    // Stop rendering while the app is not on screen.
+    //
+    // Two reasons, and the second is not optional: iOS **terminates** an app
+    // that issues OpenGL commands while backgrounded (the GPU driver kills the
+    // client), so the loop has to be down before the app suspends. It also
+    // stops the city rendering behind the app switcher or Control Centre,
+    // which is pure heat and battery for pixels nobody sees.
+    //
+    // Android gets this from GLSurfaceView.onPause/onResume already.
+    // Caller-requested pause (an overlay covering the scene) and the lifecycle
+    // pause below are independent; either one stops the loop.
+    var backgrounded by remember { mutableStateOf(false) }
+    LaunchedEffect(paused, backgrounded) { holder.setPaused(paused || backgrounded) }
+
+    OnAppLifecycleEvent { event ->
+        when (event) {
+            AppLifecycleEvent.PAUSED, AppLifecycleEvent.STOPPED -> backgrounded = true
+            AppLifecycleEvent.RESUMED -> backgrounded = false
+            else -> Unit
+        }
+    }
 
     DisposableEffect(Unit) {
         onDispose { holder.dispose() }
@@ -99,6 +128,11 @@ private class GlSurfaceHolder(
             preferredFramesPerSecond = targetFps.toLong()
             addToRunLoop(NSRunLoop.currentRunLoop, NSRunLoopCommonModes)
         }
+    }
+
+    /** Halts the display link without tearing the context down. */
+    fun setPaused(paused: Boolean) {
+        displayLink?.setPaused(paused)
     }
 
     @ObjCAction

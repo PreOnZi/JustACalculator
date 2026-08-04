@@ -18,6 +18,7 @@ actual fun PlatformGlSurface(
     modifier: Modifier,
     contextVersion: Int,
     targetFps: Int,
+    paused: Boolean,
 ) {
     // targetFps is unused here: GLSurfaceView renders on its own thread and the
     // renderers pace themselves with throttleRenderThread, which is a real sleep
@@ -64,6 +65,7 @@ actual fun PlatformGlSurface(
                 view[0] = this
             }
         },
+        update = { if (paused) it.onPause() else it.onResume() },
         onRelease = { it.onPause() },
         modifier = modifier,
     )

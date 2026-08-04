@@ -43,4 +43,13 @@ expect fun PlatformGlSurface(
     modifier: Modifier = Modifier,
     contextVersion: Int = 2,
     targetFps: Int = 33,
+    /**
+     * Stops the render loop without tearing the context down.
+     *
+     * The city sits behind every full-screen minigame; left running it draws a
+     * scene nobody can see, for as long as the player is in there. Pausing
+     * keeps the GL context and the built scene alive, so returning is instant —
+     * not composing the surface away would force a full scene rebuild.
+     */
+    paused: Boolean = false,
 )

@@ -2475,6 +2475,10 @@ fun CalculatorCityView(
         PlatformGlSurface(
             renderer = renderer,
             modifier = Modifier.fillMaxSize(),
+            // A full-screen minigame hides the city entirely; rendering it
+            // underneath is heat and battery for pixels nobody sees. The scene
+            // stays built, so coming back is instant.
+            paused = overlayOpen,
         )
 
         if (introDone && !showTowerDefense && !forceAerial && doorOpeningDigit == null) {

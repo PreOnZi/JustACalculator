@@ -342,6 +342,33 @@ The 64 call signatures are enumerated by grepping
   is an empty placeholder), launch screen, and a real `DEVELOPMENT_TEAM` in
   `iosApp/Configuration/Config.xcconfig` for device builds and TestFlight.
 
+## Heat and battery
+
+The app runs hot, so sustained work matters more than download size.
+
+- **The iOS render loop now pauses when the app leaves the screen.** This is
+  not just battery: iOS **terminates** an app that issues OpenGL commands while
+  backgrounded, so the display link has to be down before the app suspends.
+  Android already got this from `GLSurfaceView.onPause/onResume`.
+- **The city pauses behind full-screen overlays.** `PlatformGlSurface` takes a
+  `paused` flag; the city passes the `overlayOpen` it already computes. It used
+  to render the whole scene at full rate behind every minigame, for as long as
+  the player was in one. Pausing keeps the context and the built scene, so
+  returning is instant.
+
+Still open, in rough order of likely benefit:
+
+- **Back-face culling is disabled** (`glDisable(GL_CULL_FACE)` in
+  `Cityglrenderer.onSurfaceCreated`). On closed building geometry that is
+  roughly double the fragment work. It is off deliberately — the .obj winding
+  is unreliable, as `ModelBitmap` notes — so enabling it needs a careful look
+  at every building for holes before it can ship.
+- **No frustum culling on the main camera pass.** `inFeedFrustum` exists but is
+  only used for the CCTV feed. Every mesh is submitted every frame regardless
+  of whether it is on screen.
+- Sensors, location and camera sessions were checked and all stop correctly on
+  dispose.
+
 ## Asset weight
 
 Shipped assets are ~56 MB (down from ~89 MB); the rest of the repo —
