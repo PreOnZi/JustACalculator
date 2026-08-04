@@ -219,11 +219,14 @@ Still open, none of it porting work:
   with the `navigationBarsPadding()` that was already there. Both report zero
   on Android, where the window is not edge-to-edge.
 
-- **The whole iOS build is unrun.** It compiles and links; nothing in it has
-  been exercised on a device or simulator. The highest-risk parts are the ones
-  with no compile-time check on their correctness: the `CVOpenGLESTextureCache`
-  path in `Door4Room`, the face-landmark conventions in `Building7VanityRoom`,
-  and the MapKit view.
+- **What has and has not been run.** The app has been built and launched on
+  iPhone and iPad simulators, and the calculator, the city and the intro all
+  render correctly. Nothing has run on real hardware. The parts with no
+  compile-time check on their correctness are still unverified in any
+  meaningful sense: the `CVOpenGLESTextureCache` path in `Door4Room`, the
+  face-landmark conventions in `Building7VanityRoom`, the MapKit view, the
+  camera and microphone. And see the simulator note above — its frame rate
+  says nothing about the city.
 - **iOS orientation lock** — `LockOrientationWhileVisible` sets a flag nothing
   reads. The Swift AppDelegate needs to consult `IosOrientationLock` from
   `supportedInterfaceOrientationsFor`, or the city will rotate on iOS.
