@@ -169,7 +169,7 @@ and one of those was blocking entry to the whole city.
 
 | Stub | Waiting on |
 |---|---|
-| `PlatformDoor4Room` | `CVOpenGLESTextureCache` camera texture |
+| `PlatformDoor4Room` | the room itself; its texture seam is done |
 | `PlatformModelViewer` | SceneKit — the one interactive 3D viewer |
 
 ## Remaining
@@ -183,7 +183,7 @@ table. What is left, largest first:
 
 | File | Lines | Needs |
 |---|---|---|
-| `Door4Room` | 1,782 | `GL_TEXTURE_EXTERNAL_OES` + `SurfaceTexture` (26 uses) → `CVOpenGLESTextureCache` |
+| `Door4Room` | 1,782 | convert onto `gl/VideoTexture.kt` (the seam is done) |
 
 `ModelBitmap` ported behind `gl/OffscreenGl.kt`. **iOS has no pbuffer** — an
 `EAGLContext` draws into a framebuffer, so the offscreen target is a plain FBO
@@ -334,8 +334,34 @@ The typing click now holds one sink open instead of building a fresh one per
 keystroke — tearing down an `AudioTrack` each time was cheap, but the iOS
 equivalent is a whole `AVAudioEngine`.
 
-`Door4Room` is the hardest and deserves its own run: the external-texture path
-is a different API, not a translation of the existing one.
+**`Door4Room`'s texture seam is done; the room is not converted yet.**
+`gl/VideoTexture.kt` covers both producers it needs — the live camera walls and
+the video screens. Three things leak through the interface on purpose, because
+hiding them would mean copying every frame:
+
+- **The texture target differs.** Android binds `GL_TEXTURE_EXTERNAL_OES` to a
+  `SurfaceTexture`; iOS has no such thing, so a `CVOpenGLESTextureCache` wraps
+  each `CVPixelBuffer` in an ordinary `GL_TEXTURE_2D`. The fragment shader has
+  to be built for whichever it is — hence `videoSamplerPreamble` and
+  `videoSamplerType`.
+- **`textureId` is only valid after `updateTexImage()` and can change every
+  frame**, because the iOS cache hands back a fresh texture each time. Caching
+  it works on Android and silently renders one stale frame forever on iOS.
+- **The two pull differently.** The camera is *pushed* frames by
+  `AVCaptureVideoDataOutput`, so the newest pixel buffer is retained until the
+  GL thread takes it — otherwise the producer recycles it mid-draw. Video is
+  *pulled* from `AVPlayerItemVideoOutput` at the item's current time, so nothing
+  is retained between calls.
+
+One binding wrinkle: CoreVideo's header only forward-declares `EAGLContext`, so
+`CVOpenGLESTextureCacheCreate` wants `objcnames.classes.EAGLContext` and the
+real one has to be cast to it — and the cast must be hoisted into a local,
+since Kotlin will not take it inline in a named argument.
+
+Both cameras at once is what the room asks for and neither platform guarantees
+it (Android needs concurrent-camera support, iOS a multi-cam device), so
+`createCameraTexture` returns null rather than throwing and the caller draws
+that wall blank.
 
 ### OpenGL ES (~12k lines, 8 files) — **done except `Door4Room`.**
 

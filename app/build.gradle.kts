@@ -71,6 +71,9 @@ kotlin {
 
             // AndroidSVG — rasterise the Building 7 vector filters straight to bitmaps.
             implementation("com.caverock:androidsvg-aar:1.4")
+            // Process-wide lifecycle owner. The door room binds its cameras from
+            // the GL thread, which has no composable lifecycle to hang them on.
+            implementation("androidx.lifecycle:lifecycle-process:2.10.0")
 
             // osmdroid — OpenStreetMap tiles for Building 5. No API key, no Play Services.
             implementation("org.osmdroid:osmdroid-android:6.1.18")
