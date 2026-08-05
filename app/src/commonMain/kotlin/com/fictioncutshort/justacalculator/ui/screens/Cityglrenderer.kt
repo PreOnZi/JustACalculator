@@ -179,6 +179,15 @@ class CityGLRenderer : GlRenderer {
      */
     private val scratchFbs = arrayOfNulls<GlFloatBuffer>(SCRATCH_SLOTS)
 
+    // Per-frame matrices, held rather than allocated each pass. Small on their
+    // own, but onDrawFrame runs 33 times a second and Kotlin/Native's GC is far
+    // less forgiving of short-lived garbage than the JVM's.
+    private val frameProj = FloatArray(16)
+    private val frameView = FloatArray(16)
+    private val frameMvp = FloatArray(16)
+    private val frameIdentity = FloatArray(16)
+    private val frameXform = FloatArray(10)
+
     /** The full-screen night scrim. Constant geometry, so built once. */
     private val nightScrimQuad: GlFloatBuffer by lazy {
         floatArrayOf(-1f, -1f, 0f, 1f, -1f, 0f, 1f, 1f, 0f, -1f, 1f, 0f).toGlBuffer()
@@ -860,7 +869,7 @@ class CityGLRenderer : GlRenderer {
             uploadNearestLights()
         }
 
-        val proj = FloatArray(16); val view = FloatArray(16); val mvp = FloatArray(16)
+        val proj = frameProj; val view = frameView; val mvp = frameMvp
         Matrix.perspectiveM(proj, 0, fov, sw.toFloat() / sh.toFloat(), 0.5f, 3000f)
 
         // The ground shaking. Applied to the EYE, not the world, so the player is
@@ -922,7 +931,7 @@ class CityGLRenderer : GlRenderer {
         // Each building's meshes are shifted (and eventually dropped) as one, so
         // the skyline comes apart building by building instead of all at once.
         val col = collapse.coerceIn(0f, 1f)
-        val xf = FloatArray(10)
+        val xf = frameXform
         setXform(null)
         // meshIdx -> collapse group, so the loop below can look its building up.
         val groupOf: HashMap<Int, FloatArray>? = if (col > 0f) HashMap<Int, FloatArray>().also { m ->
@@ -942,7 +951,8 @@ class CityGLRenderer : GlRenderer {
         // ── PASS 1 — opaque + soft-shadow meshes (glow deferred to pass 2)
         var blendMode = 0   // 0=off, 1=alpha (shadows)
         var curAerial = aerialBlend
-        for ((meshIdx, m) in meshes.withIndex()) {
+        for (meshIdx in meshes.indices) {
+            val m = meshes[meshIdx]
             // A building that has finished falling is simply not drawn any more.
             var falling = false
             if (groupOf != null) {
@@ -1058,7 +1068,7 @@ class CityGLRenderer : GlRenderer {
         // Dark-blue atmospheric overlay — gets stronger as the player completes
         // buildings. Drawn last with the depth test off so it tints everything.
         if (darknessLevel > 0.001f) {
-            val identity = FloatArray(16); Matrix.setIdentityM(identity, 0)
+            val identity = frameIdentity; Matrix.setIdentityM(identity, 0)
             Gl.glUniformMatrix4fv(uMVP, 1, false, identity, 0)
             Gl.glUniform1f(uFog, 0f)
             Gl.glUniform1f(uAerial, 1f)
@@ -1136,7 +1146,8 @@ class CityGLRenderer : GlRenderer {
             Gl.glBlendFunc(Gl.GL_SRC_ALPHA, Gl.GL_ONE)
             Gl.glDepthMask(false)
             Gl.glDepthFunc(Gl.GL_LEQUAL)
-            for ((meshIdx, m) in meshes.withIndex()) {
+            for (meshIdx in meshes.indices) {
+            val m = meshes[meshIdx]
                 if (m.aerialSkip && (cellStage < 3 || aerialMode)) continue
                 // Same cull as the main pass. Glows ride their building down, so
                 // the collapse guard below still gets the last word.
@@ -1207,7 +1218,7 @@ class CityGLRenderer : GlRenderer {
         // Bolted to Building 8's wall, so it rides that wall down — and once the
         // building has finished falling there is no doorway left to light.
         val col = collapse.coerceIn(0f, 1f)
-        val xf = FloatArray(10)
+        val xf = frameXform
         val pt = FloatArray(3)
         var falls = false
         if (col > 0f) {
@@ -1299,7 +1310,7 @@ class CityGLRenderer : GlRenderer {
         // A slow breath, so the eye catches it from down the street.
         val pulse = 0.82f + 0.18f * sin((nowMillis() * 1_000_000L / 1_000_000L % 2400L) / 2400f * 2f * PI.toFloat())
         val col = collapse.coerceIn(0f, 1f)
-        val xf = FloatArray(10)
+        val xf = frameXform
         val pt = FloatArray(3)
         val verts = ArrayList<Float>()
         for (mount in doorMounts) {
@@ -1419,10 +1430,11 @@ class CityGLRenderer : GlRenderer {
 
         val radA = ((radAngle % 360f) + 360f) % 360f
         val dkLvl = darknessLevel.coerceIn(0f, 1f)
-        val xf = FloatArray(10)
+        val xf = frameXform
         setXform(null)
 
-        for ((i, m) in meshes.withIndex()) {
+        for (i in meshes.indices) {
+            val m = meshes[i]
             // A feed carries the city itself, not the mood: no shadow blobs, no
             // glow pass, no sky. It's a 256px window on a monitor.
             if (m.glow || m.sky || m.softShadow) continue
@@ -1573,7 +1585,8 @@ class CityGLRenderer : GlRenderer {
     // cameras addCameras just hung on the buildings.
     private fun finishScene() {
         meshSpheres = FloatArray(meshes.size * 4)
-        for ((i, m) in meshes.withIndex()) {
+        for (i in meshes.indices) {
+            val m = meshes[i]
             val b = m.buf
             var mnX = Float.MAX_VALUE; var mxX = -Float.MAX_VALUE
             var mnY = Float.MAX_VALUE; var mxY = -Float.MAX_VALUE
@@ -4006,7 +4019,7 @@ class CityGLRenderer : GlRenderer {
         // the camera goes with it — otherwise the city falls and leaves a grid of
         // cameras hanging in the air, still watching.
         val col = collapse.coerceIn(0f, 1f)
-        val xf = FloatArray(10)
+        val xf = frameXform
         val pt = FloatArray(3)
 
         // One accumulator per material group — collapses N mounts × M materials
@@ -4203,7 +4216,7 @@ class CityGLRenderer : GlRenderer {
         val openArr = doorOpenFraction
         // A door goes down with its building, for the same reason a camera does.
         val col = collapse.coerceIn(0f, 1f)
-        val xf = FloatArray(10)
+        val xf = frameXform
         val pt = FloatArray(3)
         for (mount in doorMounts) {
             val cx = mount[0]; val dh = mount[1]; val cz = mount[2]

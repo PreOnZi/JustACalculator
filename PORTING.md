@@ -374,6 +374,34 @@ Still open, in rough order of likely benefit:
 - Sensors, location and camera sessions were checked and all stop correctly on
   dispose.
 
+**Kotlin/Native does not clean up after you the way the JVM does.** A device
+Time Profiler in Release showed a dedicated GC thread at 12.4% and six more
+worker threads busy, on a scene that renders fine. The cause was ordinary
+idiomatic Kotlin in the per-frame path:
+
+- `for ((i, m) in meshes.withIndex())` allocates an `IndexedValue` **per mesh
+  per pass**. The JVM's escape analysis removes those; Kotlin/Native's does
+  not. Four such loops over a few thousand meshes at 33 fps is hundreds of
+  thousands of objects a second. Use `for (i in meshes.indices)`.
+- `FloatArray(16)` matrices allocated per frame are now held as fields.
+
+`onDrawFrame` should allocate **nothing**. If it does, the GC bill shows up as
+CPU that no renderer optimisation can touch.
+
+**Kotlin/Native does not clean up after you the way the JVM does.** A device
+Time Profiler in Release showed a dedicated GC thread at 12.4% and six more
+worker threads busy, on a scene that renders fine. The cause was ordinary
+idiomatic Kotlin in the per-frame path:
+
+- `meshes.withIndex()` allocates an `IndexedValue` **per mesh per pass**. The
+  JVM's escape analysis removes those; Kotlin/Native's does not. Four such
+  loops over a few thousand meshes at 33 fps is hundreds of thousands of
+  objects a second. Use `for (i in meshes.indices)`.
+- `FloatArray(16)` matrices allocated per frame are now held as fields.
+
+`onDrawFrame` should allocate **nothing**. If it does, the GC bill shows up as
+CPU that no renderer optimisation can touch.
+
 ## Asset weight
 
 Shipped assets are ~56 MB (down from ~89 MB); the rest of the repo —
