@@ -2566,23 +2566,40 @@ fun CalculatorCityView(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { isLooking = true },
-                        onDragEnd = { isLooking = false },
-                        onDragCancel = { isLooking = false },
-                    ) { change, drag ->
-                        change.consume()
+                    // Hand-rolled rather than detectDragGestures: that tracks a
+                    // single drag and offers no way to say "not this finger".
+                    // Looking has to work while the other thumb is steering, so
+                    // this follows one pointer by id and only ever adopts an
+                    // unconsumed down — the joystick consumes its own.
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = true)
+                        val id = down.id
+                        var last = down.position
+                        isLooking = true
+                        try {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == id }
+                                    ?: break
+                                if (!change.pressed) break
+                                val drag = change.position - last
+                                last = change.position
+                                change.consume()
                         // Convert to dp first. `drag` is in raw pixels, so
                         // sensitivity used to scale with screen density — the
                         // same swipe turned three times as far on a 3x phone as
                         // on a 1x one.
-                        val dxDp = drag.x.toDp().value
-                        val dyDp = drag.y.toDp().value
-                        camYaw += dxDp * LOOK_SENSITIVITY
+                                val dxDp = drag.x.toDp().value
+                                val dyDp = drag.y.toDp().value
+                                camYaw += dxDp * LOOK_SENSITIVITY
                         // Screen y grows downward, so negating gives drag-up =
                         // look-up. Verified on device — do not "fix" the sign.
-                        camPitch = (camPitch - dyDp * LOOK_SENSITIVITY)
-                            .coerceIn(-PITCH_LIMIT, PITCH_LIMIT)
+                                camPitch = (camPitch - dyDp * LOOK_SENSITIVITY)
+                                    .coerceIn(-PITCH_LIMIT, PITCH_LIMIT)
+                            }
+                        } finally {
+                            isLooking = false
+                        }
                     }
                 },
             // A full-screen minigame hides the city entirely; rendering it
@@ -3306,7 +3323,20 @@ fun CityJoystick(
                     // A "tap" is a press that neither lasted nor travelled. That
                     // keeps the debug shortcut from firing during normal
                     // steering, where the stick is held and dragged.
-                    val down = awaitFirstDown()
+                    // Only claim a finger that actually landed on the stick.
+                    //
+                    // awaitFirstDown() returns the first down in the *event*, and
+                    // Compose hands a hit node every pointer in that event, not
+                    // just the ones inside it. With a thumb already on the stick,
+                    // a second finger anywhere on screen could be adopted here and
+                    // then steered from its position — far outside the stick, so
+                    // sx/sy pinned to +/-1 and the player lurched.
+                    fun onStick(p: Offset) =
+                        p.x >= 0f && p.y >= 0f && p.x <= size.width && p.y <= size.height
+                    var down = awaitFirstDown()
+                    while (!onStick(down.position)) {
+                        down = awaitFirstDown(requireUnconsumed = true)
+                    }
                     val downMs = nowMillis()
                     val downPos = down.position
 
