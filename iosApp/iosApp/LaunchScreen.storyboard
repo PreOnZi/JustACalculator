@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    The launch screen: the app icon with LOADING under it, over the
+    calculator's own body colour.
+
+    Shown from tap until Compose renders its first frame, which on this app is
+    not instant — the Kotlin framework has to start and the assets have to be
+    read. The default was plain white, which against a cream-and-dark app read
+    as a hung or crashed launch rather than a slow one. RetroCream (#F5F0E1)
+    matches what CalculatorScreen paints, so the handover is invisible.
+
+    Both the icon and the word are baked into a single image by
+    tools/render-launch-art.swift. Two reasons, both learned the hard way:
+
+      * A launch screen is composited before the app registers UIAppFonts, so a
+        UILabel asking for CalcDigit silently falls back to the system font.
+        Confirmed on the simulator: a built-in font renders here, CalcDigit
+        does not.
+      * A second image view for the text did not render at all, while the icon
+        beside it did. One image side-steps that entirely.
+
+    Nothing here can be dynamic in any case. A launch screen is drawn before
+    any of our code runs, so there is no progress to report and no state to
+    read; it is a still frame in everything but name.
+
+    Re-run the tool if the icon or the font changes.
+-->
+<document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="22154" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="01J-lp-oVM">
+    <device id="retina6_12" orientation="portrait" appearance="light"/>
+    <dependencies>
+        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="22131"/>
+        <capability name="Named colors" minToolsVersion="9.0"/>
+        <capability name="Safe area layout guides" minToolsVersion="9.0"/>
+        <capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/>
+    </dependencies>
+    <scenes>
+        <scene sceneID="EHf-IW-A2E">
+            <objects>
+                <viewController id="01J-lp-oVM" sceneMemberID="viewController">
+                    <view key="view" contentMode="scaleToFill" id="Ze5-6b-2t3">
+                        <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
+                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                        <subviews>
+                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="LaunchArt" translatesAutoresizingMaskIntoConstraints="NO" id="Art-01-aaa">
+                                <rect key="frame" x="132.5" y="343" width="128" height="166"/>
+                                <constraints>
+                                    <constraint firstAttribute="width" constant="128" id="Art-w0-aaa"/>
+                                    <constraint firstAttribute="height" constant="166" id="Art-h0-aaa"/>
+                                </constraints>
+                            </imageView>
+                        </subviews>
+                        <viewLayoutGuide key="safeArea" id="6Tk-OE-BBY"/>
+                        <color key="backgroundColor" name="LaunchBackground"/>
+                        <constraints>
+                            <constraint firstItem="Art-01-aaa" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="Cst-01-aaa"/>
+                            <!-- Slightly above centre; optically centred art sits high. -->
+                            <constraint firstItem="Art-01-aaa" firstAttribute="centerY" secondItem="Ze5-6b-2t3" secondAttribute="centerY" multiplier="0.92" id="Cst-02-aaa"/>
+                        </constraints>
+                    </view>
+                </viewController>
+                <placeholder placeholderIdentifier="IBFirstResponder" id="iYj-Kq-Ea1" userLabel="First Responder" sceneMemberID="firstResponder"/>
+            </objects>
+            <point key="canvasLocation" x="53" y="375"/>
+        </scene>
+    </scenes>
+    <resources>
+        <image name="LaunchArt" width="128" height="166"/>
+        <namedColor name="LaunchBackground">
+            <color red="0.96078431372549022" green="0.94117647058823528" blue="0.88235294117647056" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+        </namedColor>
+    </resources>
+</document>

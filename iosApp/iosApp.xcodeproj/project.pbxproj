@@ -13,6 +13,7 @@
 		A1000000000000000000103 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003 /* Assets.xcassets */; };
 		A1000000000000000000104 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000004 /* assets */; };
 		A1000000000000000000105 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000007 /* PrivacyInfo.xcprivacy */; };
+		A1000000000000000000107 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000009 /* LaunchScreen.storyboard */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +25,7 @@
 		A1000000000000000000006 /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Config.xcconfig; path = Configuration/Config.xcconfig; sourceTree = "<group>"; };
 		A1000000000000000000007 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		A1000000000000000000008 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		A1000000000000000000009 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		A1000000000000000000010 /* JustACalculator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = JustACalculator.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -57,6 +59,7 @@
 				A1000000000000000000004 /* assets */,
 				A1000000000000000000005 /* Info.plist */,
 				A1000000000000000000007 /* PrivacyInfo.xcprivacy */,
+				A1000000000000000000009 /* LaunchScreen.storyboard */,
 			);
 			path = iosApp;
 			sourceTree = "<group>";
@@ -131,6 +134,7 @@
 				A1000000000000000000103 /* Assets.xcassets in Resources */,
 				A1000000000000000000104 /* assets in Resources */,
 				A1000000000000000000105 /* PrivacyInfo.xcprivacy in Resources */,
+				A1000000000000000000107 /* LaunchScreen.storyboard in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
