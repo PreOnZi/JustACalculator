@@ -11,6 +11,7 @@
 		A1000000000000000000102 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002 /* ContentView.swift */; };
 		A1000000000000000000103 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000003 /* Assets.xcassets */; };
 		A1000000000000000000104 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000004 /* assets */; };
+		A1000000000000000000105 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000007 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -20,6 +21,7 @@
 		A1000000000000000000004 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; name = assets; path = ../app/src/commonMain/assets; sourceTree = SOURCE_ROOT; };
 		A1000000000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1000000000000000000006 /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Config.xcconfig; path = Configuration/Config.xcconfig; sourceTree = "<group>"; };
+		A1000000000000000000007 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		A1000000000000000000010 /* JustACalculator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = JustACalculator.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -51,6 +53,7 @@
 				A1000000000000000000003 /* Assets.xcassets */,
 				A1000000000000000000004 /* assets */,
 				A1000000000000000000005 /* Info.plist */,
+				A1000000000000000000007 /* PrivacyInfo.xcprivacy */,
 			);
 			path = iosApp;
 			sourceTree = "<group>";
@@ -124,6 +127,7 @@
 			files = (
 				A1000000000000000000103 /* Assets.xcassets in Resources */,
 				A1000000000000000000104 /* assets in Resources */,
+				A1000000000000000000105 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

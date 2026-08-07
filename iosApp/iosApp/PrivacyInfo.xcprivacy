@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+		Required by App Store Connect since 2024. This is the machine-readable
+		declaration the upload checker reads; the human-facing privacy policy is
+		a URL entered in App Store Connect, not this file.
+
+		Whatever is declared here has to agree with the App Privacy answers given
+		at upload time, so the two must be changed together.
+	-->
+
+	<!-- No IDFA, no ad or analytics SDKs, nothing correlating the player across apps. -->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+
+	<!--
+		Empty on purpose. The camera, microphone, contacts and photo permissions
+		all serve on-device effects and never leave the phone: the vanity room
+		composites frames in memory, the phone detour echoes the mic straight
+		back to the speaker, and photos are only ever written out, never read.
+
+		The one judgement call is the walking map, which sends coordinates to
+		Overpass and the routing service. Apple's definition of "collect" is
+		transmission that lets someone hold the data beyond servicing the request
+		in real time, and a map query does not, so it is not declared here. If
+		the map ever starts logging or retaining routes, this array and the App
+		Store Connect answers both have to change.
+	-->
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+
+	<!--
+		"Required reason" APIs. Undeclared use of these is an automatic upload
+		rejection. UserDefaults is the only one this app touches; CA92.1 covers
+		reading and writing values belonging to the app itself.
+	-->
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
