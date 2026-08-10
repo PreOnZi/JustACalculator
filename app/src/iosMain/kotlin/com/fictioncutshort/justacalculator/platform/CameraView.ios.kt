@@ -127,6 +127,41 @@ private fun applyVideoOrientation(state: CameraSession) {
     // two agree; letting the connection mirror as well would cancel out.
 }
 
+/**
+ * Hosts the preview layer and keeps it the size of the view.
+ *
+ * A CALayer sublayer is not laid out by autoresizing, so it has to be resized
+ * by hand — and doing that only from `update` is not enough: `update` runs on
+ * recomposition, which can happen before the interop view has been given a
+ * real size. The layer then keeps a zero frame and the preview never appears,
+ * even though frames are arriving and the scan grid is clearly running off
+ * them. layoutSubviews is the callback that is actually guaranteed to fire
+ * once the view has bounds, and again whenever they change.
+ *
+ * MKMapView and the other interop views have no equivalent problem because
+ * they *are* the interop view, and Compose sizes that itself.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private class PreviewContainer : UIView(frame = CGRectZero.readValue()) {
+
+    var previewLayer: AVCaptureVideoPreviewLayer? = null
+
+    fun syncPreviewFrame() {
+        val layer = previewLayer ?: return
+        // Implicit animations would make the preview slide into place on every
+        // bounds change, including the first one from zero.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.setFrame(bounds)
+        CATransaction.commit()
+    }
+
+    override fun layoutSubviews() {
+        super.layoutSubviews()
+        syncPreviewFrame()
+    }
+}
+
 /** Holds the session across recompositions and lets `update` reach it. */
 @OptIn(ExperimentalForeignApi::class)
 private class CameraSession {
@@ -264,24 +299,22 @@ actual fun PlatformCameraSurface(
 
     UIKitView(
         factory = {
-            val container = UIView(frame = CGRectZero.readValue())
+            val container = PreviewContainer()
             container.clipsToBounds = true
 
             val layer = AVCaptureVideoPreviewLayer(session = state.session)
             layer.videoGravity = AVLayerVideoGravityResizeAspectFill
             container.layer.addSublayer(layer)
+            container.previewLayer = layer
             state.previewLayer = layer
             container
         },
         modifier = modifier.fillMaxSize(),
         update = { container ->
-            // The sublayer is not laid out by autoresizing, so it tracks the
-            // view by hand — without this it stays zero-sized and the preview
-            // never appears.
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            state.previewLayer?.setFrame(container.bounds)
-            CATransaction.commit()
+            // Belt and braces alongside PreviewContainer.layoutSubviews: this
+            // runs on recomposition, that one runs on layout, and only the
+            // latter is guaranteed to happen after the view has a real size.
+            container.syncPreviewFrame()
 
             state.frameDelegate?.onSamples = samplesCallback
             state.frameDelegate?.onFaceFrame = faceCallback
