@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import com.fictioncutshort.justacalculator.platform.AppLifecycleEvent
 import com.fictioncutshort.justacalculator.platform.OnAppLifecycleEvent
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.viewinterop.UIKitInteropProperties
 import androidx.compose.ui.viewinterop.UIKitView
 import kotlinx.cinterop.CValue
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -92,11 +93,32 @@ actual fun PlatformGlSurface(
                 // Match the Android config: RGB888 with a 24-bit depth buffer.
                 drawableColorFormat = GLKViewDrawableColorFormatRGBA8888
                 drawableDepthFormat = GLKViewDrawableDepthFormat24
+
                 delegate = holder
                 holder.attach(this, context, targetFps)
             }
         },
         modifier = modifier,
+        // The surface is a render target and nothing else. Every gesture over
+        // it — the joystick, the look-drag, the door prompts, the key
+        // inspector — is a Compose modifier; the GLKView has no gesture
+        // recognisers and wants no touches.
+        //
+        // The default is Cooperative(150ms): "view receives touches with 150ms
+        // delay, allowing compose to intercept them". Steering holds the stick
+        // far longer than that, so the interop view claimed the sequence and
+        // Compose's in-flight gesture was cancelled the moment a second finger
+        // arrived — on iPad, reaching up to look stopped the player walking.
+        // Android never had this because GLSurfaceView is not clickable and
+        // simply lets touches fall through to Compose.
+        //
+        // Setting this on the GLKView inside `factory` does NOT work: Compose
+        // drives userInteractionEnabled from these properties and would put it
+        // straight back.
+        properties = UIKitInteropProperties(
+            isInteractive = false,
+            isNativeAccessibilityEnabled = false,
+        ),
     )
 }
 
