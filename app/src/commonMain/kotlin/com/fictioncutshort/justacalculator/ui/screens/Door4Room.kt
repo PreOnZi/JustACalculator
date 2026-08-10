@@ -1021,6 +1021,15 @@ private class Door4Renderer : GlRenderer {
                     setReverb(true)
                 }
                 mediaVideo[i] = video
+                // Start it here if its panel is already revealed.
+                //
+                // These are built on the GL thread in onSurfaceCreated, which
+                // runs AFTER the composable's LaunchedEffect(litCount) — so at
+                // the moment that effect looks for videos to start, this array
+                // is still all nulls. Relying on it alone left every player at
+                // rate 0: ready, silent, and never producing a frame, so the
+                // wall drew its border and nothing inside it.
+                if (i < litCount) video?.play()
                 val w = video?.videoWidth ?: 1280
                 val h = video?.videoHeight ?: 720
                 mediaPixelSize[i] = Pair(w, h)
