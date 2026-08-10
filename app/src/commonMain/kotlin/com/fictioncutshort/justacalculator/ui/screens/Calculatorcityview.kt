@@ -79,13 +79,14 @@ internal val JOY_EDGE_INSET = 24.dp
 private const val UNSTUCK_LINGER_FRAMES = 300
 
 /** How far the player can look up or down, in degrees. */
-private const val PITCH_LIMIT = 70f
+// Shared with the other first-person rooms so looking around feels identical.
+internal const val PITCH_LIMIT = 70f
 
 /**
  * Fraction of the current pitch kept each 16 ms tick once the finger lifts —
  * about a second to settle back to level from a full tilt.
  */
-private const val PITCH_EASE_RETAIN = 0.92f
+internal const val PITCH_EASE_RETAIN = 0.92f
 
 /**
  * Degrees of camera rotation per **dp** dragged.
@@ -95,7 +96,7 @@ private const val PITCH_EASE_RETAIN = 0.92f
  * 3x screen as on a 1x one. At 0.30 a swipe across a ~400 dp portrait screen
  * turns about 120 degrees, which is roughly half the old effective rate.
  */
-private const val LOOK_SENSITIVITY = 0.30f
+internal const val LOOK_SENSITIVITY = 0.30f
 
 private const val WIND_VOL = 0.26f
 private const val STEPS_VOL = 0.6f

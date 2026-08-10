@@ -49,6 +49,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlin.math.abs
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
 import kotlin.math.*
@@ -72,7 +76,9 @@ private const val WT_H       = 20f     // wall half-thickness
 private const val DIV_DOOR_HW = 200f   // half-width of doorways carved in dividers
 private const val EYE_Y      = 360f    // first-person eye height
 private const val MOVE_SPD   = 6.5f
-private const val YAW_SPD     = 3.0f
+// The look target sits one unit ahead horizontally, so the vertical leg has
+// to be scaled to room units or the pitch would be imperceptible.
+private const val LOOK_TARGET_DIST = 1f
 private const val WALL_PAD    = 60f    // collision margin
 
 // Two distinct radii drive the new interaction:
@@ -251,6 +257,8 @@ fun Door4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {}) {
     var camYaw by remember { mutableStateOf(180f) }
     var joyX   by remember { mutableStateOf(0f) }
     var joyY   by remember { mutableStateOf(0f) }
+    var camPitch by remember { mutableStateOf(0f) }
+    var isLooking by remember { mutableStateOf(false) }
 
     // Progression:
     //   litCount    — pieces currently REVEALED (visible + video playing).
@@ -364,11 +372,17 @@ fun Door4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {}) {
     LaunchedEffect(Unit) {
         while (true) {
             delay(16)
-            camYaw += joyX * YAW_SPD
+            // Same scheme as the city: the stick walks and strafes, dragging
+            // looks. The stick used to steer, which meant the player could not
+            // sidestep along a wall of panels or look up at one without walking
+            // into it.
             val cr = camYaw.toDouble() * PI / 180.0
             val fwd = -joyY
-            val dx = (sin(cr) * fwd * MOVE_SPD).toFloat()
-            val dz = (-cos(cr) * fwd * MOVE_SPD).toFloat()
+            val strafe = joyX
+            val fX = sin(cr).toFloat();  val fZ = -cos(cr).toFloat()
+            val rX = cos(cr).toFloat();  val rZ = sin(cr).toFloat()
+            val dx = (fX * fwd + rX * strafe) * MOVE_SPD
+            val dz = (fZ * fwd + rZ * strafe) * MOVE_SPD
             val nx = pX + dx
             val nz = pZ + dz
             val doorIsOpen = renderer.doorOpen > 0.5f
@@ -380,9 +394,20 @@ fun Door4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {}) {
                 if (!door4Blocked(pX, nz, doorIsOpen)) pZ = nz
             }
 
+            // Ease the pitch back to level while nobody is dragging, so the
+            // view rights itself rather than leaving the player staring at the
+            // ceiling — same behaviour as the city.
+            if (!isLooking && camPitch != 0f) {
+                camPitch *= PITCH_EASE_RETAIN
+                if (abs(camPitch) < 0.05f) camPitch = 0f
+            }
+
             renderer.camX = pX; renderer.camZ = pZ; renderer.camYaw = camYaw
-            renderer.lookAtX = pX + sin(cr).toFloat()
-            renderer.lookAtZ = pZ - cos(cr).toFloat()
+            val pr = camPitch.toDouble() * PI / 180.0
+            val horiz = cos(pr).toFloat()
+            renderer.lookAtX = pX + (sin(cr) * horiz).toFloat()
+            renderer.lookAtY = EYE_Y + sin(pr).toFloat() * LOOK_TARGET_DIST
+            renderer.lookAtZ = pZ - (cos(cr) * horiz).toFloat()
 
             if (!levelDone && doorIsOpen && pZ < -ROOM_R - TUNNEL_LEN + 140f) {
                 levelDone = true
@@ -467,8 +492,42 @@ fun Door4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {}) {
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
         PlatformGlSurface(
             renderer = renderer,
-            modifier = Modifier.fillMaxSize(),
             contextVersion = 2,
+            // Drag anywhere to look around. Sits beneath the joystick and the
+            // panel controls in this Box, so those get first refusal on a
+            // touch; only an unconsumed down is adopted here, and the stick
+            // consumes its own. One pointer is followed by id, so looking works
+            // while the other thumb is still walking.
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = true)
+                        val id = down.id
+                        var last = down.position
+                        isLooking = true
+                        try {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == id } ?: break
+                                if (!change.pressed) break
+                                val drag = change.position - last
+                                last = change.position
+                                change.consume()
+                                // In dp, so sensitivity does not scale with density.
+                                val dxDp = drag.x.toDp().value
+                                val dyDp = drag.y.toDp().value
+                                camYaw += dxDp * LOOK_SENSITIVITY
+                                // Screen y grows downward, so negating gives
+                                // drag-up = look-up, as in the city.
+                                camPitch = (camPitch - dyDp * LOOK_SENSITIVITY)
+                                    .coerceIn(-PITCH_LIMIT, PITCH_LIMIT)
+                            }
+                        } finally {
+                            isLooking = false
+                        }
+                    }
+                },
         )
 
         val joySize = (configuration.widthDp.value * 0.30f).dp.coerceIn(110.dp, 160.dp)
@@ -774,6 +833,9 @@ private class Door4Renderer : GlRenderer {
     @kotlin.concurrent.Volatile var camZ = 0f
     @kotlin.concurrent.Volatile var camYaw = 0f
     @kotlin.concurrent.Volatile var lookAtX = 0f
+    // Y of the look target. Fixed at eye height until the room gained
+    // drag-to-look; without it the camera can only ever face the horizon.
+    @kotlin.concurrent.Volatile var lookAtY = EYE_Y
     @kotlin.concurrent.Volatile var lookAtZ = -1f
     @kotlin.concurrent.Volatile var litCount = 1          // panels with order < litCount are revealed
     @kotlin.concurrent.Volatile var foundCount = 0        // panels with order < foundCount have been read
@@ -1011,7 +1073,7 @@ private class Door4Renderer : GlRenderer {
 
         val proj = FloatArray(16); val view = FloatArray(16); val mvp = FloatArray(16)
         Matrix.perspectiveM(proj, 0, 82f, sw.toFloat() / sh.toFloat(), 1f, 12000f)
-        Matrix.setLookAtM(view, 0, camX, EYE_Y, camZ, lookAtX, EYE_Y, lookAtZ, 0f, 1f, 0f)
+        Matrix.setLookAtM(view, 0, camX, EYE_Y, camZ, lookAtX, lookAtY, lookAtZ, 0f, 1f, 0f)
         Matrix.multiplyMM(mvp, 0, proj, 0, view, 0)
         Gl.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
 

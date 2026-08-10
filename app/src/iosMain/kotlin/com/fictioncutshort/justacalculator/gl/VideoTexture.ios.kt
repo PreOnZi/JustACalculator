@@ -59,6 +59,8 @@ import platform.CoreVideo.CVPixelBufferGetWidth
 import platform.CoreVideo.CVPixelBufferRef
 import platform.CoreVideo.CVPixelBufferRelease
 import platform.CoreVideo.CVPixelBufferRetain
+import platform.CoreVideo.kCVPixelBufferIOSurfacePropertiesKey
+import platform.CoreVideo.kCVPixelBufferOpenGLESCompatibilityKey
 import platform.CoreVideo.kCVPixelBufferPixelFormatTypeKey
 import platform.CoreVideo.kCVPixelFormatType_32BGRA
 import platform.EAGL.EAGLContext
@@ -456,6 +458,14 @@ actual fun createVideoTexture(assetPath: String): GlVideoSource? {
     val output = AVPlayerItemVideoOutput(
         pixelBufferAttributes = mapOf(
             kCVPixelBufferPixelFormatTypeKey to kCVPixelFormatType_32BGRA,
+            // Without this the decoder is free to hand back buffers that are not
+            // IOSurface-backed, and CVOpenGLESTextureCacheCreateTextureFromImage
+            // then fails for every frame. update() returns false, the texture id
+            // stays 0, and the wall quad draws with nothing bound — while the
+            // AVPlayer keeps playing the audio. That is exactly how building 4
+            // looked on device: framed, audible, blank.
+            kCVPixelBufferOpenGLESCompatibilityKey to true,
+            kCVPixelBufferIOSurfacePropertiesKey to mapOf<Any?, Any?>(),
         ),
     )
     item.addOutput(output)

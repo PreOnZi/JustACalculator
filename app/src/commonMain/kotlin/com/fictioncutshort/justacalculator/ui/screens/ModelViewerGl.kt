@@ -31,8 +31,14 @@ private const val START_YAW = -25f
 /** Degrees per dp of drag. Roughly a half-turn across a 300dp panel. */
 private const val DRAG_SENSITIVITY = 0.6f
 
-/** Stop just short of the poles; past them the model reads as upside-down. */
-private const val PITCH_LIMIT = 85f
+/**
+ * Stop just short of the poles; past them the model reads as upside-down.
+ *
+ * Deliberately not the city's PITCH_LIMIT: that one stops a walking player from
+ * bending their neck too far, this one is about a model on a turntable, which
+ * can be tipped much further before it looks wrong.
+ */
+private const val VIEWER_PITCH_LIMIT = 85f
 
 /** The panel colour behind the viewer in MazeGame, so the surface disappears into it. */
 private const val BG_R = 0.027f
@@ -59,7 +65,7 @@ fun ModelViewerGl(modelFile: String, modifier: Modifier = Modifier) {
                 val dy = with(density) { drag.y.toDp().value }
                 renderer.yaw += dx * DRAG_SENSITIVITY
                 renderer.pitch = (renderer.pitch + dy * DRAG_SENSITIVITY)
-                    .coerceIn(-PITCH_LIMIT, PITCH_LIMIT)
+                    .coerceIn(-VIEWER_PITCH_LIMIT, VIEWER_PITCH_LIMIT)
             }
         },
     )
