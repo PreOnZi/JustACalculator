@@ -544,6 +544,23 @@ fun Door4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {}) {
             onJoy = { x, y -> joyX = x; joyY = y }
         )
 
+        // ── TEMPORARY diagnostic overlay ────────────────────────────────────
+        // The wall videos work on the Simulator and not on device, and nothing
+        // here can be observed from a development machine. This reports the
+        // pipeline's state so a screenshot says which stage is failing.
+        // DELETE once the videos are confirmed working.
+        Text(
+            text = renderer.videoDiagnostics(),
+            color = Color(0xFF66FF99),
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 8.dp, top = 40.dp)
+                .background(Color(0xCC000000))
+                .padding(4.dp),
+        )
+
         val prompt = when {
             foundCount >= 3 -> null
             foundCount >= 2 -> "are you sure?"
@@ -1070,6 +1087,28 @@ private class Door4Renderer : GlRenderer {
     }
 
     private var lastFrameMs = 0L
+    /**
+     * One line per video panel: created / playing / has-a-frame / texture id.
+     *
+     * TEMPORARY — see the overlay in Door4Room. Between them these four flags
+     * localise the failure without a debugger: no player at all, a player that
+     * never started, a player running but yielding no frames, or frames arriving
+     * that the draw pass is still skipping.
+     */
+    fun videoDiagnostics(): String = buildString {
+        append("lit=").append(litCount).append(" found=").append(foundCount).append('\n')
+        for (i in 0 until SCREEN_COUNT) {
+            if (!mediaIsVideo[i]) continue
+            val v = mediaVideo[i]
+            append('#').append(i)
+            append(" made=").append(if (v != null) 'Y' else 'N')
+            append(" play=").append(if (v?.isPlaying == true) 'Y' else 'N')
+            append(" frame=").append(if (mediaHasContent[i]) 'Y' else 'N')
+            append(" tex=").append(v?.textureId ?: -1)
+            append('\n')
+        }
+    }
+
     override fun onDrawFrame() {
         // Frame-rate cap (~33 fps) to cut sustained GPU/CPU load (heat + battery).
         // A no-op on iOS, where the display link caps the loop instead — see

@@ -75,6 +75,11 @@ import platform.CoreVideo.CVPixelBufferIsPlanar
 import platform.CoreVideo.CVPixelBufferGetBaseAddress
 import platform.CoreVideo.CVPixelBufferGetWidth
 import platform.CoreVideo.CVPixelBufferRef
+import platform.CoreFoundation.CFDictionaryRef
+import platform.CoreVideo.CVPixelBufferRefVar
+import platform.CoreVideo.CVPixelBufferCreate
+import platform.CoreImage.CIImage
+import platform.CoreImage.CIContext
 import platform.CoreVideo.CVPixelBufferRelease
 import platform.CoreVideo.CVPixelBufferRetain
 import platform.CoreVideo.kCVPixelBufferIOSurfacePropertiesKey
@@ -164,6 +169,60 @@ private class PixelBufferTexture {
     private var staging: CPointer<UByteVar>? = null
     private var stagingSize = 0
 
+    // Conversion scratch. Both are reused across frames: a CIContext is
+    // expensive to build, and allocating a destination buffer per frame would
+    // churn IOSurfaces at 30fps.
+    private var ciContext: CIContext? = null
+    private var bgraBuffer: CVPixelBufferRef? = null
+    private var bgraW = 0
+    private var bgraH = 0
+
+    /**
+     * Returns [source] as interleaved BGRA, converting only if it is not already.
+     *
+     * CoreImage is doing the format conversion here rather than hand-written YUV
+     * maths: it is the one path that copes with every format a decoder might
+     * choose, including the biplanar 420 flavours that are the usual default.
+     */
+    private fun asBgra(source: CVPixelBufferRef): CVPixelBufferRef? {
+        if (!CVPixelBufferIsPlanar(source) &&
+            CVPixelBufferGetPixelFormatType(source) == kCVPixelFormatType_32BGRA
+        ) {
+            return source
+        }
+
+        val width = CVPixelBufferGetWidth(source).toInt()
+        val height = CVPixelBufferGetHeight(source).toInt()
+        if (width <= 0 || height <= 0) return null
+
+        if (bgraBuffer == null || bgraW != width || bgraH != height) {
+            bgraBuffer?.let { CVPixelBufferRelease(it) }
+            bgraBuffer = null
+            memScoped {
+                val out = alloc<CVPixelBufferRefVar>()
+                val created = CVPixelBufferCreate(
+                    allocator = null,
+                    width = width.convert(),
+                    height = height.convert(),
+                    pixelFormatType = kCVPixelFormatType_32BGRA,
+                    pixelBufferAttributes = mapOf<Any?, Any?>(
+                        kCVPixelBufferIOSurfacePropertiesKey to mapOf<Any?, Any?>(),
+                    ) as CFDictionaryRef?,
+                    pixelBufferOut = out.ptr,
+                )
+                if (created != 0) return null
+                bgraBuffer = out.value
+                bgraW = width
+                bgraH = height
+            }
+        }
+        val destination = bgraBuffer ?: return null
+
+        val context = ciContext ?: CIContext.contextWithOptions(null).also { ciContext = it }
+        context.render(CIImage.imageWithCVPixelBuffer(source), toCVPixelBuffer = destination)
+        return destination
+    }
+
     /**
      * Copies the pixel buffer into an ordinary GL texture.
      *
@@ -171,20 +230,20 @@ private class PixelBufferTexture {
      * works anywhere, including the Simulator, where CVOpenGLESTextureCache is
      * simply not implemented. Used only after the cache has failed.
      */
-    private fun uploadDirect(buffer: CVPixelBufferRef): Boolean {
+    private fun uploadDirect(sourceBuffer: CVPixelBufferRef): Boolean {
+        // Whatever the decoder handed over, get it into interleaved BGRA first.
+        // Asking AVPlayerItemVideoOutput for 32BGRA is only a request, and on
+        // device it plainly is not being honoured — the buffers arriving there
+        // are planar, which is a format this cannot upload and the GL texture
+        // cache will not accept either. Converting removes the dependence on
+        // that negotiation entirely.
+        val buffer = asBgra(sourceBuffer) ?: return false
+
         // Read-only, not 0: an IOSurface-backed buffer is only guaranteed to be
         // mapped for the CPU under the read-only flag. Locking with 0 can hand
         // back an address that is not the pixels at all.
         if (CVPixelBufferLockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly) != 0) return false
         try {
-            // Both guards are load-bearing, not defensive padding. For a planar
-            // buffer GetBaseAddress returns the *plane descriptor*, a structure
-            // of a few kilobytes — uploading width*height*4 from it walks
-            // straight off the end of the allocation, which is precisely how
-            // this crashed on device (a ~2MB read past a 16KB region).
-            if (CVPixelBufferIsPlanar(buffer)) return false
-            if (CVPixelBufferGetPixelFormatType(buffer) != kCVPixelFormatType_32BGRA) return false
-
             val base = CVPixelBufferGetBaseAddress(buffer) ?: return false
             val width = CVPixelBufferGetWidth(buffer).toInt()
             val height = CVPixelBufferGetHeight(buffer).toInt()
@@ -352,6 +411,9 @@ private class PixelBufferTexture {
         staging?.let { nativeHeap.free(it.rawValue) }
         staging = null
         stagingSize = 0
+        bgraBuffer?.let { CVPixelBufferRelease(it) }
+        bgraBuffer = null
+        ciContext = null
         textureId = 0
     }
 }
