@@ -2273,7 +2273,18 @@ class CityGLRenderer : GlRenderer {
         // uses, so EVERY ruin is enterable no matter which model it draws. Model
         // variety is preserved (pick still varies per plot); only orientation is
         // pinned. Yaws snap to 0/90/180/270 so silhouettes stay grid-aligned.
-        val yawDeg = when (pick) {
+        // Facing every doorway at world +Z works for every plot but one: the DEL
+        // ruin has a neighbour hard against that side, so its door cannot be
+        // reached. Turn that one a quarter-turn clockwise seen from above —
+        // taking the player's default heading (-Z) as "up", so +Z is toward the
+        // viewer — which swings the doorway from +Z round to -X.
+        //
+        // If it ends up on the wrong side, flip this to +90f: the door lands on
+        // -X or +X respectively, and nothing else depends on the value. The
+        // collision walls and footprint below are built from the rotated
+        // geometry, so they follow automatically.
+        val doorYawFix = if (label == "DEL") -90f else 0f
+        val yawDeg = doorYawFix + when (pick) {
             0    -> 180f   // buildd1 doorway local -Z → world +Z
             1    -> 270f   // buildd2 doorway local +X → world +Z
             else ->  90f   // buildd3 doorway local -X → world +Z
