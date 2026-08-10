@@ -949,6 +949,7 @@ private class Door4Renderer : GlRenderer {
         varying vec2 vTex;
         void main(){ gl_FragColor = texture2D(uTex, vTex); }""".trimIndent()
     private var texXMark = 0
+    private var textUploaded = false
     private var xMarkAspect = 2f   // bmW / bmH for the "[X]" bitmap; set in onSurfaceCreated
     private var texLeftWall = 0    // "Your perception."     fallback text on the left tunnel wall
     private var texRightWall = 0   // "Who perceives you?"   fallback text on the right tunnel wall
@@ -1073,16 +1074,32 @@ private class Door4Renderer : GlRenderer {
         // the rendered glyph.
         // A TextMeasurer only exists inside a composition, so the images
         // arrive pre-rendered and are only uploaded here.
-        textImages?.let { images ->
-            texXMark = uploadTextureFromImage(images.openMark)
-            xMarkAspect = images.openMark.width.toFloat() / images.openMark.height.toFloat()
-            texLeftWall = uploadTextureFromImage(images.leftWall)
-            texRightWall = uploadTextureFromImage(images.rightWall)
-            texExit = uploadTextureFromImage(images.exitSign)
-        }
+        uploadTextImages()
 
         buildScene()
         glReady = true
+    }
+
+    /**
+     * Uploads the pre-rendered text, if it has arrived. Returns true the once.
+     *
+     * A TextMeasurer only exists inside a composition, so these are rendered by
+     * a LaunchedEffect and handed over — which is a race against the GL thread
+     * reaching onSurfaceCreated. When GL won, nothing was ever uploaded:
+     * texXMark stayed 0, so the "[open]" marker drew as a black rectangle, and
+     * xMarkAspect kept its placeholder so the quad had the wrong shape as well.
+     * Retrying each frame until they land costs one branch and removes the race.
+     */
+    private fun uploadTextImages(): Boolean {
+        if (textUploaded) return false
+        val images = textImages ?: return false
+        texXMark = uploadTextureFromImage(images.openMark)
+        xMarkAspect = images.openMark.width.toFloat() / images.openMark.height.toFloat()
+        texLeftWall = uploadTextureFromImage(images.leftWall)
+        texRightWall = uploadTextureFromImage(images.rightWall)
+        texExit = uploadTextureFromImage(images.exitSign)
+        textUploaded = true
+        return true
     }
 
     override fun onSurfaceChanged(w: Int, h: Int) {
@@ -1120,6 +1137,10 @@ private class Door4Renderer : GlRenderer {
     }
 
     override fun onDrawFrame() {
+        // The text may have arrived after onSurfaceCreated. Rebuild the scene
+        // when it does, because the panel geometry is sized from xMarkAspect.
+        if (uploadTextImages()) buildScene()
+
         // Frame-rate cap (~33 fps) to cut sustained GPU/CPU load (heat + battery).
         // A no-op on iOS, where the display link caps the loop instead — see
         // PlatformGlSurface's targetFps.
