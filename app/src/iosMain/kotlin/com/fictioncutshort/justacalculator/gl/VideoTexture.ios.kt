@@ -51,6 +51,7 @@ import platform.CoreMedia.CMTimeGetSeconds
 import platform.CoreMedia.CMTimeMakeWithSeconds
 import platform.CoreVideo.CVOpenGLESTextureCacheCreate
 import platform.CoreVideo.CVOpenGLESTextureCacheCreateTextureFromImage
+import platform.CoreVideo.CVBufferRelease
 import platform.CoreVideo.CVOpenGLESTextureCacheFlush
 import platform.CoreVideo.CVOpenGLESTextureCacheRef
 import platform.CoreVideo.CVOpenGLESTextureCacheRefVar
@@ -230,10 +231,20 @@ private class PixelBufferTexture {
             }
             val textureCache = cache ?: return false
 
-            // The previous texture must go before a new one is made from the
-            // same cache, or the cache holds the old IOSurface alive and stalls.
-            texture?.let { CVPixelBufferRelease(it) }
+            // The previous texture goes before a new one is made from the same
+            // cache, or the cache holds the old IOSurface alive and stalls.
+            //
+            // CVBufferRelease, not CVPixelBufferRelease: this is a
+            // CVOpenGLESTextureRef. Both are CFRelease underneath, but naming
+            // the wrong one invites someone to "correct" the type later.
+            texture?.let { CVBufferRelease(it) }
             texture = null
+
+            // Flush AFTER dropping the old texture and BEFORE making the next,
+            // which is the window where the cache can actually reclaim. Doing it
+            // straight after creating a texture — as this briefly did — asks the
+            // cache to reclaim the reference the caller is about to read.
+            CVOpenGLESTextureCacheFlush(textureCache, 0u)
 
             val width = CVPixelBufferGetWidth(buffer).toInt()
             val height = CVPixelBufferGetHeight(buffer).toInt()
@@ -262,10 +273,6 @@ private class PixelBufferTexture {
                 }
                 texture = out.value
             }
-
-            // Recommended once per frame: the cache otherwise keeps the
-            // backing IOSurfaces alive and eventually stops vending textures.
-            CVOpenGLESTextureCacheFlush(textureCache, 0u)
 
             val name = texture?.let { CVOpenGLESTextureGetName(it) }?.toInt() ?: return false
             textureId = name
