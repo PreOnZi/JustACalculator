@@ -75,6 +75,11 @@ import platform.CoreVideo.CVPixelBufferIsPlanar
 import platform.CoreVideo.CVPixelBufferGetBaseAddress
 import platform.CoreVideo.CVPixelBufferGetWidth
 import platform.CoreVideo.CVPixelBufferRef
+import platform.CoreFoundation.CFDictionaryRef
+import platform.CoreVideo.CVPixelBufferRefVar
+import platform.CoreVideo.CVPixelBufferCreate
+import platform.CoreImage.CIImage
+import platform.CoreImage.CIContext
 import platform.CoreVideo.CVPixelBufferRelease
 import platform.CoreVideo.CVPixelBufferRetain
 import platform.CoreVideo.kCVPixelBufferIOSurfacePropertiesKey
@@ -87,6 +92,15 @@ import platform.Foundation.NSNotificationCenter
 import platform.Foundation.NSURL
 import platform.darwin.NSObject
 import platform.darwin.dispatch_queue_create
+import platform.darwin.DISPATCH_SOURCE_TYPE_TIMER
+import platform.darwin.DISPATCH_TIME_NOW
+import platform.darwin.dispatch_time
+import platform.darwin.dispatch_resume
+import platform.darwin.dispatch_source_cancel
+import platform.darwin.dispatch_source_set_event_handler
+import platform.darwin.dispatch_source_set_timer
+import platform.darwin.dispatch_source_t
+import platform.darwin.dispatch_source_create
 import platform.gles3.GL_BGRA
 import platform.gles3.GL_CLAMP_TO_EDGE
 import platform.gles3.GL_LINEAR
@@ -525,6 +539,17 @@ private class VideoTexture(
 
     private var loopObserver: Any? = null
 
+    // Pulling and converting run here, off the render thread.
+    private val pumpQueue = dispatch_queue_create("video.pump", null)
+    private var pumpTimer: dispatch_source_t = null
+    private var releasedFlag = false
+
+    // Conversion scratch, reused across frames.
+    private var ciContext: CIContext? = null
+    private var bgraBuffer: CVPixelBufferRef? = null
+    private var bgraW = 0
+    private var bgraH = 0
+
     override val textureId: Int get() = sink.textureId
     override val textureTarget: Int = Gl.GL_TEXTURE_2D
     override fun getTransformMatrix(out: FloatArray) = identity(out)
@@ -534,24 +559,111 @@ private class VideoTexture(
      * is how AVPlayerItemVideoOutput works — so unlike the camera there is
      * nothing to retain between calls.
      */
-    override fun updateTexImage(): Boolean {
-        // itemTimeForHostTime, NOT player.currentTime(). The output serves
-        // frames against the host clock and answers hasNewPixelBufferForItemTime
-        // relative to it; asking with the player's own timebase makes it say
-        // "nothing new" on almost every call, so no frame is ever pulled, the
-        // texture id stays 0 and the wall stays black — while AVPlayer keeps
-        // playing the audio, which is exactly how this presented on device.
-        val time = output.itemTimeForHostTime(CACurrentMediaTime())
-        if (!output.hasNewPixelBufferForItemTime(time)) return false
-        val buffer = output.copyPixelBufferForItemTime(time, null) ?: return false
-        sink.offer(buffer)
-        // offer retains, so the copy's own reference goes here.
-        CVPixelBufferRelease(buffer)
-        return sink.update()
+    /**
+     * Only uploads. Pulling and converting happen on [pumpQueue].
+     *
+     * This runs on the GL thread, which on iOS is the MAIN thread — GLKView
+     * calls its delegate there. Anything expensive here freezes touch handling
+     * and Compose along with it, which is exactly what happened when the format
+     * conversion was attempted inline.
+     */
+    override fun updateTexImage(): Boolean = sink.update()
+
+    /**
+     * Fetches the next frame and hands it over as BGRA.
+     *
+     * The decoder on device delivers planar buffers whatever
+     * pixelBufferAttributes asks for, and planar is a format neither the GL
+     * texture cache nor a straight upload can take — which is why the wall
+     * stayed blank while the audio played. CoreImage does the conversion
+     * because it copes with every format a decoder might pick; the context and
+     * the destination buffer are reused rather than rebuilt per frame.
+     */
+    private fun pumpOnce() {
+        // Nothing may escape: this runs on a dispatch queue, and Kotlin/Native
+        // terminates the process on an unhandled exception off the main thread.
+        // A dropped frame is a far better outcome than a dead app.
+        runCatching {
+            if (releasedFlag) return
+            val time = output.itemTimeForHostTime(CACurrentMediaTime())
+            if (!output.hasNewPixelBufferForItemTime(time)) return
+            val raw = output.copyPixelBufferForItemTime(time, null) ?: return
+            try {
+                val bgra = asBgra(raw) ?: return
+                sink.offer(bgra)
+            } finally {
+                CVPixelBufferRelease(raw)
+            }
+        }
     }
 
-    override fun play() { player.play() }
-    override fun pause() { player.pause() }
+    /** Returns [source] as interleaved BGRA, converting only when it is not already. */
+    private fun asBgra(source: CVPixelBufferRef): CVPixelBufferRef? {
+        if (!CVPixelBufferIsPlanar(source) &&
+            CVPixelBufferGetPixelFormatType(source) == kCVPixelFormatType_32BGRA
+        ) {
+            return source
+        }
+        val width = CVPixelBufferGetWidth(source).toInt()
+        val height = CVPixelBufferGetHeight(source).toInt()
+        if (width <= 0 || height <= 0) return null
+
+        if (bgraBuffer == null || bgraW != width || bgraH != height) {
+            bgraBuffer?.let { CVPixelBufferRelease(it) }
+            bgraBuffer = null
+            memScoped {
+                val out = alloc<CVPixelBufferRefVar>()
+                val created = CVPixelBufferCreate(
+                    allocator = null,
+                    width = width.convert(),
+                    height = height.convert(),
+                    pixelFormatType = kCVPixelFormatType_32BGRA,
+                    // No attributes dictionary. A Kotlin Map is not a
+                    // CFDictionaryRef and casting one to it throws — which is
+                    // what killed the pump queue, and an uncaught exception on
+                    // a background queue takes the whole process with it.
+                    // The default buffer is CPU-mappable, which is all the
+                    // upload path needs.
+                    pixelBufferAttributes = null,
+                    pixelBufferOut = out.ptr,
+                )
+                if (created != 0) return null
+                bgraBuffer = out.value
+                bgraW = width
+                bgraH = height
+            }
+        }
+        val destination = bgraBuffer ?: return null
+        val context = ciContext ?: CIContext.contextWithOptions(null).also { ciContext = it }
+        context.render(CIImage.imageWithCVPixelBuffer(source), toCVPixelBuffer = destination)
+        return destination
+    }
+
+    private fun startPump() {
+        if (pumpTimer != null || releasedFlag) return
+        val timer = dispatch_source_create(
+            DISPATCH_SOURCE_TYPE_TIMER, 0u, 0u, pumpQueue,
+        ) ?: return
+        // 30Hz: the display link is capped at 30 too, so pulling faster only
+        // converts frames nobody will draw.
+        dispatch_source_set_timer(
+            timer,
+            dispatch_time(DISPATCH_TIME_NOW, 0),
+            (1_000_000_000L / 30).toULong(),
+            5_000_000u,
+        )
+        dispatch_source_set_event_handler(timer) { pumpOnce() }
+        dispatch_resume(timer)
+        pumpTimer = timer
+    }
+
+    private fun stopPump() {
+        pumpTimer?.let { dispatch_source_cancel(it) }
+        pumpTimer = null
+    }
+
+    override fun play() { player.play(); startPump() }
+    override fun pause() { player.pause(); stopPump() }
 
     override fun seekTo(positionMs: Int) {
         player.seekToTime(CMTimeMakeWithSeconds(positionMs / 1000.0, 600))
@@ -587,9 +699,16 @@ private class VideoTexture(
     override fun setReverb(enabled: Boolean) = Unit
 
     override fun release() {
+        // Flag first: the pump may already be mid-frame on its own queue, and
+        // it checks this before touching anything.
+        releasedFlag = true
+        stopPump()
         loopObserver?.let { NSNotificationCenter.defaultCenter.removeObserver(it) }
         loopObserver = null
         player.pause()
+        bgraBuffer?.let { CVPixelBufferRelease(it) }
+        bgraBuffer = null
+        ciContext = null
         sink.release()
     }
 }
