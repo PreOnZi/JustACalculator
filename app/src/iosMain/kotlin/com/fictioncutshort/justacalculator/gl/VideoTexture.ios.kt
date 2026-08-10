@@ -5,9 +5,15 @@ import com.fictioncutshort.justacalculator.platform.AppPermission
 import com.fictioncutshort.justacalculator.platform.Assets
 import com.fictioncutshort.justacalculator.platform.hasPermission
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.interpretCPointer
+import kotlinx.cinterop.CPointer
+import kotlinx.cinterop.UByteVar
+import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.get
 import kotlinx.cinterop.allocArray
+import kotlinx.cinterop.convert
+import kotlinx.cinterop.nativeHeap
 import kotlinx.cinterop.UIntVar
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.useContents
@@ -59,8 +65,13 @@ import platform.CoreVideo.CVOpenGLESTextureRefVar
 import platform.CoreVideo.CVOpenGLESTextureGetName
 import platform.CoreVideo.CVOpenGLESTextureRef
 import platform.CoreVideo.CVPixelBufferGetHeight
+import platform.CoreVideo.CVPixelBufferGetBytesPerRow
 import platform.CoreVideo.CVPixelBufferUnlockBaseAddress
 import platform.CoreVideo.CVPixelBufferLockBaseAddress
+import platform.posix.memcpy
+import platform.CoreVideo.kCVPixelBufferLock_ReadOnly
+import platform.CoreVideo.CVPixelBufferGetPixelFormatType
+import platform.CoreVideo.CVPixelBufferIsPlanar
 import platform.CoreVideo.CVPixelBufferGetBaseAddress
 import platform.CoreVideo.CVPixelBufferGetWidth
 import platform.CoreVideo.CVPixelBufferRef
@@ -149,6 +160,9 @@ private class PixelBufferTexture {
 
     private var cacheUnavailable = false
     private var fallbackTexture = 0
+    /** Row-compaction scratch, kept between frames so the fallback does not allocate per frame. */
+    private var staging: CPointer<UByteVar>? = null
+    private var stagingSize = 0
 
     /**
      * Copies the pixel buffer into an ordinary GL texture.
@@ -158,12 +172,25 @@ private class PixelBufferTexture {
      * simply not implemented. Used only after the cache has failed.
      */
     private fun uploadDirect(buffer: CVPixelBufferRef): Boolean {
-        CVPixelBufferLockBaseAddress(buffer, 0u)
+        // Read-only, not 0: an IOSurface-backed buffer is only guaranteed to be
+        // mapped for the CPU under the read-only flag. Locking with 0 can hand
+        // back an address that is not the pixels at all.
+        if (CVPixelBufferLockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly) != 0) return false
         try {
+            // Both guards are load-bearing, not defensive padding. For a planar
+            // buffer GetBaseAddress returns the *plane descriptor*, a structure
+            // of a few kilobytes — uploading width*height*4 from it walks
+            // straight off the end of the allocation, which is precisely how
+            // this crashed on device (a ~2MB read past a 16KB region).
+            if (CVPixelBufferIsPlanar(buffer)) return false
+            if (CVPixelBufferGetPixelFormatType(buffer) != kCVPixelFormatType_32BGRA) return false
+
             val base = CVPixelBufferGetBaseAddress(buffer) ?: return false
             val width = CVPixelBufferGetWidth(buffer).toInt()
             val height = CVPixelBufferGetHeight(buffer).toInt()
-            if (width <= 0 || height <= 0) return false
+            val stride = CVPixelBufferGetBytesPerRow(buffer).toInt()
+            val tightStride = width * 4
+            if (width <= 0 || height <= 0 || stride < tightStride) return false
 
             if (fallbackTexture == 0) {
                 memScoped {
@@ -181,17 +208,42 @@ private class PixelBufferTexture {
                 glBindTexture(GL_TEXTURE_2D.toUInt(), fallbackTexture.toUInt())
             }
 
+            // GL reads rows tightly packed; CoreVideo pads them to its own
+            // alignment. Where those differ the rows have to be compacted first,
+            // or every row after the first is read from the wrong offset.
+            val src = base.reinterpret<UByteVar>()
+            val source: CPointer<UByteVar> = if (stride == tightStride) {
+                src
+            } else {
+                val needed = tightStride * height
+                if (stagingSize != needed) {
+                    staging?.let { nativeHeap.free(it.rawValue) }
+                    staging = nativeHeap.allocArray<UByteVar>(needed)
+                    stagingSize = needed
+                }
+                val dst = staging ?: return false
+                for (y in 0 until height) {
+                    // Arithmetic on the raw addresses: CPointer's plus operator
+                    // is nullable and does not resolve cleanly for UByteVar here.
+                    val to = interpretCPointer<UByteVar>(dst.rawValue + y.toLong() * tightStride)
+                    val from = interpretCPointer<UByteVar>(src.rawValue + y.toLong() * stride)
+                    if (to == null || from == null) return false
+                    memcpy(to, from, tightStride.convert())
+                }
+                dst
+            }
+
             // BGRA source; GL_BGRA is accepted as an external format on iOS via
             // APPLE_texture_format_BGRA8888, with GL_RGBA as the internal one.
             glTexImage2D(
                 GL_TEXTURE_2D.toUInt(), 0, GL_RGBA,
                 width, height, 0,
-                GL_BGRA.toUInt(), GL_UNSIGNED_BYTE.toUInt(), base,
+                GL_BGRA.toUInt(), GL_UNSIGNED_BYTE.toUInt(), source,
             )
             textureId = fallbackTexture
             return true
         } finally {
-            CVPixelBufferUnlockBaseAddress(buffer, 0u)
+            CVPixelBufferUnlockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly)
         }
     }
 
@@ -292,9 +344,14 @@ private class PixelBufferTexture {
         released = true
         pending?.let { CVPixelBufferRelease(it) }
         pending = null
-        texture?.let { CVPixelBufferRelease(it) }
+        texture?.let { CVBufferRelease(it) }
         texture = null
         cache = null
+        // The fallback's row-compaction scratch is malloc'd, so it does not go
+        // away with the object.
+        staging?.let { nativeHeap.free(it.rawValue) }
+        staging = null
+        stagingSize = 0
         textureId = 0
     }
 }
