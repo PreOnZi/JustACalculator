@@ -857,6 +857,8 @@ private class Door4Renderer : GlRenderer {
     @kotlin.concurrent.Volatile var litCount = 1          // panels with order < litCount are revealed
     @kotlin.concurrent.Volatile var foundCount = 0        // panels with order < foundCount have been read
     @kotlin.concurrent.Volatile var doorOpen = 0f
+    /** TEMPORARY, for the diagnostic overlay: set once onSurfaceCreated finishes. */
+    @kotlin.concurrent.Volatile var glReady = false
 
     /** Pre-rendered text, set by the composable before the surface is created. */
     @kotlin.concurrent.Volatile var textImages: Door4TextImages? = null
@@ -1080,6 +1082,7 @@ private class Door4Renderer : GlRenderer {
         }
 
         buildScene()
+        glReady = true
     }
 
     override fun onSurfaceChanged(w: Int, h: Int) {
@@ -1096,10 +1099,17 @@ private class Door4Renderer : GlRenderer {
      * that the draw pass is still skipping.
      */
     fun videoDiagnostics(): String = buildString {
-        append("lit=").append(litCount).append(" found=").append(foundCount).append('\n')
+        // glReady first: without it "no lines below" is ambiguous between
+        // "onSurfaceCreated never ran" and "there are no video panels", and on
+        // the Simulator it is the former.
+        append("gl=").append(if (glReady) 'Y' else 'N')
+        append(" lit=").append(litCount)
+        append(" found=").append(foundCount)
+        append(" n=").append(SCREEN_COUNT)
+        append('\n')
         for (i in 0 until SCREEN_COUNT) {
-            if (!mediaIsVideo[i]) continue
             val v = mediaVideo[i]
+            if (!mediaIsVideo[i] && v == null) continue
             append('#').append(i)
             append(" made=").append(if (v != null) 'Y' else 'N')
             append(" play=").append(if (v?.isPlaying == true) 'Y' else 'N')
