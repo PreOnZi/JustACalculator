@@ -72,7 +72,9 @@ import kotlin.math.*
  * hurrying, short enough that it does not linger once they are walking again.
  */
 /** How far the portrait joystick sits from the left edge. */
-private val JOY_EDGE_INSET = 24.dp
+// Shared with Door4Room so the walking thumb lands in the same place in every
+// first-person room; they drifted apart once and the difference was jarring.
+internal val JOY_EDGE_INSET = 24.dp
 
 private const val UNSTUCK_LINGER_FRAMES = 300
 

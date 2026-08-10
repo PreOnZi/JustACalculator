@@ -302,6 +302,164 @@ fun Door4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {}) {
         onDispose { clockPlayer?.release() }
     }
 
+    // ── Reveal state pushed down to the renderer ─────────────────────────────
+    LaunchedEffect(litCount) {
+        renderer.litCount = litCount
+        for (i in 0 until litCount) {
+            val video = renderer.mediaVideo[i] ?: continue
+            if (!video.isPlaying) video.play()
+        }
+    }
+
+    LaunchedEffect(foundCount) { renderer.foundCount = foundCount }
+
+    // The first piece announces itself once, panned from where the player is
+    // standing so it points them at the wall it came from.
+    LaunchedEffect(Unit) {
+        if (foundCount == 0) {
+            val (sx, sz) = screenCenterXZ(DOOR4_SCREENS[0])
+            val (l, r) = thumpPan(sx, sz, pX, pZ, camYaw)
+            playOneShotRaw("thump", l, r)
+        }
+    }
+
+    // The next piece reveals a beat after the previous panel closes, rather
+    // than the moment it does — the pause is what makes the room feel like it
+    // is deciding to show you something.
+    LaunchedEffect(foundCount) {
+        if (foundCount in 1 until SCREEN_COUNT && litCount == foundCount) {
+            delay(NEXT_REVEAL_MS)
+            // Re-checked after the delay: the player may have read another
+            // piece while it ran, which would already have advanced litCount.
+            if (litCount == foundCount) {
+                litCount = foundCount + 1
+                val nextIdx = foundCount
+                val (sx, sz) = screenCenterXZ(DOOR4_SCREENS[nextIdx])
+                val (l, r) = thumpPan(sx, sz, pX, pZ, camYaw)
+                playOneShotRaw("thump", l, r)
+                renderer.mediaVideo[nextIdx]?.let { if (!it.isPlaying) it.play() }
+            }
+        }
+    }
+
+    // Every piece read → the door grinds open. This is the only way out of the
+    // room, so losing it strands the player with no exit.
+    LaunchedEffect(foundCount) {
+        if (foundCount >= SCREEN_COUNT && renderer.doorOpen < 1f) {
+            val steps = 90
+            repeat(steps) { delay(16); renderer.doorOpen = (it + 1f) / steps }
+            renderer.doorOpen = 1f
+            tunnelReady = true
+        }
+    }
+
+    var levelDone      by remember { mutableStateOf(false) }
+    var approachEnterMs by remember { mutableStateOf(0L) }
+
+    // ── Movement / camera loop + proximity → reveal / nudge / audio ──────────
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(16)
+            camYaw += joyX * YAW_SPD
+            val cr = camYaw.toDouble() * PI / 180.0
+            val fwd = -joyY
+            val dx = (sin(cr) * fwd * MOVE_SPD).toFloat()
+            val dz = (-cos(cr) * fwd * MOVE_SPD).toFloat()
+            val nx = pX + dx
+            val nz = pZ + dz
+            val doorIsOpen = renderer.doorOpen > 0.5f
+            // Blocked diagonally, retry each axis alone: without this the player
+            // sticks to walls instead of sliding along them.
+            if (!door4Blocked(nx, nz, doorIsOpen)) { pX = nx; pZ = nz }
+            else {
+                if (!door4Blocked(nx, pZ, doorIsOpen)) pX = nx
+                if (!door4Blocked(pX, nz, doorIsOpen)) pZ = nz
+            }
+
+            renderer.camX = pX; renderer.camZ = pZ; renderer.camYaw = camYaw
+            renderer.lookAtX = pX + sin(cr).toFloat()
+            renderer.lookAtZ = pZ - cos(cr).toFloat()
+
+            if (!levelDone && doorIsOpen && pZ < -ROOM_R - TUNNEL_LEN + 140f) {
+                levelDone = true
+                // News pieces read become cookies.
+                com.fictioncutshort.justacalculator.logic.CurrencyStore.award(
+                    context, com.fictioncutshort.justacalculator.logic.Currency.COOKIES, foundCount, "b4")
+                onComplete()
+            }
+
+            val target = foundCount  // next piece to be found
+            val targetValid = target < SCREEN_COUNT && target < litCount
+            val targetIsVideo = targetValid && DOOR4_NEWS[target].isVideo
+
+            // Distance to the target piece's centre & to its [X] marker.
+            var dCenter = Float.MAX_VALUE
+            var dXMark = Float.MAX_VALUE
+            if (targetValid) {
+                val s = DOOR4_SCREENS[target]
+                val (sx, sz) = screenCenterXZ(s)
+                dCenter = sqrt((pX - sx) * (pX - sx) + (pZ - sz) * (pZ - sz))
+                val (halfW, _) = panelHalfExtents(renderer.mediaAspect[target])
+                val (mx, mz) = screenXMarkXZ(s, halfW)
+                dXMark = sqrt((pX - mx) * (pX - mx) + (pZ - mz) * (pZ - mz))
+            }
+
+            // Auto-open description when the player reaches the [X].
+            if (targetValid && shownDescIndex == null && dXMark < READ_RADIUS_X) {
+                shownDescIndex = target
+                showNudge = false
+                approachEnterMs = 0L
+            }
+
+            // Nudge: 5s in the approach zone without opening the panel.
+            if (targetValid && shownDescIndex == null) {
+                if (dCenter < APPROACH_RADIUS) {
+                    if (approachEnterMs == 0L) approachEnterMs = nowMillis()
+                    else if (nowMillis() - approachEnterMs > NUDGE_DELAY_MS) showNudge = true
+                } else {
+                    approachEnterMs = 0L
+                    showNudge = false
+                }
+            } else {
+                showNudge = false
+                approachEnterMs = 0L
+            }
+
+            // ── Clock volume ──
+            // Open panel → silent. Video target → ducked max. Image target → normal.
+            var clockVol = CLOCK_MIN
+            if (shownDescIndex != null) {
+                clockVol = 0f
+            } else if (targetValid) {
+                val close = ((CLOCK_FAR - dCenter) / (CLOCK_FAR - CLOCK_NEAR)).coerceIn(0f, 1f)
+                val maxVol = if (targetIsVideo) CLOCK_VIDEO_DUCK else CLOCK_MAX
+                clockVol = CLOCK_MIN + (maxVol - CLOCK_MIN) * close
+            }
+            clockPlayer?.setVolume(clockVol, clockVol)
+
+            // ── Video volumes (per-piece, distance-modulated) ──
+            for (i in 0 until SCREEN_COUNT) {
+                if (!DOOR4_NEWS[i].isVideo) continue
+                if (i >= litCount) continue
+                val video = renderer.mediaVideo[i] ?: continue
+                if (muted[i]) {
+                    video.setVolume(0f)
+                    continue
+                }
+                val (sx, sz) = screenCenterXZ(DOOR4_SCREENS[i])
+                val d = sqrt((pX - sx) * (pX - sx) + (pZ - sz) * (pZ - sz))
+                val close = ((VIDEO_FAR - d) / (VIDEO_FAR - VIDEO_NEAR)).coerceIn(0f, 1f)
+                // VIDEO_CURVE squashes the low end so most volume gain happens
+                // in the last third of the approach — perceptually the player
+                // feels the piece "growing louder" only once they're committing.
+                val shaped = close.pow(VIDEO_CURVE)
+                var vol = VIDEO_MIN + (VIDEO_MAX - VIDEO_MIN) * shaped
+                if (shownDescIndex == i) vol *= VIDEO_DUCK_OPEN
+                video.setVolume(vol)
+            }
+        }
+    }
+
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
         PlatformGlSurface(
             renderer = renderer,
@@ -312,8 +470,14 @@ fun Door4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {}) {
         val joySize = (configuration.widthDp.value * 0.30f).dp.coerceIn(110.dp, 160.dp)
         CityJoystick(
             joyDp = joySize,
-            modifier = if (isLandscape) Modifier.align(Alignment.CenterEnd).padding(end = 24.dp)
-                       else Modifier.align(Alignment.BottomCenter).padding(bottom = 36.dp),
+            // Placed exactly as the city's, so the walking thumb lands in the
+            // same spot in both — bottom-LEFT in portrait, not centred.
+            modifier = if (isLandscape) Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 24.dp)
+            else Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = JOY_EDGE_INSET, bottom = 36.dp),
             onJoy = { x, y -> joyX = x; joyY = y }
         )
 
