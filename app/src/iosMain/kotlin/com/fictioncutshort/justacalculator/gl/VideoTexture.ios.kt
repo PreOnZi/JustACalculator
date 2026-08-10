@@ -137,6 +137,22 @@ actual val videoSamplerPreamble: String = ""
 actual val videoSamplerType: String = "sampler2D"
 
 @OptIn(ExperimentalForeignApi::class)
+/**
+ * The V-flip a CoreVideo frame needs to sit the right way up.
+ *
+ * CVPixelBuffer rows run top-down; GL samples bottom-up. Android's
+ * SurfaceTexture hands back a matrix that already carries this flip, and the
+ * renderers multiply whatever they are given by their own TEX_FLIP_V — so on
+ * Android the two cancel out and the picture is upright. Returning identity
+ * here left exactly one flip standing, which is why iOS video played upside
+ * down.
+ */
+private fun flipV(out: FloatArray) {
+    Matrix.setIdentityM(out, 0)
+    out[5] = -1f    // v -> -v
+    out[13] = 1f    //   -> 1 - v
+}
+
 private fun identity(out: FloatArray) {
     Matrix.setIdentityM(out, 0)
 }
@@ -552,13 +568,8 @@ private class VideoTexture(
 
     override val textureId: Int get() = sink.textureId
     override val textureTarget: Int = Gl.GL_TEXTURE_2D
-    override fun getTransformMatrix(out: FloatArray) = identity(out)
+    override fun getTransformMatrix(out: FloatArray) = flipV(out)
 
-    /**
-     * Pulls at the item's current time rather than being pushed frames, which
-     * is how AVPlayerItemVideoOutput works — so unlike the camera there is
-     * nothing to retain between calls.
-     */
     /**
      * Only uploads. Pulling and converting happen on [pumpQueue].
      *
