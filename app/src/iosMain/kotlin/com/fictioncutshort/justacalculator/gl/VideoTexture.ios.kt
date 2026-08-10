@@ -6,6 +6,9 @@ import com.fictioncutshort.justacalculator.platform.Assets
 import com.fictioncutshort.justacalculator.platform.hasPermission
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.alloc
+import kotlinx.cinterop.get
+import kotlinx.cinterop.allocArray
+import kotlinx.cinterop.UIntVar
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.useContents
 import kotlinx.cinterop.ptr
@@ -55,11 +58,15 @@ import platform.CoreVideo.CVOpenGLESTextureRefVar
 import platform.CoreVideo.CVOpenGLESTextureGetName
 import platform.CoreVideo.CVOpenGLESTextureRef
 import platform.CoreVideo.CVPixelBufferGetHeight
+import platform.CoreVideo.CVPixelBufferUnlockBaseAddress
+import platform.CoreVideo.CVPixelBufferLockBaseAddress
+import platform.CoreVideo.CVPixelBufferGetBaseAddress
 import platform.CoreVideo.CVPixelBufferGetWidth
 import platform.CoreVideo.CVPixelBufferRef
 import platform.CoreVideo.CVPixelBufferRelease
 import platform.CoreVideo.CVPixelBufferRetain
 import platform.CoreVideo.kCVPixelBufferIOSurfacePropertiesKey
+import platform.QuartzCore.CACurrentMediaTime
 import platform.CoreVideo.kCVPixelBufferOpenGLESCompatibilityKey
 import platform.CoreVideo.kCVPixelBufferPixelFormatTypeKey
 import platform.CoreVideo.kCVPixelFormatType_32BGRA
@@ -73,6 +80,8 @@ import platform.gles3.GL_CLAMP_TO_EDGE
 import platform.gles3.GL_LINEAR
 import platform.gles3.GL_RGBA
 import platform.gles3.GL_TEXTURE_2D
+import platform.gles3.glTexImage2D
+import platform.gles3.glGenTextures
 import platform.gles3.GL_TEXTURE_MAG_FILTER
 import platform.gles3.GL_TEXTURE_MIN_FILTER
 import platform.gles3.GL_TEXTURE_WRAP_S
@@ -137,6 +146,54 @@ private class PixelBufferTexture {
         if (previous != null) CVPixelBufferRelease(previous)
     }
 
+    private var cacheUnavailable = false
+    private var fallbackTexture = 0
+
+    /**
+     * Copies the pixel buffer into an ordinary GL texture.
+     *
+     * Slower than the zero-copy cache — this is a per-frame upload — but it
+     * works anywhere, including the Simulator, where CVOpenGLESTextureCache is
+     * simply not implemented. Used only after the cache has failed.
+     */
+    private fun uploadDirect(buffer: CVPixelBufferRef): Boolean {
+        CVPixelBufferLockBaseAddress(buffer, 0u)
+        try {
+            val base = CVPixelBufferGetBaseAddress(buffer) ?: return false
+            val width = CVPixelBufferGetWidth(buffer).toInt()
+            val height = CVPixelBufferGetHeight(buffer).toInt()
+            if (width <= 0 || height <= 0) return false
+
+            if (fallbackTexture == 0) {
+                memScoped {
+                    val ids = allocArray<UIntVar>(1)
+                    glGenTextures(1, ids)
+                    fallbackTexture = ids[0].toInt()
+                }
+                if (fallbackTexture == 0) return false
+                glBindTexture(GL_TEXTURE_2D.toUInt(), fallbackTexture.toUInt())
+                glTexParameteri(GL_TEXTURE_2D.toUInt(), GL_TEXTURE_MIN_FILTER.toUInt(), GL_LINEAR)
+                glTexParameteri(GL_TEXTURE_2D.toUInt(), GL_TEXTURE_MAG_FILTER.toUInt(), GL_LINEAR)
+                glTexParameteri(GL_TEXTURE_2D.toUInt(), GL_TEXTURE_WRAP_S.toUInt(), GL_CLAMP_TO_EDGE)
+                glTexParameteri(GL_TEXTURE_2D.toUInt(), GL_TEXTURE_WRAP_T.toUInt(), GL_CLAMP_TO_EDGE)
+            } else {
+                glBindTexture(GL_TEXTURE_2D.toUInt(), fallbackTexture.toUInt())
+            }
+
+            // BGRA source; GL_BGRA is accepted as an external format on iOS via
+            // APPLE_texture_format_BGRA8888, with GL_RGBA as the internal one.
+            glTexImage2D(
+                GL_TEXTURE_2D.toUInt(), 0, GL_RGBA,
+                width, height, 0,
+                GL_BGRA.toUInt(), GL_UNSIGNED_BYTE.toUInt(), base,
+            )
+            textureId = fallbackTexture
+            return true
+        } finally {
+            CVPixelBufferUnlockBaseAddress(buffer, 0u)
+        }
+    }
+
     /** Must run on the GL thread — the cache is bound to the current context. */
     fun update(): Boolean {
         if (released) return false
@@ -144,6 +201,11 @@ private class PixelBufferTexture {
         pending = null
 
         try {
+            // The texture cache is unavailable on the Simulator and can fail on
+            // device too; either way falling back to a plain upload keeps the
+            // picture on screen rather than leaving a black panel.
+            if (cacheUnavailable) return uploadDirect(buffer)
+
             if (cache == null) {
                 val ctx = EAGLContext.currentContext() ?: return false
                 // CoreVideo's header only forward-declares EAGLContext, so the
@@ -159,7 +221,10 @@ private class PixelBufferTexture {
                         textureAttributes = null,
                         cacheOut = out.ptr,
                     )
-                    if (created != 0) return false
+                    if (created != 0) {
+                        cacheUnavailable = true
+                        return uploadDirect(buffer)
+                    }
                     cache = out.value
                 }
             }
@@ -189,9 +254,18 @@ private class PixelBufferTexture {
                     planeIndex = 0u,
                     textureOut = out.ptr,
                 )
-                if (status != 0) return false
+                if (status != 0) {
+                    // One failure means this pipeline will not work at all here,
+                    // so stop retrying it every frame and copy instead.
+                    cacheUnavailable = true
+                    return uploadDirect(buffer)
+                }
                 texture = out.value
             }
+
+            // Recommended once per frame: the cache otherwise keeps the
+            // backing IOSurfaces alive and eventually stops vending textures.
+            CVOpenGLESTextureCacheFlush(textureCache, 0u)
 
             val name = texture?.let { CVOpenGLESTextureGetName(it) }?.toInt() ?: return false
             textureId = name
@@ -397,7 +471,13 @@ private class VideoTexture(
      * nothing to retain between calls.
      */
     override fun updateTexImage(): Boolean {
-        val time = player.currentTime()
+        // itemTimeForHostTime, NOT player.currentTime(). The output serves
+        // frames against the host clock and answers hasNewPixelBufferForItemTime
+        // relative to it; asking with the player's own timebase makes it say
+        // "nothing new" on almost every call, so no frame is ever pulled, the
+        // texture id stays 0 and the wall stays black — while AVPlayer keeps
+        // playing the audio, which is exactly how this presented on device.
+        val time = output.itemTimeForHostTime(CACurrentMediaTime())
         if (!output.hasNewPixelBufferForItemTime(time)) return false
         val buffer = output.copyPixelBufferForItemTime(time, null) ?: return false
         sink.offer(buffer)
