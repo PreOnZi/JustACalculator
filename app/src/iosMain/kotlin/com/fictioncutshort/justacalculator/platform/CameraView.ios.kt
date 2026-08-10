@@ -36,6 +36,11 @@ import platform.AVFoundation.AVCaptureVideoDataOutput
 import platform.AVFoundation.AVCaptureVideoDataOutputSampleBufferDelegateProtocol
 import platform.AVFoundation.AVCaptureVideoPreviewLayer
 import platform.AVFoundation.AVLayerVideoGravityResizeAspectFill
+import platform.AVFoundation.AVCaptureVideoOrientation
+import platform.AVFoundation.AVCaptureVideoOrientationLandscapeLeft
+import platform.AVFoundation.AVCaptureVideoOrientationLandscapeRight
+import platform.AVFoundation.AVCaptureVideoOrientationPortrait
+import platform.AVFoundation.AVCaptureVideoOrientationPortraitUpsideDown
 import platform.AVFoundation.AVMediaTypeVideo
 import platform.AVFoundation.fileDataRepresentation
 import platform.AVFoundation.position
@@ -54,7 +59,13 @@ import platform.Foundation.NSError
 import platform.QuartzCore.CATransaction
 import platform.UIKit.UIImage
 import platform.UIKit.UIImageWriteToSavedPhotosAlbum
+import platform.UIKit.UIApplication
+import platform.UIKit.UIInterfaceOrientationLandscapeLeft
+import platform.UIKit.UIInterfaceOrientationLandscapeRight
+import platform.UIKit.UIInterfaceOrientationPortraitUpsideDown
+import platform.UIKit.UISceneActivationStateForegroundActive
 import platform.UIKit.UIView
+import platform.UIKit.UIWindowScene
 import platform.darwin.NSObject
 import platform.darwin.dispatch_queue_create
 
@@ -69,6 +80,53 @@ import platform.darwin.dispatch_queue_create
  * *whether* to capture here, not what the saved file is called.
  */
 
+/**
+ * The orientation the capture pipeline should hand frames over in.
+ *
+ * AVCaptureVideoDataOutput and AVCaptureVideoPreviewLayer both default to the
+ * *sensor's* orientation, which is landscape on every iOS device regardless of
+ * how it is being held. Nothing corrects for that automatically: the frames
+ * simply arrive rotated, and everything downstream inherits the rotation —
+ * Vision fails to find a face that is lying on its side, and any coordinates it
+ * does return are in the rotated space, so overlays land turned and offset.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private fun currentVideoOrientation(): AVCaptureVideoOrientation {
+    val scenes = UIApplication.sharedApplication.connectedScenes.mapNotNull { it as? UIWindowScene }
+    // A background scene can report a stale value, so prefer the active one.
+    val scene = scenes.firstOrNull { it.activationState == UISceneActivationStateForegroundActive }
+        ?: scenes.firstOrNull()
+    return when (scene?.interfaceOrientation) {
+        UIInterfaceOrientationPortraitUpsideDown -> AVCaptureVideoOrientationPortraitUpsideDown
+        UIInterfaceOrientationLandscapeLeft -> AVCaptureVideoOrientationLandscapeLeft
+        UIInterfaceOrientationLandscapeRight -> AVCaptureVideoOrientationLandscapeRight
+        // Includes .unknown: portrait is the orientation the story is written
+        // for, so it is the safer guess than leaving the sensor default.
+        else -> AVCaptureVideoOrientationPortrait
+    }
+}
+
+/**
+ * Points both connections at the current orientation.
+ *
+ * Called after configuring the session and again on every recomposition, which
+ * is what makes it survive a rotation — Compose recomposes when the window
+ * resizes, and the connection has to be told again each time.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private fun applyVideoOrientation(state: CameraSession) {
+    val orientation = currentVideoOrientation()
+    state.videoOutput?.connectionWithMediaType(AVMediaTypeVideo)?.let { conn ->
+        if (conn.isVideoOrientationSupported()) conn.videoOrientation = orientation
+    }
+    state.previewLayer?.connection?.let { conn ->
+        if (conn.isVideoOrientationSupported()) conn.videoOrientation = orientation
+    }
+    // Mirroring is deliberately NOT set here. The front camera is mirrored in
+    // software further down, on both the image and the face coordinates so the
+    // two agree; letting the connection mirror as well would cancel out.
+}
+
 /** Holds the session across recompositions and lets `update` reach it. */
 @OptIn(ExperimentalForeignApi::class)
 private class CameraSession {
@@ -76,6 +134,7 @@ private class CameraSession {
     var previewLayer: AVCaptureVideoPreviewLayer? = null
     var photoOutput: AVCapturePhotoOutput? = null
     var frameDelegate: FrameDelegate? = null
+    var videoOutput: AVCaptureVideoDataOutput? = null
     var photoDelegate: PhotoDelegate? = null
     var boundFront: Boolean? = null
     var configured = false
@@ -137,10 +196,11 @@ private class FrameDelegate(
             }
 
             if (faces != null) {
-                // The buffer is already upright — AVCaptureVideoDataOutput
-                // delivers the connection's orientation — so only the front
-                // camera's mirroring has to be applied, to both image and
-                // coordinates, so they agree.
+                // Upright because the connection was told to be (see
+                // applyVideoOrientation) — NOT because the output does it on
+                // its own; it hands over the sensor's landscape orientation
+                // unless asked otherwise. Only the front camera's mirroring is
+                // applied here, to both image and coordinates so they agree.
                 val detected = detectFaces(pixelBuffer, width, height)
                 val image = bgraToImageBitmap(bytes, width, height, stride, mirror)
                 faces(
@@ -225,6 +285,7 @@ actual fun PlatformCameraSurface(
 
             state.frameDelegate?.onSamples = samplesCallback
             state.frameDelegate?.onFaceFrame = faceCallback
+            applyVideoOrientation(state)
         },
     )
 
@@ -265,6 +326,7 @@ actual fun PlatformCameraSurface(
                 )
                 if (session.canAddOutput(videoOutput)) session.addOutput(videoOutput)
                 state.frameDelegate = delegate
+                state.videoOutput = videoOutput
             }
 
             val photoOutput = AVCapturePhotoOutput()
@@ -273,6 +335,8 @@ actual fun PlatformCameraSurface(
         }
 
         session.commitConfiguration()
+        // After commit: the connections only exist once the outputs are added.
+        applyVideoOrientation(state)
         if (!session.isRunning()) session.startRunning()
     }
 
