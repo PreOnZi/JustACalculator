@@ -56,7 +56,7 @@ actual fun OnAppLifecycleEvent(onEvent: (AppLifecycleEvent) -> Unit) {
 }
 
 @Composable
-actual fun rememberPermissionRequest(
+actual fun rememberPlatformPermissionRequest(
     permission: AppPermission,
     onResult: (granted: Boolean) -> Unit,
 ): () -> Unit {

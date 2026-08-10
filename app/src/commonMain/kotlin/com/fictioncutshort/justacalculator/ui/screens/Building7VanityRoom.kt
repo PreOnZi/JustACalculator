@@ -32,6 +32,7 @@ import com.fictioncutshort.justacalculator.platform.hasPermission
 import com.fictioncutshort.justacalculator.platform.logWarn
 import com.fictioncutshort.justacalculator.platform.nowMillis
 import com.fictioncutshort.justacalculator.platform.rememberPermissionRequest
+import com.fictioncutshort.justacalculator.platform.rememberPermissionState
 import com.fictioncutshort.justacalculator.platform.renderSvgAsset
 import com.fictioncutshort.justacalculator.platform.saveCaptureLocally
 import com.fictioncutshort.justacalculator.platform.saveImageToGallery
@@ -58,13 +59,16 @@ import kotlin.math.roundToInt
 fun Building7VanityRoom(modifier: Modifier = Modifier, onComplete: () -> Unit = {}) {
     val context = currentAppContext()
 
-    var hasCameraPermission by remember {
-        mutableStateOf(hasPermission(context, AppPermission.CAMERA))
-    }
+    // Re-read on resume: "Allow Once" lapses the moment the app is
+    // backgrounded, and the player who granted it that way comes back to a
+    // camera that is silently dead. Asking again is cheap when it is still
+    // granted — the platform answers immediately without a dialog.
+    val cameraGranted = rememberPermissionState(AppPermission.CAMERA)
+    var hasCameraPermission by cameraGranted
     val requestCamera = rememberPermissionRequest(AppPermission.CAMERA) { granted ->
         hasCameraPermission = granted
     }
-    LaunchedEffect(Unit) { if (!hasCameraPermission) requestCamera() }
+    LaunchedEffect(hasCameraPermission) { if (!hasCameraPermission) requestCamera() }
 
     // Load + rasterise SVG filters from assets/filters/ once, keyed by filename.
     val loaded = remember {

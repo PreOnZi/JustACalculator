@@ -20,6 +20,7 @@ import com.fictioncutshort.justacalculator.platform.formatFixed
 import com.fictioncutshort.justacalculator.platform.hasPermission
 import com.fictioncutshort.justacalculator.platform.recordPcm
 import com.fictioncutshort.justacalculator.platform.rememberPermissionRequest
+import com.fictioncutshort.justacalculator.platform.rememberPermissionState
 import com.fictioncutshort.justacalculator.platform.saveImageToGallery
 import com.fictioncutshort.justacalculator.platform.showToast
 import androidx.compose.foundation.border
@@ -180,9 +181,11 @@ internal fun Building5SoundProto(
     val context = currentAppContext()
     val scope = rememberCoroutineScope()
 
-    var hasMic by remember { mutableStateOf(hasPermission(context, AppPermission.MICROPHONE)) }
+    // Re-read on resume — a one-time grant does not survive backgrounding.
+    val micGranted = rememberPermissionState(AppPermission.MICROPHONE)
+    var hasMic by micGranted
     val requestMic = rememberPermissionRequest(AppPermission.MICROPHONE) { granted -> hasMic = granted }
-    LaunchedEffect(Unit) { if (!hasMic) requestMic() }
+    LaunchedEffect(hasMic) { if (!hasMic) requestMic() }
 
     var phase by remember { mutableStateOf(Phase.IDLE) }
     var countNum by remember { mutableStateOf(3) }

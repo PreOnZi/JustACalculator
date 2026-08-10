@@ -33,6 +33,7 @@ import com.fictioncutshort.justacalculator.platform.hasPermission
 import com.fictioncutshort.justacalculator.platform.httpGetText
 import com.fictioncutshort.justacalculator.platform.openMapsAt
 import com.fictioncutshort.justacalculator.platform.rememberPermissionRequest
+import com.fictioncutshort.justacalculator.platform.rememberPermissionState
 import com.fictioncutshort.justacalculator.platform.startLocationUpdates
 import com.fictioncutshort.justacalculator.platform.urlEncode
 import com.fictioncutshort.justacalculator.platform.destinationPoint
@@ -108,11 +109,14 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
     var hasStarted by remember { mutableStateOf(false) }
 
     // ── Permission ──────────────────────────────────────────────────────────
-    var hasLocPerm by remember { mutableStateOf(hasPermission(context, AppPermission.LOCATION)) }
+    // Re-read on resume — a one-time grant does not survive backgrounding, and
+    // the walk beat sends the player out of the app by design.
+    val locGranted = rememberPermissionState(AppPermission.LOCATION)
+    var hasLocPerm by locGranted
     val requestLocPerm = rememberPermissionRequest(AppPermission.LOCATION) { granted ->
         hasLocPerm = granted
     }
-    LaunchedEffect(Unit) { if (!hasLocPerm) requestLocPerm() }
+    LaunchedEffect(hasLocPerm) { if (!hasLocPerm) requestLocPerm() }
 
     // ── Live location ───────────────────────────────────────────────────────
     // Every fix from both providers used to be taken at face value. NETWORK fixes

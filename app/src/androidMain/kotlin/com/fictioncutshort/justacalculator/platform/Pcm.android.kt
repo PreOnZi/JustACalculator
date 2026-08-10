@@ -9,6 +9,9 @@ import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AudioEffect
+import android.media.audiofx.NoiseSuppressor
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import androidx.core.content.ContextCompat
@@ -77,9 +80,9 @@ actual fun startMicEcho(
     if (minBytes <= 0) return null
 
     return runCatching {
-        val record = AudioRecord(
-            MediaRecorder.AudioSource.MIC, sampleRate, channelConfig, ENCODING, minBytes * 2,
-        )
+        val record = openEchoRecorder(sampleRate, channelConfig, minBytes * 2)
+            ?: return@runCatching null
+        val effects = attachVoiceEffects(record.audioSessionId)
         val track = buildTrack(sampleRate, minBytes * 2, speech = true)
         record.startRecording()
         track.play()
@@ -104,9 +107,65 @@ actual fun startMicEcho(
                 job = null
                 record.stop(); record.release()
                 track.stop(); track.release()
+                // Tied to the record's session, so they outlive it if not freed.
+                effects.forEach { runCatching { it.release() } }
             }
         }
     }.getOrNull()
+}
+
+/**
+ * Capture for the phone detour's mic echo.
+ *
+ * VOICE_COMMUNICATION rather than MIC, because it is the source that asks the
+ * platform for acoustic echo cancellation: what the speaker is playing gets
+ * subtracted from what the mic hears.
+ *
+ * On the raw MIC the loop compounds — every pass re-amplifies what the speaker
+ * just played — which is the runaway howl the detour had on Android. iOS never
+ * did it, because its AVAudioSession performs the same cancellation, and the
+ * quieter iOS behaviour is the one the game wants everywhere.
+ *
+ * Note this is the opposite choice from [openRecorder] below, deliberately:
+ * that one is a measuring instrument and wants the signal untouched, this one
+ * is a speakerphone and wants the feedback gone.
+ */
+private fun openEchoRecorder(sampleRate: Int, channelConfig: Int, bufBytes: Int): AudioRecord? {
+    val sources = listOf(
+        MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+        MediaRecorder.AudioSource.MIC,  // last resort; better a howl than silence
+    )
+    for (src in sources) {
+        try {
+            val rec = AudioRecord(src, sampleRate, channelConfig, ENCODING, bufBytes)
+            if (rec.state == AudioRecord.STATE_INITIALIZED) return rec
+            rec.release()
+        } catch (_: Exception) { /* try the next source */ }
+    }
+    return null
+}
+
+/**
+ * Belt and braces on top of VOICE_COMMUNICATION: some devices report the
+ * effects as available but do not apply them to the source by default.
+ *
+ * Every one is optional — [AcousticEchoCanceler.isAvailable] is false on plenty
+ * of hardware — so each is attempted independently and a failure just means the
+ * platform does without it.
+ */
+private fun attachVoiceEffects(sessionId: Int): List<AudioEffect> {
+    val out = ArrayList<AudioEffect>(2)
+    runCatching {
+        if (AcousticEchoCanceler.isAvailable()) {
+            AcousticEchoCanceler.create(sessionId)?.let { it.enabled = true; out.add(it) }
+        }
+    }
+    runCatching {
+        if (NoiseSuppressor.isAvailable()) {
+            NoiseSuppressor.create(sessionId)?.let { it.enabled = true; out.add(it) }
+        }
+    }
+    return out
 }
 
 /**

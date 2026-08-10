@@ -33,8 +33,19 @@ actual fun httpGetText(
     val nsUrl = NSURL.URLWithString(url) ?: return null
 
     val config = NSURLSessionConfiguration.defaultSessionConfiguration
-    config.timeoutIntervalForRequest = connectTimeoutMs / 1000.0
-    config.timeoutIntervalForResource = readTimeoutMs / 1000.0
+    // NSURLSession has no connect timeout. timeoutIntervalForRequest is an
+    // *inactivity* timeout — how long to wait for more data before giving up —
+    // so it is the counterpart of Android's read timeout, not its connect
+    // timeout. Feeding it the connect value made every Overpass call abort
+    // after 8s, which is well inside the time a busy mirror takes to send its
+    // first byte; all mirrors then "failed" and the walk beat fell through to
+    // synthetic destinations that sit in fields and back gardens rather than on
+    // paths. Android was unaffected because its connect timeout only covers the
+    // TCP handshake.
+    config.timeoutIntervalForRequest = readTimeoutMs / 1000.0
+    // Overall budget for the whole transfer; the two timeouts together are the
+    // closest equivalent to what the Android side allows.
+    config.timeoutIntervalForResource = (connectTimeoutMs + readTimeoutMs) / 1000.0
     val session = NSURLSession.sessionWithConfiguration(config)
 
     val request = NSMutableURLRequest.requestWithURL(nsUrl)

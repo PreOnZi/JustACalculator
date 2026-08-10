@@ -30,10 +30,14 @@ expect fun OnAppLifecycleEvent(onEvent: (AppLifecycleEvent) -> Unit)
 
 /**
  * Returns a function that asks the user for [permission], reporting the outcome
- * to [onResult]. Safe to call when already granted — the platform short-circuits.
+ * to [onResult]. Safe to call when already granted — the platform short-circuits,
+ * but still reports a result, which [PermissionGate] relies on.
+ *
+ * Call [rememberPermissionRequest] instead of this: it is the same request with
+ * the story paused for the length of the dialog.
  */
 @Composable
-expect fun rememberPermissionRequest(
+expect fun rememberPlatformPermissionRequest(
     permission: AppPermission,
     onResult: (granted: Boolean) -> Unit,
 ): () -> Unit

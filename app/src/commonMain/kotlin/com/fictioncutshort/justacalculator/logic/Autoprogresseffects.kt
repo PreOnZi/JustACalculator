@@ -160,6 +160,10 @@ object AutoProgressEffects {
         // console. Without this gate the story would race ahead while the
         // console is still on screen.
         while (state.value.showConsole) { delay(100) }
+        // Hold while a permission dialog is up. The player is reading a system
+        // prompt; advancing the conversation behind it means they come back to
+        // a message they never saw arrive.
+        while (com.fictioncutshort.justacalculator.platform.PermissionGate.isPending) { delay(100) }
         // Exit if muted
         if (state.value.isMuted) return
         val current = state.value
