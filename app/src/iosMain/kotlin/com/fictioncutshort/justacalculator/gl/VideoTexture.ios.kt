@@ -390,16 +390,90 @@ private class PixelBufferTexture {
 // CAMERA
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Turns whatever CoreVideo hands over into interleaved BGRA.
+ *
+ * Both the video decoder and the capture output are *asked* for 32BGRA, and on
+ * device neither request is honoured — the buffers arrive planar, which is a
+ * format that neither the GL texture cache nor a straight upload can take. That
+ * is what left building 4's walls blank.
+ *
+ * CoreImage does the conversion because it copes with every format a decoder or
+ * sensor might pick. The context and the destination buffer are reused, so a
+ * running feed allocates nothing per frame.
+ *
+ * Not thread-safe: each owner keeps its own, and each converts on a single
+ * queue — the player's pump queue, or the capture output's delegate queue.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private class BgraConverter {
+
+    private var ciContext: CIContext? = null
+    private var buffer: CVPixelBufferRef? = null
+    private var width = 0
+    private var height = 0
+
+    fun convert(source: CVPixelBufferRef): CVPixelBufferRef? {
+        if (!CVPixelBufferIsPlanar(source) &&
+            CVPixelBufferGetPixelFormatType(source) == kCVPixelFormatType_32BGRA
+        ) {
+            return source
+        }
+        val w = CVPixelBufferGetWidth(source).toInt()
+        val h = CVPixelBufferGetHeight(source).toInt()
+        if (w <= 0 || h <= 0) return null
+
+        if (buffer == null || width != w || height != h) {
+            buffer?.let { CVPixelBufferRelease(it) }
+            buffer = null
+            memScoped {
+                val out = alloc<CVPixelBufferRefVar>()
+                // No attributes dictionary: a Kotlin Map is not a
+                // CFDictionaryRef, and casting one throws. The default buffer
+                // is CPU-mappable, which is all the upload needs.
+                val created = CVPixelBufferCreate(
+                    allocator = null,
+                    width = w.convert(),
+                    height = h.convert(),
+                    pixelFormatType = kCVPixelFormatType_32BGRA,
+                    pixelBufferAttributes = null,
+                    pixelBufferOut = out.ptr,
+                )
+                if (created != 0) return null
+                buffer = out.value
+                width = w
+                height = h
+            }
+        }
+        val destination = buffer ?: return null
+        val context = ciContext ?: CIContext.contextWithOptions(null).also { ciContext = it }
+        context.render(CIImage.imageWithCVPixelBuffer(source), toCVPixelBuffer = destination)
+        return destination
+    }
+
+    fun release() {
+        buffer?.let { CVPixelBufferRelease(it) }
+        buffer = null
+        ciContext = null
+    }
+}
+
 @OptIn(ExperimentalForeignApi::class)
 private class CameraFrameDelegate(
     private val sink: PixelBufferTexture,
 ) : NSObject(), AVCaptureVideoDataOutputSampleBufferDelegateProtocol {
+
+    // Converting here is free of the video's problem: this already runs on the
+    // capture output's own queue, not the render thread.
+    private val converter = BgraConverter()
+
     override fun captureOutput(
         output: AVCaptureOutput,
         didOutputSampleBuffer: CMSampleBufferRef?,
         fromConnection: AVCaptureConnection,
     ) {
-        sink.offer(CMSampleBufferGetImageBuffer(didOutputSampleBuffer))
+        val raw = CMSampleBufferGetImageBuffer(didOutputSampleBuffer) ?: return
+        sink.offer(converter.convert(raw))
     }
 }
 
@@ -561,10 +635,7 @@ private class VideoTexture(
     private var releasedFlag = false
 
     // Conversion scratch, reused across frames.
-    private var ciContext: CIContext? = null
-    private var bgraBuffer: CVPixelBufferRef? = null
-    private var bgraW = 0
-    private var bgraH = 0
+    private val converter = BgraConverter()
 
     override val textureId: Int get() = sink.textureId
     override val textureTarget: Int = Gl.GL_TEXTURE_2D
@@ -600,54 +671,12 @@ private class VideoTexture(
             if (!output.hasNewPixelBufferForItemTime(time)) return
             val raw = output.copyPixelBufferForItemTime(time, null) ?: return
             try {
-                val bgra = asBgra(raw) ?: return
+                val bgra = converter.convert(raw) ?: return
                 sink.offer(bgra)
             } finally {
                 CVPixelBufferRelease(raw)
             }
         }
-    }
-
-    /** Returns [source] as interleaved BGRA, converting only when it is not already. */
-    private fun asBgra(source: CVPixelBufferRef): CVPixelBufferRef? {
-        if (!CVPixelBufferIsPlanar(source) &&
-            CVPixelBufferGetPixelFormatType(source) == kCVPixelFormatType_32BGRA
-        ) {
-            return source
-        }
-        val width = CVPixelBufferGetWidth(source).toInt()
-        val height = CVPixelBufferGetHeight(source).toInt()
-        if (width <= 0 || height <= 0) return null
-
-        if (bgraBuffer == null || bgraW != width || bgraH != height) {
-            bgraBuffer?.let { CVPixelBufferRelease(it) }
-            bgraBuffer = null
-            memScoped {
-                val out = alloc<CVPixelBufferRefVar>()
-                val created = CVPixelBufferCreate(
-                    allocator = null,
-                    width = width.convert(),
-                    height = height.convert(),
-                    pixelFormatType = kCVPixelFormatType_32BGRA,
-                    // No attributes dictionary. A Kotlin Map is not a
-                    // CFDictionaryRef and casting one to it throws — which is
-                    // what killed the pump queue, and an uncaught exception on
-                    // a background queue takes the whole process with it.
-                    // The default buffer is CPU-mappable, which is all the
-                    // upload path needs.
-                    pixelBufferAttributes = null,
-                    pixelBufferOut = out.ptr,
-                )
-                if (created != 0) return null
-                bgraBuffer = out.value
-                bgraW = width
-                bgraH = height
-            }
-        }
-        val destination = bgraBuffer ?: return null
-        val context = ciContext ?: CIContext.contextWithOptions(null).also { ciContext = it }
-        context.render(CIImage.imageWithCVPixelBuffer(source), toCVPixelBuffer = destination)
-        return destination
     }
 
     private fun startPump() {
@@ -717,9 +746,7 @@ private class VideoTexture(
         loopObserver?.let { NSNotificationCenter.defaultCenter.removeObserver(it) }
         loopObserver = null
         player.pause()
-        bgraBuffer?.let { CVPixelBufferRelease(it) }
-        bgraBuffer = null
-        ciContext = null
+        converter.release()
         sink.release()
     }
 }
