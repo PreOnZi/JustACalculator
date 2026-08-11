@@ -43,7 +43,23 @@ private class IosSoundPlayer(private val player: AVAudioPlayer) : SoundPlayer {
     // Retained so ARC does not collect the delegate while playback is running.
     private var completionDelegate: CompletionDelegate? = null
 
-    override fun start() { player.play() }
+    @OptIn(ExperimentalForeignApi::class)
+    override fun start() {
+        // play() returns false rather than throwing when the session is not
+        // active — and the session can be deactivated out from under us by an
+        // interruption, or by another category being set and released. Silent
+        // failure is exactly how building 4's clock loop went missing while
+        // everything else still sounded, so re-activate and try once more.
+        if (player.play()) return
+        runCatching {
+            val session = AVAudioSession.sharedInstance()
+            session.setCategory(AVAudioSessionCategoryPlayback, null)
+            session.setActive(true, null)
+        }
+        if (!player.play()) {
+            logWarn("Sound", "AVAudioPlayer refused to start even with the session re-activated")
+        }
+    }
     override fun pause() { player.pause() }
 
     override fun stop() {

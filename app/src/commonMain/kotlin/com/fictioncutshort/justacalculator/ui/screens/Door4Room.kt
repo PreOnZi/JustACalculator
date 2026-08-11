@@ -544,23 +544,6 @@ fun Door4Room(modifier: Modifier = Modifier, onComplete: () -> Unit = {}) {
             onJoy = { x, y -> joyX = x; joyY = y }
         )
 
-        // ── TEMPORARY diagnostic overlay ────────────────────────────────────
-        // The wall videos work on the Simulator and not on device, and nothing
-        // here can be observed from a development machine. This reports the
-        // pipeline's state so a screenshot says which stage is failing.
-        // DELETE once the videos are confirmed working.
-        Text(
-            text = renderer.videoDiagnostics(),
-            color = Color(0xFF66FF99),
-            fontSize = 10.sp,
-            fontFamily = FontFamily.Monospace,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(start = 8.dp, top = 40.dp)
-                .background(Color(0xCC000000))
-                .padding(4.dp),
-        )
-
         val prompt = when {
             foundCount >= 3 -> null
             foundCount >= 2 -> "are you sure?"
@@ -857,8 +840,6 @@ private class Door4Renderer : GlRenderer {
     @kotlin.concurrent.Volatile var litCount = 1          // panels with order < litCount are revealed
     @kotlin.concurrent.Volatile var foundCount = 0        // panels with order < foundCount have been read
     @kotlin.concurrent.Volatile var doorOpen = 0f
-    /** TEMPORARY, for the diagnostic overlay: set once onSurfaceCreated finishes. */
-    @kotlin.concurrent.Volatile var glReady = false
 
     /** Pre-rendered text, set by the composable before the surface is created. */
     @kotlin.concurrent.Volatile var textImages: Door4TextImages? = null
@@ -1077,7 +1058,6 @@ private class Door4Renderer : GlRenderer {
         uploadTextImages()
 
         buildScene()
-        glReady = true
     }
 
     /**
@@ -1107,35 +1087,6 @@ private class Door4Renderer : GlRenderer {
     }
 
     private var lastFrameMs = 0L
-    /**
-     * One line per video panel: created / playing / has-a-frame / texture id.
-     *
-     * TEMPORARY — see the overlay in Door4Room. Between them these four flags
-     * localise the failure without a debugger: no player at all, a player that
-     * never started, a player running but yielding no frames, or frames arriving
-     * that the draw pass is still skipping.
-     */
-    fun videoDiagnostics(): String = buildString {
-        // glReady first: without it "no lines below" is ambiguous between
-        // "onSurfaceCreated never ran" and "there are no video panels", and on
-        // the Simulator it is the former.
-        append("gl=").append(if (glReady) 'Y' else 'N')
-        append(" lit=").append(litCount)
-        append(" found=").append(foundCount)
-        append(" n=").append(SCREEN_COUNT)
-        append('\n')
-        for (i in 0 until SCREEN_COUNT) {
-            val v = mediaVideo[i]
-            if (!mediaIsVideo[i] && v == null) continue
-            append('#').append(i)
-            append(" made=").append(if (v != null) 'Y' else 'N')
-            append(" play=").append(if (v?.isPlaying == true) 'Y' else 'N')
-            append(" frame=").append(if (mediaHasContent[i]) 'Y' else 'N')
-            append(" tex=").append(v?.textureId ?: -1)
-            append('\n')
-        }
-    }
-
     override fun onDrawFrame() {
         // The text may have arrived after onSurfaceCreated. Rebuild the scene
         // when it does, because the panel geometry is sized from xMarkAspect.
