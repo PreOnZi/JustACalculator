@@ -26,6 +26,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -45,6 +49,36 @@ import androidx.compose.ui.unit.sp
  * - 88(++) = Go back
  * - 99(++) = Exit console
  */
+
+/**
+ * Marks a line as disabled. A line beginning with this character renders in a
+ * dimmed green and the marker itself is stripped before display — used for the
+ * Software Update entry before its unlock code has been entered, so the player
+ * can see the option exists without it looking selectable.
+ *
+ * Kept as a sentinel rather than threading styled text through every menu:
+ * only one line in the whole console needs it, and the menus stay plain
+ * strings that are trivial to read and edit.
+ */
+private const val DIM = '\u0001'
+
+private val ConsoleGreen = Color(0xFF00FF00)
+private val ConsoleGreenDim = Color(0xFF1F5F1F)
+
+/**
+ * Splits the raw menu text into an [AnnotatedString], applying the dim style
+ * to any line flagged with [DIM].
+ */
+private fun styleConsoleText(raw: String): AnnotatedString = buildAnnotatedString {
+    raw.lines().forEachIndexed { index, line ->
+        if (index > 0) append("\n")
+        if (line.startsWith(DIM)) {
+            withStyle(SpanStyle(color = ConsoleGreenDim)) { append(line.substring(1)) }
+        } else {
+            append(line)
+        }
+    }
+}
 
 /**
  * Console overlay that displays menu content.
@@ -69,6 +103,11 @@ fun ConsoleWindow(
     darkModeEnabled: Boolean,
     totalScreenTimeMs: Long,
     totalCalculations: Int,
+    dateFormat24h: Boolean?,
+    autoDateTime: Boolean?,
+    updateUnlocked: Boolean,
+    updateAdminEntered: Boolean,
+    softwareUpdated: Boolean,
     onOpenContributeLink: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -90,6 +129,11 @@ fun ConsoleWindow(
         darkModeEnabled = darkModeEnabled,
         totalScreenTimeMs = totalScreenTimeMs,
         totalCalculations = totalCalculations,
+        dateFormat24h = dateFormat24h,
+        autoDateTime = autoDateTime,
+        updateUnlocked = updateUnlocked,
+        updateAdminEntered = updateAdminEntered,
+        softwareUpdated = softwareUpdated,
         context = context
     )
 
@@ -140,8 +184,8 @@ fun ConsoleWindow(
             ) {
                 // Scrollable menu content
                 Text(
-                    text = menuContent,
-                    color = Color(0xFF00FF00),  // Green terminal text
+                    text = styleConsoleText(menuContent),
+                    color = ConsoleGreen,  // Green terminal text
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace,
                     lineHeight = 15.sp,
@@ -188,6 +232,11 @@ private fun getConsoleMenuContent(
     darkModeEnabled: Boolean,
     totalScreenTimeMs: Long,
     totalCalculations: Int,
+    dateFormat24h: Boolean?,
+    autoDateTime: Boolean?,
+    updateUnlocked: Boolean,
+    updateAdminEntered: Boolean,
+    softwareUpdated: Boolean,
     context: AppContext
 ): String {
     return when (consoleStep) {
@@ -204,12 +253,197 @@ private fun getConsoleMenuContent(
             |═══════════════════════════════════
         """.trimMargin()
 
-        1 -> """
+        1 -> {
+            // Software update stays dimmed (and inert) until 7384 is entered.
+            // The marker is stripped by styleConsoleText.
+            val updateLine =
+                if (updateUnlocked) " 4. Software update"
+                else "$DIM 4. Software update [disabled]"
+            """
+                |═══════════════════════════════════
+                |        GENERAL SETTINGS
+                |═══════════════════════════════════
+                |
+                | 1. Design settings
+                | 2. Date & time
+                | 3. Language & region
+                |$updateLine
+                | 5. User guide
+                |
+                | 88. Back
+                | 99. Exit console
+                |═══════════════════════════════════
+            """.trimMargin()
+        }
+
+        11 -> {
+            val formatLabel = when (dateFormat24h) {
+                null -> "Not set"
+                true -> "24-hour"
+                false -> "12-hour"
+            }
+            val autoLabel = when (autoDateTime) {
+                null -> "Not set"
+                true -> "Yes"
+                false -> "No"
+            }
+            // Manual mode has nothing to configure beyond the switch itself —
+            // the calculator just follows the device clock and says so.
+            val manualNote =
+                if (autoDateTime == false) "\n| Defaulting to system clock" else ""
+            """
+                |═══════════════════════════════════
+                |          DATE & TIME
+                |═══════════════════════════════════
+                |
+                | Date format: $formatLabel
+                | Set automatically: $autoLabel$manualNote
+                |
+                | 1. Date format
+                | 2. Set date & time automatically
+                |
+                | 88. Back
+                | 99. Exit console
+                |═══════════════════════════════════
+            """.trimMargin()
+        }
+
+        12 -> {
+            val currentLabel = when (dateFormat24h) {
+                null -> "Not set"
+                true -> "24-hour"
+                false -> "12-hour"
+            }
+            """
+                |═══════════════════════════════════
+                |          DATE FORMAT
+                |═══════════════════════════════════
+                |
+                | Current setting: $currentLabel
+                |
+                | 1. 12-hour
+                | 2. 24-hour
+                |
+                | 88. Back
+                | 99. Exit console
+                |═══════════════════════════════════
+            """.trimMargin()
+        }
+
+        13 -> {
+            val currentLabel = when (autoDateTime) {
+                null -> "Not set"
+                true -> "Yes"
+                false -> "No"
+            }
+            """
+                |═══════════════════════════════════
+                |   SET DATE & TIME AUTOMATICALLY
+                |═══════════════════════════════════
+                |
+                | Current setting: $currentLabel
+                |
+                | 1. Yes
+                | 2. No
+                |
+                | 88. Back
+                | 99. Exit console
+                |═══════════════════════════════════
+            """.trimMargin()
+        }
+
+        14 -> """
             |═══════════════════════════════════
-            |        GENERAL SETTINGS
+            |       LANGUAGE & REGION
             |═══════════════════════════════════
             |
+            | Set automatically by device
+            |
             | No configurable options available.
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+        """.trimMargin()
+
+        15 -> if (!updateAdminEntered) """
+            |═══════════════════════════════════
+            |        SOFTWARE UPDATE
+            |═══════════════════════════════════
+            |
+            | Access code required.
+            | Enter code and confirm with ++
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+        """.trimMargin() else if (softwareUpdated) """
+            |═══════════════════════════════════
+            |        SOFTWARE UPDATE
+            |═══════════════════════════════════
+            |
+            | Software is up to date.
+            |
+            | No further updates available.
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+        """.trimMargin() else if (dateFormat24h == true && autoDateTime == false) """
+            |═══════════════════════════════════
+            |        SOFTWARE UPDATE
+            |═══════════════════════════════════
+            |
+            | Update software?
+            |
+            | 1. Yes
+            | 2. No
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+        """.trimMargin() else """
+            |═══════════════════════════════════
+            |        SOFTWARE UPDATE
+            |═══════════════════════════════════
+            |
+            | To update, set compatible
+            | date & time format.
+            |
+            | 88. Back
+            | 99. Exit console
+            |═══════════════════════════════════
+        """.trimMargin()
+
+        // Deliberately compact: the console box is a fixed ~300.dp and this
+        // screen has to fit without scrolling, because the unlock code on the
+        // last content line is the whole point of the page. Adding a line here
+        // pushes 7384 out of sight.
+        16 -> """
+            |═══════════════════════════════════
+            |            USER GUIDE
+            |═══════════════════════════════════
+            | ++        = YES
+            | --        = NO
+            | [XXXX]++  = numerical answer
+            | [N]++     = select menu item N
+            | [CODE]++  = enter a code
+            | 88++      = back
+            | 99++      = exit console
+            | 7384++    = enable software update
+            |
+            | 88. Back / 99. Exit console
+            |═══════════════════════════════════
+        """.trimMargin()
+
+        17 -> """
+            |═══════════════════════════════════
+            |        SOFTWARE UPDATE
+            |═══════════════════════════════════
+            |
+            | Installing update...
+            |
+            | Update complete.
             |
             | 88. Back
             | 99. Exit console
@@ -233,9 +467,8 @@ private fun getConsoleMenuContent(
             |═══════════════════════════════════
             |
             | 1. Permissions & allowances
-            | 2. Design settings
-            | 3. Contribute
-            | 4. Connectivity settings
+            | 2. Contribute
+            | 3. Connectivity settings
             |
             | 88. Back
             | 99. Exit console

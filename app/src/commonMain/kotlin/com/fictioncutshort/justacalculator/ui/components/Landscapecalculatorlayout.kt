@@ -87,6 +87,7 @@ fun LandscapeCalculatorContent(
                     awaitingChoice = current.awaitingChoice,
                     textColor = textColor,
                     dimensions = dimensions,
+                    truthOptionAvailable = !current.truthOptionUsed,
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .padding(top = 8.dp, end = 50.dp)

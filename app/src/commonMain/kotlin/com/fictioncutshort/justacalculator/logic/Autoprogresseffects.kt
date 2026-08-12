@@ -352,6 +352,11 @@ object AutoProgressEffects {
         // Format the user's accumulated screen time as a phrase that drops into
         // a sentence ("for $screenTime"). Reused across all three rants.
         fun screenTimePhrase(): String {
+            // Record the figure the moment it is spoken. The red-button puzzle in
+            // the DEL ruin asks the player to key it in later, possibly days
+            // later, and the live counter keeps rising while they play. The rant
+            // can replay and quote a bigger number; both remain valid answers.
+            CalculatorActions.recordRantScreenTime(state.value.totalScreenTimeMs)
             val hours = state.value.totalScreenTimeMs / (1000 * 60 * 60)
             val minutes = (state.value.totalScreenTimeMs / (1000 * 60)) % 60
             val seconds = (state.value.totalScreenTimeMs / 1000) % 60

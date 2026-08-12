@@ -5,7 +5,10 @@ import bpy, os, shutil
 
 HERE = os.path.dirname(__file__)
 SRC = os.path.join(HERE, "button10", "mutebutton.blend")
-DST = os.path.normpath(os.path.join(HERE, "..", "app", "src", "main", "assets", "models"))
+# commonMain, not the old Android-only src/main tree: the asset folder moved when
+# the project went multiplatform, and exporting to src/main silently writes to a
+# directory nothing reads, leaving the shipped model stale.
+DST = os.path.normpath(os.path.join(HERE, "..", "app", "src", "commonMain", "assets", "models"))
 os.makedirs(DST, exist_ok=True)
 
 bpy.ops.wm.open_mainfile(filepath=SRC)

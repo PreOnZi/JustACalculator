@@ -1,7 +1,44 @@
 # Calculator LCD font
 
+## Which file do I use?
+
+| File | What it is |
+| --- | --- |
+| `app/src/commonMain/composeResources/font/calcdigit.ttf` | **The font.** What the app ships. Built by `normalize.py`. |
+| `design-sources/font/calcdigit-fontstruct-export.ttf` | Raw FontStruct export. **Input to the build — never use it directly.** |
+| `design-sources/font/CalcDigit-Desktop.ttf` | Install-this-one copy for use *outside* the app. Built by `desktop_variant.py`. |
+
+The raw export is not a usable font. FontStruct derives advance widths from
+where the bricks happen to sit, so `I` carries about four cells of blank to its
+left and nothing to its right — "FIVE BIG" sets as "F IVE B IG" — while every
+other letter is jammed to a single cell of bearing, which leaves word spaces
+indistinguishable from the gaps inside a word. Its cap height is also 1.06 em
+rather than 0.65, its descender has the wrong sign, and `fsType` is 4, which
+forbids embedding. `normalize.py` fixes all of that. See "Two things not to
+fix" below: **advance widths are set by the script, not in the editor** — the
+export looking wrong is expected, not a drawing mistake.
+
+Use `CalcDigit-Desktop.ttf` for titles, captions and mockups — it is the only
+one of the three that should ever be installed in Font Book. It is the same
+drawing with the same advances; only the vertical metrics differ, because the
+app font copies digital_7's malformed positive descender on purpose (see
+below) and other programs read that sign literally and collapse the leading.
+
+All three report the same family name, `CalcDigit`, deliberately: the app font
+is embedded in the bundle and never installed, so there is nothing for a
+rename to disambiguate, and renaming would orphan every title already set in
+CalcDigit in an edit. **The file name is the only thing that tells them
+apart** — which is exactly how the export got installed by mistake once, so
+check `Location:` in Font Book, not the family name:
+
+```sh
+system_profiler SPFontsDataType | grep -B8 'Family: CalcDigit'
+```
+
+## What it's for
+
 The segment-style face used by `CalculatorDisplayFont`
-(`app/src/main/java/.../util/Constants.kt`), which sets the calculator display,
+(`app/src/commonMain/kotlin/.../util/Constants.kt`), which sets the calculator display,
 the buttons, the narration, the browser overlay, the phase-1 phone overlay and
 the ending screens — 76 call sites in 14 files.
 
@@ -28,9 +65,19 @@ A raw FontStruct export is not usable as-is, so:
 ```sh
 python3 -m pip install fonttools
 
+# 1. keep the export, so the build is reproducible from what FontStruct gave us
+cp ~/Downloads/calcdigit/calcdigit.ttf \
+    design-sources/font/calcdigit-fontstruct-export.ttf
+
+# 2. build the app font
 python3 design-sources/font/normalize.py \
-    ~/Downloads/calcdigit/calcdigit.ttf \
-    app/src/main/res/font/calculator_lcd.ttf
+    design-sources/font/calcdigit-fontstruct-export.ttf \
+    app/src/commonMain/composeResources/font/calcdigit.ttf
+
+# 3. rebuild the installable copy from it
+python3 design-sources/font/desktop_variant.py \
+    app/src/commonMain/composeResources/font/calcdigit.ttf \
+    design-sources/font/CalcDigit-Desktop.ttf
 ```
 
 **Run this after every re-export.** It scales the glyphs to digital_7's

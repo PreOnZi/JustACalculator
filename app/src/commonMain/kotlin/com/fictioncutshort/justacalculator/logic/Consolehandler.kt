@@ -6,6 +6,15 @@ import com.fictioncutshort.justacalculator.data.CalculatorState
 /**
  * ConsoleHandler.kt
  *
+ * ⚠ NOT WIRED UP. Nothing in the app calls this object: its only caller is
+ * InputHandler, which is itself unreferenced. The console the player actually
+ * navigates is `CalculatorActions.handleConsoleInput`, which duplicates all of
+ * the routing below.
+ *
+ * Both copies are kept in step for now, but this one is inert — editing it
+ * alone changes nothing at runtime. Deleting this file and Inputhandler.kt
+ * would remove the trap; left in place pending that call.
+ *
  * Handles navigation within the hidden developer console.
  *
  * Console access code: 353942320485
@@ -18,18 +27,29 @@ import com.fictioncutshort.justacalculator.data.CalculatorState
  *
  * Menu structure:
  * 0: Main menu
- *   1: General settings (nothing here)
+ *   1: General settings
+ *     1: Design settings
+ *     2: Date & time
+ *       1: Date format (12/24 hour)
+ *       2: Set date & time automatically (yes/no)
+ *     3: Language & region (nothing — device-controlled)
+ *     4: Software update (dimmed until 7384; then re-asks for the admin code)
+ *     5: User guide
  *   2: Admin settings (requires code)
  *     1: Permissions
- *     2: Design settings
- *     3: Contribute (opens link)
- *     4: Connectivity
+ *     2: Contribute (opens link)
+ *     3: Connectivity
  *       1: Network (nothing)
  *       2: Advertising options
  *         1: Banner ads
  *         2: Full-screen ads
  *       3: Data usage (nothing)
  *   3: App info
+ *
+ * NOTE: the admin menu numbering is written down in two places the player
+ * actually reads — the downloaded manual (Filecreation.kt) and nothing else.
+ * Renumbering it means editing that file too, or the ad-disabling quest
+ * sends the user to the wrong entry.
  */
 
 object ConsoleHandler {
@@ -39,6 +59,13 @@ object ConsoleHandler {
 
     /** Code for admin access */
     const val ADMIN_CODE = "12340"
+
+    /**
+     * Unlocks the Software Update entry in General settings. Printed at the
+     * bottom of the console's own User Guide (step 16) — the player is meant
+     * to find it by reading the manual they already have access to.
+     */
+    const val SOFTWARE_UPDATE_CODE = "7384"
 
     /**
      * Attempts to open the console with the given code.
@@ -80,7 +107,7 @@ object ConsoleHandler {
         // Step-specific commands
         when (currentStep) {
             0 -> handleMainMenu(command, state)
-            1 -> { /* General settings - no options */ }
+            1 -> handleGeneralMenu(command, state)
             2 -> handleAdminMenu(command, state)
             3 -> { /* App info - no options */ }
             4 -> handleConnectivityMenu(command, state)
@@ -89,6 +116,13 @@ object ConsoleHandler {
             52 -> handleFullScreenAdsMenu(command, state)
             6 -> { /* Permissions - no options */ }
             7 -> handleDesignMenu(command, state)
+            11 -> handleDateTimeMenu(command, state)
+            12 -> handleDateFormatMenu(command, state)
+            13 -> handleAutoDateTimeMenu(command, state)
+            14 -> { /* Language & region - device-controlled, no options */ }
+            15 -> handleSoftwareUpdateMenu(command, state)
+            16 -> { /* User guide - reference only, no options */ }
+            17 -> { /* Update result - only 88/99 respond */ }
             41 -> { /* Network - no options */ }
             43 -> { /* Data usage - no options */ }
             99 -> { /* Success screen — only 88/99 above respond; keeps console
@@ -105,6 +139,86 @@ object ConsoleHandler {
             "1" -> state.value = state.value.copy(darkModeEnabled = !state.value.darkModeEnabled)
         }
     }
+
+    /**
+     * General settings menu (step 1).
+     *
+     * Also the place the Software Update unlock code is typed: entering 7384
+     * here flips [CalculatorState.consoleUpdateUnlocked] and item 4 stops
+     * being dimmed. Selecting 4 while still locked does nothing at all — a
+     * disabled entry should not react.
+     */
+    private fun handleGeneralMenu(command: String, state: MutableState<CalculatorState>) {
+        if (command == SOFTWARE_UPDATE_CODE) {
+            state.value = state.value.copy(consoleUpdateUnlocked = true)
+            return
+        }
+        when (command) {
+            "1" -> state.value = state.value.copy(consoleStep = 7)   // Design
+            "2" -> state.value = state.value.copy(consoleStep = 11)  // Date & time
+            "3" -> state.value = state.value.copy(consoleStep = 14)  // Language & region
+            "4" -> if (state.value.consoleUpdateUnlocked) {
+                state.value = state.value.copy(consoleStep = 15)     // Software update
+            }
+            "5" -> state.value = state.value.copy(consoleStep = 16)  // User guide
+        }
+    }
+
+    /**
+     * Date & time menu (step 11).
+     */
+    private fun handleDateTimeMenu(command: String, state: MutableState<CalculatorState>) {
+        when (command) {
+            "1" -> state.value = state.value.copy(consoleStep = 12)  // Date format
+            "2" -> state.value = state.value.copy(consoleStep = 13)  // Automatic
+        }
+    }
+
+    /** Date format submenu (step 12): 1 = 12-hour, 2 = 24-hour. */
+    private fun handleDateFormatMenu(command: String, state: MutableState<CalculatorState>) {
+        when (command) {
+            "1" -> state.value = state.value.copy(consoleDateFormat24h = false)
+            "2" -> state.value = state.value.copy(consoleDateFormat24h = true)
+        }
+    }
+
+    /** Automatic date & time submenu (step 13): 1 = yes, 2 = no. */
+    private fun handleAutoDateTimeMenu(command: String, state: MutableState<CalculatorState>) {
+        when (command) {
+            "1" -> state.value = state.value.copy(consoleAutoDateTime = true)
+            "2" -> state.value = state.value.copy(consoleAutoDateTime = false)
+        }
+    }
+
+    /**
+     * Software update (step 15). Gated twice over: the admin code is demanded
+     * again on entry, and even then the update prompt only appears when the
+     * clock is on 24-hour + manual (see [isUpdateCompatible]).
+     */
+    private fun handleSoftwareUpdateMenu(command: String, state: MutableState<CalculatorState>) {
+        val current = state.value
+        if (!current.consoleUpdateAdminEntered) {
+            if (command == ADMIN_CODE) {
+                state.value = current.copy(consoleUpdateAdminEntered = true)
+            }
+            return
+        }
+
+        if (!isUpdateCompatible(current)) return
+
+        when (command) {
+            "1" -> state.value = current.copy(consoleStep = 17)  // Update
+            "2" -> state.value = current.copy(consoleStep = 1)   // Decline → back
+        }
+    }
+
+    /**
+     * The update prompt is only offered on a 24-hour clock that is being set
+     * manually. Any other combination — including "not set" — reports an
+     * incompatible date & time format instead.
+     */
+    fun isUpdateCompatible(state: CalculatorState): Boolean =
+        state.consoleDateFormat24h == true && state.consoleAutoDateTime == false
 
     /**
      * Main menu navigation (step 0).
@@ -129,12 +243,14 @@ object ConsoleHandler {
             return
         }
 
-        // Admin is unlocked - navigate submenus
+        // Admin is unlocked - navigate submenus. Design settings moved to
+        // General settings, so everything below it shifted up by one; the
+        // downloaded manual's "Connectivity settings (4++)" was updated to
+        // match in Filecreation.kt.
         when (command) {
             "1" -> state.value = state.value.copy(consoleStep = 6)   // Permissions
-            "2" -> state.value = state.value.copy(consoleStep = 7)   // Design
-            "3" -> state.value = state.value.copy(consoleStep = 31)  // Contribute (triggers link)
-            "4" -> state.value = state.value.copy(consoleStep = 4)   // Connectivity
+            "2" -> state.value = state.value.copy(consoleStep = 31)  // Contribute (triggers link)
+            "3" -> state.value = state.value.copy(consoleStep = 4)   // Connectivity
         }
     }
 
@@ -221,11 +337,14 @@ object ConsoleHandler {
         val currentStep = state.value.consoleStep
 
         val parentStep = when (currentStep) {
-            1, 2, 3 -> 0           // Main menu items -> main menu
-            4, 6, 7, 31 -> 2       // Admin submenu -> admin menu
-            41, 43, 5 -> 4         // Connectivity submenu -> connectivity
-            51, 52 -> 5            // Advertising submenu -> advertising
-            99 -> 5                // Success -> advertising
+            1, 2, 3 -> 0                     // Main menu items -> main menu
+            7, 11, 14, 15, 16 -> 1           // General submenu -> general
+            12, 13 -> 11                     // Date & time submenu -> date & time
+            17 -> 15                         // Update result -> software update
+            4, 6, 31 -> 2                    // Admin submenu -> admin menu
+            41, 43, 5 -> 4                   // Connectivity submenu -> connectivity
+            51, 52 -> 5                      // Advertising submenu -> advertising
+            99 -> 5                          // Success -> advertising
             else -> 0
         }
 

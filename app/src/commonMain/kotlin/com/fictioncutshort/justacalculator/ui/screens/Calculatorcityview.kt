@@ -395,6 +395,12 @@ private const val RAD_WALL_INNER = RAD_R0 - 14f
 private const val RAD_DOOR_DEG      = 95.5f
 private const val RAD_DOOR_HALF_DEG = 5f
 
+// The second, hidden doorway: the tan panel in the drum wall, opened by the
+// red-button puzzle in the DEL ruin. Mirrors Cityglrenderer.RAD_DOOR2_* — keep
+// the two in step, exactly as the pair above already has to be.
+private const val RAD_DOOR2_DEG      = -16.88f
+private const val RAD_DOOR2_HALF_DEG = 5f
+
 // The spot the player stands on to be prompted for their rating: straight out
 // from Building 10's doorway, on the line that runs through it to the centre.
 private fun radDoorApproach(bx: Float, bz: Float): Pair<Float, Float> {
@@ -722,8 +728,30 @@ fun CalculatorCityView(
     val pendingShots  = remember { PendingShots() }
     // Live projectiles: [x, y, z, vx, vy, vz, life]. Mutated only by the loop.
     val gunProjectiles = remember { mutableListOf<FloatArray>() }
+    // ── Red button (DEL ruin top floor) → the hidden door in Building 10 ──────
+    // The puzzle panel opens by STANDING on the button, not by looking at it.
+    var showRedButtonPuzzle by remember { mutableStateOf(false) }
+    // Latched so walking off the button and back on doesn't re-open it once solved.
+    var secretDoorOpen by remember {
+        mutableStateOf(com.fictioncutshort.justacalculator.logic.CalculatorActions.loadDoorOpen())
+    }
+    // Brief "Door is open" confirmation after a correct answer.
+    var doorOpenNoteUntil by remember { mutableStateOf(0L) }
+    LaunchedEffect(secretDoorOpen) { renderer.secretDoorOpen = secretDoorOpen }
+
     LaunchedEffect(gunGrabbed) { renderer.gunGrabbed = gunGrabbed }
     LaunchedEffect(gunGrabbed, gunHeld) { renderer.gunHeld = gunGrabbed && gunHeld }
+    // The red button on the DEL ruin's top floor only exists for players who ran
+    // the optional software update back in the console. Read from prefs rather
+    // than CalculatorState: the city outlives the console screen by hours of
+    // play, and the flag is persisted for exactly this reason.
+    // Keyed on showDebugMenu, not Unit, so flipping "software updated" in the
+    // city debug panel takes effect as soon as the panel closes.
+    LaunchedEffect(showDebugMenu) {
+        renderer.showRedButton = com.fictioncutshort.justacalculator.logic.CalculatorActions.loadSoftwareUpdated() &&
+            com.fictioncutshort.justacalculator.logic.CalculatorActions.loadRedButtonAttempts() < RED_BUTTON_MAX_ATTEMPTS
+        secretDoorOpen = com.fictioncutshort.justacalculator.logic.CalculatorActions.loadDoorOpen()
+    }
     LaunchedEffect(monsterKilled) {
         if (monsterKilled) { renderer.monsterActive = false; renderer.monsterClones = emptyList() }
     }
@@ -754,7 +782,7 @@ fun CalculatorCityView(
     val overlayOpen = showTowerDefense || showMaze || showTankGame || showDoor4 ||
         showBuilding5Map || showBuilding6Game || showBuilding7Filter ||
         showBuilding8Casino || showBuilding9Flappy || showCityLottery ||
-        showDebugGate || showDebugMenu
+        showDebugGate || showDebugMenu || showRedButtonPuzzle
     val isWalking = introDone && !overlayOpen && doorOpeningDigit == null &&
         kotlin.math.abs(joyY) > 0.12f
 
@@ -1570,7 +1598,9 @@ fun CalculatorCityView(
                     if (radDoorOpen) {
                         val degs = (atan2(rdz.toDouble(), rdx.toDouble()) * 180.0 / kotlin.math.PI).toFloat()
                         val off = abs(((degs - RAD_DOOR_DEG + 540f) % 360f) - 180f)
-                        val throughDoorway = off < RAD_DOOR_HALF_DEG
+                        val off2 = abs(((degs - RAD_DOOR2_DEG + 540f) % 360f) - 180f)
+                        val throughDoorway = off < RAD_DOOR_HALF_DEG ||
+                            (renderer.secretDoorOpen && off2 < RAD_DOOR2_HALF_DEG)
                         if (rd2 < RAD_R * RAD_R && rd2 > RAD_WALL_INNER * RAD_WALL_INNER &&
                             !throughDoorway) return true
                         // Furniture inside Building 10 — the shelves, desks, sofa.
@@ -2051,6 +2081,19 @@ fun CalculatorCityView(
                         showGunGrabPrompt = atGun && !gunPromptDismissed
                     } else if (gunGrabbed && showGunGrabPrompt) {
                         showGunGrabPrompt = false
+                    }
+
+                    // Standing ON the red button opens its panel. Radius is the
+                    // button's own footprint rather than an approach distance —
+                    // you have to be on top of it — and the floor check stops it
+                    // firing from the ground floor directly underneath.
+                    val rb = renderer.redButtonWorld
+                    if (rb != null && renderer.showRedButton && !secretDoorOpen &&
+                        !showRedButtonPuzzle && !overlayOpen) {
+                        val dx = rb[0] - pX; val dz = rb[2] - pZ
+                        val onIt = dx * dx + dz * dz < 22f * 22f &&
+                            abs(cRoomFloorY - rb[1]) < 45f
+                        if (onIt) showRedButtonPuzzle = true
                     }
 
                     // Spawn queued FIRE taps from the muzzle along the view heading,
@@ -2752,6 +2795,53 @@ fun CalculatorCityView(
         }
 
         // ── "Grab the gun?" prompt ────────────────────────────────────────────
+        if (showRedButtonPuzzle) {
+            RedButtonPuzzle(
+                targetMinutes =
+                    com.fictioncutshort.justacalculator.logic.CalculatorActions.loadRantScreenTimes(),
+                onSolved = {
+                    com.fictioncutshort.justacalculator.logic.CalculatorActions.persistDoorOpen(true)
+                    secretDoorOpen = true
+                    showRedButtonPuzzle = false
+                    doorOpenNoteUntil = nowMillis() + 4000L
+                },
+                onWrong = {
+                    playRedButtonWrongSting()
+                    val used = com.fictioncutshort.justacalculator.logic.CalculatorActions.loadRedButtonAttempts() + 1
+                    com.fictioncutshort.justacalculator.logic.CalculatorActions.persistRedButtonAttempts(used)
+                    if (used >= RED_BUTTON_MAX_ATTEMPTS) {
+                        // Burned out. The button stops being drawn and the panel
+                        // closes for good — this branch of the story is over for
+                        // this save.
+                        renderer.showRedButton = false
+                        showRedButtonPuzzle = false
+                    }
+                },
+                onDismiss = { showRedButtonPuzzle = false }
+            )
+        }
+
+        // "Door is open" — a plain note, not a popup: the panel has already
+        // closed itself by the time this shows.
+        if (doorOpenNoteUntil > nowMillis()) {
+            Box(
+                modifier = Modifier.fillMaxSize().statusBarsPadding(),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                Text(
+                    text = "Door is open",
+                    color = Color(0xFFE8E2D8),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier
+                        .padding(top = 40.dp)
+                        .background(Color(0xCC12100E), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 18.dp, vertical = 10.dp)
+                )
+            }
+        }
+
         if (showGunGrabPrompt && !gunGrabbed && !overlayOpen) {
             Box(
                 modifier = Modifier
@@ -4030,3 +4120,23 @@ private class PendingShots {
     fun decrementAndGet(): Int = --value
     fun getAndSet(v: Int): Int = value.also { value = v }
 }
+
+/**
+ * The sting for a wrong answer on the red button.
+ *
+ * The audio for this has not been supplied yet. [Sounds.path] returns null when
+ * no such asset ships, so until a `redbuttonwrong.<ext>` lands in
+ * commonMain/assets/raw this is a silent no-op — dropping the file in is the
+ * only step needed to switch it on, no code change.
+ */
+private fun playRedButtonWrongSting() {
+    try {
+        val path = Sounds.path(RED_BUTTON_WRONG_SOUND) ?: return
+        val player = createSoundPlayer(path) ?: return
+        player.setOnCompletion { runCatching { player.release() } }
+        player.start()
+    } catch (_: Exception) { }
+}
+
+/** Asset base name for the wrong-answer sting (extension resolved by Sounds). */
+private const val RED_BUTTON_WRONG_SOUND = "redbuttonwrong"

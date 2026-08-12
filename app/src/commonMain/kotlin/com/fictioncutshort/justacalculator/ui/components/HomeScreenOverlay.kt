@@ -399,8 +399,14 @@ private fun handleIconTap(
     setNotification: (String?) -> Unit
 ) {
     when (name) {
+        // The only icon that does both: the remark arrives as the usual banner,
+        // and the "app" it opens is a single picture in a popup card.
+        "calc" -> {
+            setNotification("Good try. Remember, you're already inside a calculator.")
+            setApp("calc")
+        }
+
         // Fake calculator notifications (no app launches at all)
-        "calc" -> setNotification("Good try. Remember, you're already inside a calculator.")
         "friendsbook" -> setNotification("Don't even go there.")
         "tuktak" -> setNotification("You're already talking to a calculator — you don't need more brain rot.")
         "chathqu", "germinay" -> setNotification("Hey, I am up here. You're here to talk to me.")
@@ -425,6 +431,12 @@ private fun AppHost(
     onPlaceCall: (String) -> Unit
 ) {
     when (appName) {
+        // ─── Picture-only popup ──────────────────────────────────────────────
+        "calc" -> ImagePhoneAppPopup(
+            assetPath = "doorsnap.jpg",
+            onClose = onClose
+        )
+
         // ─── Simple text + Close popups ──────────────────────────────────────
         "airbbl" -> SimplePhoneAppPopup(
             title = "AirBBL",

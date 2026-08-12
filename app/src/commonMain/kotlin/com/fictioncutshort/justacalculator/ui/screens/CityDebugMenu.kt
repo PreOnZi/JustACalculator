@@ -2,6 +2,7 @@ package com.fictioncutshort.justacalculator.ui.screens
 
 import com.fictioncutshort.justacalculator.platform.currentAppContext
 import com.fictioncutshort.justacalculator.platform.Prefs
+import com.fictioncutshort.justacalculator.logic.CalculatorActions
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -343,6 +344,67 @@ fun CityDebugMenu(
                         write { putBoolean("bridge_crossed", now) }
                     }
                 )
+
+                // ── The optional software-update branch ───────────────────────
+                // These three live in the MAIN app prefs, not the city's, so they
+                // are written through CalculatorActions; write {} is still called
+                // so the panel re-reads and the city applies the change.
+                DebugToggleRow(
+                    label = "software updated",
+                    on = CalculatorActions.loadSoftwareUpdated(),
+                    note = "spawns the red button on the DEL ruin's top floor",
+                    onToggle = {
+                        CalculatorActions.persistSoftwareUpdated(
+                            !CalculatorActions.loadSoftwareUpdated()
+                        )
+                        write { }
+                    }
+                )
+                run {
+                    val used = CalculatorActions.loadRedButtonAttempts()
+                    val burned = used >= RED_BUTTON_MAX_ATTEMPTS
+                    DebugToggleRow(
+                        label = "red button burned out",
+                        on = burned,
+                        note = "$used/$RED_BUTTON_MAX_ATTEMPTS wrong answers used" +
+                            (if (burned) " — button gone" else "") + "; tap to " +
+                            (if (burned) "reset to 0" else "burn it out"),
+                        onToggle = {
+                            CalculatorActions.persistRedButtonAttempts(
+                                if (burned) 0 else RED_BUTTON_MAX_ATTEMPTS
+                            )
+                            write { }
+                        }
+                    )
+                }
+                DebugToggleRow(
+                    label = "secret door open",
+                    on = CalculatorActions.loadDoorOpen(),
+                    note = "the tan panel in Building 10 — skips the red-button puzzle",
+                    onToggle = {
+                        CalculatorActions.persistDoorOpen(!CalculatorActions.loadDoorOpen())
+                        write { }
+                    }
+                )
+                run {
+                    val quoted = CalculatorActions.loadRantScreenTimes()
+                    DebugToggleRow(
+                        label = "rant screen time",
+                        on = quoted.isNotEmpty(),
+                        note = if (quoted.isNotEmpty())
+                            "accepts " + quoted.joinToString(" or ") { "h${it / 60} m${it % 60}" } +
+                                " (±$TOLERANCE_MIN min) — tap to clear"
+                        else
+                            "not quoted yet; tap to seed 2h34m so the puzzle is solvable",
+                        onToggle = {
+                            if (quoted.isNotEmpty()) CalculatorActions.clearRantScreenTimes()
+                            else CalculatorActions.recordRantScreenTime(
+                                2L * 3_600_000L + 34L * 60_000L
+                            )
+                            write { }
+                        }
+                    )
+                }
                 DebugToggleRow(
                     label = "building 10 door open",
                     on = prefs.getBoolean("b10_door_open", false),

@@ -322,6 +322,9 @@ object EffectsController {
             return
         }   // Exit if muted
         if (state.value.isMuted) return
+        // The truth detour owns the screen while it runs — the countdown is
+        // frozen and resumes from the top when the user is handed back.
+        if (state.value.truthRevealActive) return
 
         while (state.value.countdownTimer > 0 && state.value.conversationStep == 89) {
             delay(1000)
@@ -367,6 +370,58 @@ object EffectsController {
             }
         }
     }
+
+    // =====================================================================
+    // "THE TRUTH" DETOUR (step 89, option 4)
+    // =====================================================================
+
+    /** How long the glitch runs before the line of text appears. */
+    private const val TRUTH_GLITCH_MS = 1400L
+
+    /** How long the text stays up before the user is dropped back at step 89. */
+    private const val TRUTH_TEXT_MS = 8000L
+
+    suspend fun runTruthReveal(state: MutableState<CalculatorState>) {
+        if (!state.value.truthRevealActive) return
+
+        when (state.value.truthRevealPhase) {
+            1 -> {
+                delay(TRUTH_GLITCH_MS)
+                if (state.value.truthRevealActive && state.value.truthRevealPhase == 1) {
+                    state.value = state.value.copy(truthRevealPhase = 2)
+                }
+            }
+            2 -> {
+                delay(TRUTH_TEXT_MS)
+                if (state.value.truthRevealActive && state.value.truthRevealPhase == 2) {
+                    returnFromTruthReveal(state)
+                }
+            }
+        }
+    }
+
+    /**
+     * Drops the user back into the countdown. Routes through browser phase 21
+     * — the same re-entry the scramble game uses — so the question re-types
+     * itself and phase 22 re-arms the choice. The countdown comes back at 20
+     * seconds with only three options now that truthOptionUsed is set.
+     */
+    private fun returnFromTruthReveal(state: MutableState<CalculatorState>) {
+        state.value = state.value.copy(
+            truthRevealActive = false,
+            truthRevealPhase = 0,
+            browserPhase = 21,
+            invertedColors = true,
+            screenBlackout = false,
+            flickerEffect = false,
+            awaitingChoice = false,
+            countdownTimer = 0,
+            message = "",
+            fullMessage = "",
+            isTyping = false
+        )
+    }
+
 // =====================================================================
 // SCRAMBLE GAME
 // =====================================================================

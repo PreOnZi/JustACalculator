@@ -39,7 +39,7 @@ Enter the console code: 353942320485 and confirm (++)
 
 Once in the console, navigate to Administrator settings (2++)
 Enter the administrator code (12340 [must be changed before launch!]) when prompted
-Go to: Connectivity settings (4++)
+Go to: Connectivity settings (3++)
 Select: 2(++) for Promotion & advertising options
 Select: Disable banner advertising (2++)
 

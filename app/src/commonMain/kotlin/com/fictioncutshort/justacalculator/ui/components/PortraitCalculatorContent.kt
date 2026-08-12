@@ -40,9 +40,13 @@ fun PortraitCalculatorContent(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Transparent)
-            // Pairs with navigationBarsPadding: on Android the system already
-            // insets the window so both report zero, on iOS they clear the
-            // Dynamic Island and the home indicator.
+            // These stay, but the status-bar half is now a no-op in practice:
+            // CalculatorScreen consumes that inset just below TopBezelBar (the
+            // brown bar already occupies the Dynamic Island / status bar area),
+            // so this no longer stacks a second bar's worth of empty space
+            // above the first line of narration. Kept rather than deleted
+            // because removing the modifier outright also collapses the bezel
+            // to zero height — Compose stops reporting the inset at all.
             .statusBarsPadding()
             .navigationBarsPadding()
             .padding(horizontal = dimensions.contentPadding)
@@ -74,6 +78,7 @@ fun PortraitCalculatorContent(
                 awaitingChoice = current.awaitingChoice,
                 textColor = textColor,
                 dimensions = dimensions,
+                truthOptionAvailable = !current.truthOptionUsed,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(top = 8.dp, end = 50.dp)

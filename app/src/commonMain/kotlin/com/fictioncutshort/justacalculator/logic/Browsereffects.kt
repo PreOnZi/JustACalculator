@@ -240,7 +240,7 @@ Sharp CS-10A - 25KG
             message = "",
             fullMessage = "You, what are you going to do about this?!",
             isTyping = true,
-            countdownTimer = 20,
+            countdownTimer = CalculatorActions.step89CountdownSeconds(state.value.truthOptionUsed),
             flickerEffect = false
         )
     }

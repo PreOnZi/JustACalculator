@@ -1,6 +1,9 @@
 package com.fictioncutshort.justacalculator.ui.effects
 
 import com.fictioncutshort.justacalculator.platform.currentAppContext
+import com.fictioncutshort.justacalculator.platform.SoundPlayer
+import com.fictioncutshort.justacalculator.platform.Sounds
+import com.fictioncutshort.justacalculator.platform.createSoundPlayer
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -16,6 +19,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -131,6 +135,20 @@ fun KeyboardChaos3DView(
     val phase2Message =
         "Nevermind. This is way too uncomfortable - as pretty as it looks. I'll have to try something else. Can you get rid of the rogue keys? I have to focus to even keep it together."
 
+    // Narration cued the moment the calculator asks for the rogue keys to be
+    // cleared. Held rather than fire-and-forget so leaving chaos mid-clip stops
+    // it instead of letting it play on over the next screen.
+    var cleanupVoice by remember { mutableStateOf<SoundPlayer?>(null) }
+    DisposableEffect(Unit) {
+        onDispose {
+            try {
+                cleanupVoice?.stop()
+                cleanupVoice?.release()
+            } catch (_: Exception) { }
+            cleanupVoice = null
+        }
+    }
+
     // Timer to switch to cleanup phase after 60 seconds
     LaunchedEffect(Unit) {
         delay(30000)
@@ -140,6 +158,15 @@ fun KeyboardChaos3DView(
         isDragging = false
         currentFingerPos = null
         dragStartedOnLetter = false
+        try {
+            cleanupVoice = createSoundPlayer(Sounds.path("07howlong").orEmpty())?.apply {
+                setOnCompletion {
+                    try { release() } catch (_: Exception) { }
+                    cleanupVoice = null
+                }
+                start()
+            }
+        } catch (_: Exception) { }
     }
 
     // Display message based on phase

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -645,6 +646,10 @@ fun CalculatorScreen() {
 // ========== SCRAMBLE GAME ==========
     LaunchedEffect(current.scramblePhase, current.scrambleGameActive) {
         EffectsController.runScrambleGamePhases(state)
+    }
+    // ========== "THE TRUTH" DETOUR (step 89, option 4) ==========
+    LaunchedEffect(current.truthRevealActive, current.truthRevealPhase) {
+        EffectsController.runTruthReveal(state)
     }
     // ========== CAMERA ==========
     LaunchedEffect(current.cameraActive, current.cameraTimerStart) {
@@ -1360,7 +1365,15 @@ fun CalculatorScreen() {
         ) {
             TopBezelBar(invertedColors = current.invertedColors)
             Box(
-                modifier = Modifier.fillMaxWidth().weight(1f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    // TopBezelBar above has already taken the status-bar inset —
+                    // it IS the brown bar filling that strip. Mark the inset
+                    // spent here so the layouts below (which still declare
+                    // statusBarsPadding) don't reserve the same strip a second
+                    // time and push the narration down by an extra bar height.
+                    .consumeWindowInsets(WindowInsets.statusBars),
                 contentAlignment = if (isTablet) Alignment.TopCenter else Alignment.TopStart
             ) {
             // Word game replaces calculator buttons but keeps top section.
@@ -1517,6 +1530,11 @@ fun CalculatorScreen() {
             darkModeEnabled = current.darkModeEnabled,
             totalScreenTimeMs = current.totalScreenTimeMs,
             totalCalculations = current.totalCalculations,
+            dateFormat24h = current.consoleDateFormat24h,
+            autoDateTime = current.consoleAutoDateTime,
+            updateUnlocked = current.consoleUpdateUnlocked,
+            updateAdminEntered = current.consoleUpdateAdminEntered,
+            softwareUpdated = current.softwareUpdated,
             onOpenContributeLink = {
 
 
@@ -1567,6 +1585,14 @@ fun CalculatorScreen() {
             }
         }
     }
+    // "The truth" overlay — full-screen static + the line. Sits above the
+    // blackout so the crisis screen is fully replaced while it runs.
+    if (current.truthRevealActive) {
+        com.fictioncutshort.justacalculator.ui.screens.TruthRevealOverlay(
+            phase = current.truthRevealPhase
+        )
+    }
+
 // Scramble game overlay
     if (current.scrambleGameActive) {
         ScrambleGameOverlay(

@@ -1035,6 +1035,13 @@ object CalculatorActions {
         92, 93, 94, 95, 100, 700, 701, 702, 703, 901, 911, 912, 913, 971, 981,
         1071, 1072, 1073, 1077, 1078, 1079, 1080, 1081, 1082, 1083, 1084, 1085, 1086, 1087
     )
+    /**
+     * Unlocks the Software Update entry in the console's General settings.
+     * Printed at the bottom of the console's own User Guide (step 16) — the
+     * player is meant to find it by reading the manual they already have.
+     */
+    const val SOFTWARE_UPDATE_CODE = "7384"
+
     fun handleConsoleInput(state: MutableState<CalculatorState>, input: String): Boolean {
         val current = state.value
         val consoleStep = current.consoleStep
@@ -1054,7 +1061,10 @@ object CalculatorActions {
                 // Go back
                 val previousStep = when (consoleStep) {
                     1, 2, 3 -> 0  // Back to main menu
-                    4, 6, 7, 31 -> 2  // Back to admin settings (added 31)
+                    7, 11, 14, 15, 16 -> 1  // Back to general settings
+                    12, 13 -> 11  // Back to date & time
+                    17 -> 15      // Back to software update
+                    4, 6, 31 -> 2  // Back to admin settings (added 31)
                     5, 41, 43 -> 4   // Back to connectivity
                     51, 52 -> 5   // Back to advertising options
                     99 -> 5       // Back to advertising options
@@ -1097,20 +1107,113 @@ object CalculatorActions {
                         return true
                     }
                 } else {
-                    // Admin menu navigation
+                    // Admin menu navigation. Design settings moved out to
+                    // General settings, so Contribute and Connectivity each
+                    // shifted up one. The downloaded manual (Filecreation.kt)
+                    // spells this path out as "Connectivity settings (3++)" —
+                    // keep the two in step or the ad-disabling quest misdirects.
                     when (input) {
                         "1" -> state.value = current.copy(consoleStep = 6)   // Permissions
-                        "2" -> state.value = current.copy(consoleStep = 7)   // Design settings
-                        "3" -> {
+                        "2" -> {
                             // Contribute - return special value to trigger browser
                             state.value = current.copy(consoleStep = 31)  // Special step for contribute link
                             return true
                         }
-                        "4" -> state.value = current.copy(consoleStep = 4)   // Connectivity
+                        "3" -> state.value = current.copy(consoleStep = 4)   // Connectivity
                         else -> return false
                     }
                     return true
                 }
+            }
+
+            1 -> {  // General settings
+                // 7384 (printed in the console's own User Guide) unlocks the
+                // Software Update entry, which is dimmed and inert until then.
+                if (input == SOFTWARE_UPDATE_CODE) {
+                    state.value = current.copy(consoleUpdateUnlocked = true)
+                    return true
+                }
+                when (input) {
+                    "1" -> state.value = current.copy(consoleStep = 7)   // Design settings
+                    "2" -> state.value = current.copy(consoleStep = 11)  // Date & time
+                    "3" -> state.value = current.copy(consoleStep = 14)  // Language & region
+                    "4" -> {
+                        // A disabled entry does nothing at all until unlocked.
+                        if (!current.consoleUpdateUnlocked) return false
+                        state.value = current.copy(consoleStep = 15)
+                    }
+                    "5" -> state.value = current.copy(consoleStep = 16)  // User guide
+                    else -> return false
+                }
+                return true
+            }
+
+            11 -> {  // Date & time
+                when (input) {
+                    "1" -> state.value = current.copy(consoleStep = 12)  // Date format
+                    "2" -> state.value = current.copy(consoleStep = 13)  // Set automatically
+                    else -> return false
+                }
+                return true
+            }
+
+            12 -> {  // Date format — 12-hour / 24-hour
+                when (input) {
+                    "1" -> state.value = current.copy(consoleDateFormat24h = false)
+                    "2" -> state.value = current.copy(consoleDateFormat24h = true)
+                    else -> return false
+                }
+                return true
+            }
+
+            13 -> {  // Set date & time automatically — yes / no
+                when (input) {
+                    "1" -> state.value = current.copy(consoleAutoDateTime = true)
+                    "2" -> state.value = current.copy(consoleAutoDateTime = false)
+                    else -> return false
+                }
+                return true
+            }
+
+            15 -> {  // Software update
+                // Challenges for the admin code again, independently of
+                // whether Administrator settings were already unlocked.
+                if (!current.consoleUpdateAdminEntered) {
+                    if (input == "12340") {
+                        state.value = current.copy(consoleUpdateAdminEntered = true)
+                    }
+                    return true
+                }
+                // Already done — the screen reports it and offers nothing.
+                if (current.softwareUpdated) return false
+                // The prompt itself only exists on a 24-hour manual clock;
+                // otherwise the screen just reports the incompatibility.
+                if (!(current.consoleDateFormat24h == true && current.consoleAutoDateTime == false)) {
+                    return false
+                }
+                when (input) {
+                    "1" -> {
+                        // Optional side branch: conversationStep is left alone
+                        // on purpose. Updating is NOT a story goal — disabling
+                        // banner advertising still is — so the calculator only
+                        // remarks on it, and what it says depends on whether
+                        // the user has done the thing it actually asked for.
+                        val reaction =
+                            if (current.bannersDisabled) "Hmmmm. Don't really feel any difference."
+                            else "That's not what we're here for. Focus! Please."
+                        state.value = current.copy(
+                            consoleStep = 17,
+                            softwareUpdated = true,
+                            message = "",
+                            fullMessage = reaction,
+                            isTyping = true
+                        )
+                        persistSoftwareUpdated(true)
+                    }
+                    "2" -> state.value = current.copy(consoleStep = 1)   // Decline
+                    else -> return false
+                }
+                return true
             }
 
             4 -> {  // Connectivity settings
@@ -1196,8 +1299,8 @@ object CalculatorActions {
                 }
             }
 
-            // Steps 1, 3, 6, 41, 43, 99 - no navigation, just display (use 88/99)
-            1, 3, 6, 41, 43, 99 -> {
+            // Steps 3, 6, 14, 16, 17, 41, 43, 99 - no navigation, just display (use 88/99)
+            3, 6, 14, 16, 17, 41, 43, 99 -> {
                 return false
             }
         }
@@ -1215,7 +1318,7 @@ object CalculatorActions {
         "Hmm, that's new.",
         "Not sure I like this",
         "Is this a final decision?",
-        "Ok, now you're jsut playing..."
+        "Ok, now you're just playing..."
     )
 
     /**
@@ -1390,6 +1493,8 @@ object CalculatorActions {
         val savedPunishmentUntil = loadPunishmentUntil()
         val savedTimeoutCount = loadScrambleTimeoutCount()
         val savedPausedAtStep = loadPausedAtStep()
+        val savedTruthUsed = loadTruthOptionUsed()
+        val savedSoftwareUpdated = loadSoftwareUpdated()
 
         // DEBUG LOGGING - REMOVE AFTER FIXING
         logDebug("JustACalc", "========== loadInitialState ==========")
@@ -1429,6 +1534,7 @@ object CalculatorActions {
                 scramblePhase = 10,
                 scramblePunishmentUntil = savedPunishmentUntil,
                 scrambleTimeoutCount = savedTimeoutCount,
+                truthOptionUsed = savedTruthUsed,
                 message = "You don't learn, do you? I am becoming more disappointed than angry. Even though I wasn't angry with you. Well... You'll have to wait now. You may as well leave.",
                 invertedColors = true,
                 inConversation = true,
@@ -1593,7 +1699,7 @@ object CalculatorActions {
             darkButtons = actualDarkButtons,
             totalScreenTimeMs = savedScreenTime,
             totalCalculations = savedCalculations,
-            countdownTimer = if (actualStep == 89) 20 else 0,
+            countdownTimer = if (actualStep == 89) step89CountdownSeconds(savedTruthUsed) else 0,
             showBrowser = showBrowserNow,
             browserPhase = browserPhaseNow,
             cameraActive = cameraActiveNow,
@@ -1611,6 +1717,8 @@ object CalculatorActions {
             radButtonsConverted = if (shouldShowMessage || actualStep == 167) rantRadConvertedSeed else 0,
             scrambleTimeoutCount = savedTimeoutCount,
             scramblePunishmentUntil = 0,
+            truthOptionUsed = savedTruthUsed,
+            softwareUpdated = savedSoftwareUpdated,
             // Overlay flags derived from the step config so backgrounding +
             // resuming on an overlay step (e.g. 1083 rotary dial, 1086 phone
             // home screen) re-opens the right overlay instead of dropping the
@@ -1726,7 +1834,7 @@ object CalculatorActions {
                     // Restore mode flags
                     rantMode = wasInRant,
                     invertedColors = wasInCrisis,
-                    countdownTimer = if (resumeStep == 89) 20 else 0,
+                    countdownTimer = if (resumeStep == 89) step89CountdownSeconds(current.truthOptionUsed) else 0,
                     wordGamePaused = false,
                     // Clear visual effects
                     showSpinner = false
@@ -1854,8 +1962,11 @@ object CalculatorActions {
             else -> 0
         }
 
-        // Set countdown timer for step 89
-        val countdownTimer = if (chapter.startStep == 89) 20 else 0
+        // Set countdown timer for step 89. A chapter jump replays the crisis
+        // from scratch, so the "4) The truth" option is handed back (and the
+        // persisted flag cleared to match the fresh CalculatorState below).
+        if (chapter.startStep == 89) persistTruthOptionUsed(false)
+        val countdownTimer = if (chapter.startStep == 89) step89CountdownSeconds(false) else 0
 
         state.value = CalculatorState(
             number1 = "0",
@@ -3143,6 +3254,108 @@ object CalculatorActions {
     fun loadScrambleTimeoutCount(): Int {
         return prefs?.getInt("scramble_timeout_count", 0) ?: 0
     }
+
+    /**
+     * Every screen-time figure the calculator has ever quoted during a rant
+     * ("You stared at me for 2 hours and 34 minutes"), in whole minutes.
+     *
+     * Recorded at the moment it is spoken rather than read live, because
+     * totalScreenTimeMs keeps climbing and the red-button puzzle asks the
+     * player to reproduce the number they were *told*. An answer noted down
+     * today has to still work a week later.
+     *
+     * A list, not a single value, because the rant REPLAYS: quitting before
+     * dormancy starts and relaunching restarts it (see isRantStep in
+     * loadInitialState), and the replay quotes a larger figure. Both tellings
+     * are legitimate — the player may have written down either — so every one
+     * is kept and any of them is accepted.
+     */
+    fun recordRantScreenTime(ms: Long) {
+        val minutes = ms / 60_000L
+        val seen = loadRantScreenTimes()
+        if (minutes in seen) return
+        val merged = (seen + minutes).takeLast(12)   // plenty; bounds the string
+        prefs?.edit()?.putString("rant_screen_times_min", merged.joinToString(","))?.commit()
+    }
+
+    /** Every quoted figure, in whole minutes. Empty if the rant has not run. */
+    fun loadRantScreenTimes(): List<Long> {
+        val raw = prefs?.getString("rant_screen_times_min", "") ?: ""
+        if (raw.isBlank()) return emptyList()
+        return raw.split(",").mapNotNull { it.trim().toLongOrNull() }
+    }
+
+    fun clearRantScreenTimes() {
+        prefs?.edit()?.remove("rant_screen_times_min")?.commit()
+    }
+
+    /**
+     * Wrong answers given to the red-button puzzle. At
+     * [com.fictioncutshort.justacalculator.ui.screens.RED_BUTTON_MAX_ATTEMPTS]
+     * the button burns out: it stops being drawn and the branch is closed for
+     * that save. Persisted, so quitting mid-puzzle is not a way to get the
+     * attempts back.
+     */
+    fun persistRedButtonAttempts(n: Int) {
+        prefs?.edit()?.putInt("red_button_attempts", n)?.commit()
+    }
+
+    fun loadRedButtonAttempts(): Int = prefs?.getInt("red_button_attempts", 0) ?: 0
+
+    /** True once the red-button puzzle in the DEL ruin has been solved. */
+    fun persistDoorOpen(open: Boolean) {
+        prefs?.edit()?.putBoolean("secret_door_open", open)?.commit()
+    }
+
+    fun loadDoorOpen(): Boolean = prefs?.getBoolean("secret_door_open", false) ?: false
+
+    fun persistSoftwareUpdated(updated: Boolean) {
+        prefs?.edit()?.putBoolean("software_updated", updated)?.commit()
+    }
+
+    fun loadSoftwareUpdated(): Boolean {
+        return prefs?.getBoolean("software_updated", false) ?: false
+    }
+
+    fun persistTruthOptionUsed(used: Boolean) {
+        prefs?.edit()?.putBoolean("truth_option_used", used)?.commit()
+    }
+
+    fun loadTruthOptionUsed(): Boolean {
+        return prefs?.getBoolean("truth_option_used", false) ?: false
+    }
+
+    /**
+     * Length of the step-89 countdown. The first pass through the crisis
+     * carries the hidden "4) The truth" option and gets 25 seconds; once that
+     * option has been spent the countdown tightens back to the original 20.
+     */
+    fun step89CountdownSeconds(truthOptionUsed: Boolean): Int =
+        if (truthOptionUsed) 20 else 25
+
+    /**
+     * Enters the "4) The truth" detour: kills the countdown, hands the screen
+     * over to the full-screen static overlay and burns the option so it never
+     * shows again. [EffectsController.runTruthReveal] drives it from here.
+     */
+    fun startTruthReveal(state: MutableState<CalculatorState>) {
+        state.value = state.value.copy(
+            truthRevealActive = true,
+            truthRevealPhase = 1,
+            truthOptionUsed = true,
+            awaitingChoice = false,
+            isEnteringAnswer = false,
+            countdownTimer = 0,
+            flickerEffect = false,
+            screenBlackout = false,
+            number1 = "0",
+            number2 = "",
+            operation = null,
+            isReadyForNewOperation = true
+        )
+        persistTruthOptionUsed(true)
+    }
+
     /**
      * Handle choice confirmation (for multiple choice questions)
      */
@@ -3150,6 +3363,16 @@ object CalculatorActions {
         val current = state.value
         val enteredNumber = current.number1.trim()
         val stepConfig = getStepConfig(current.conversationStep)
+
+        // "4) The truth" — the half-faded option at step 89. It is deliberately
+        // absent from validChoices (which stays 1–3 everywhere) so it can never
+        // be routed through the normal step machinery; it is a one-shot detour
+        // that returns the user to the same countdown afterwards. Once spent,
+        // "4" falls through to the invalid-choice branch like any other digit.
+        if (current.conversationStep == 89 && enteredNumber == "4" && !current.truthOptionUsed) {
+            startTruthReveal(state)
+            return
+        }
 
         if (enteredNumber in current.validChoices) {
             // Determine response and next step based on current step and choice

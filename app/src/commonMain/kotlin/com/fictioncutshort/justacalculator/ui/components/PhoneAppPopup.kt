@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -89,6 +90,46 @@ fun SimplePhoneAppPopup(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )
+            Spacer(Modifier.height(20.dp))
+            PopupButton(text = closeLabel, onClick = onClose)
+        }
+    }
+}
+
+/**
+ * Popup whose payload is a picture rather than text — a card sized to the
+ * content, not a full-screen viewer. Used where the gag *is* the image (the
+ * calculator icon serving up doorsnap.jpg); the calculator's own remark still
+ * arrives separately as a [CalcFakeNotification] banner.
+ */
+@Composable
+fun ImagePhoneAppPopup(
+    assetPath: String,
+    onClose: () -> Unit,
+    caption: String? = null,
+    closeLabel: String = "Close"
+) {
+    PopupScrim(onClose = onClose) {
+        PopupCard {
+            AsyncImage(
+                model = Assets.uri(assetPath),
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp)
+                    .clip(RoundedCornerShape(12.dp))
+            )
+            if (!caption.isNullOrEmpty()) {
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    text = caption,
+                    color = PopupSecondaryTextColor,
+                    fontSize = 15.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             Spacer(Modifier.height(20.dp))
             PopupButton(text = closeLabel, onClick = onClose)
         }

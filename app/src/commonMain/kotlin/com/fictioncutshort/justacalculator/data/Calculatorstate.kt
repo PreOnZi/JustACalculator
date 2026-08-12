@@ -209,6 +209,24 @@ data class CalculatorState(
     val scramblePunishmentUntil: Long = 0,
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // "THE TRUTH" — hidden 4th option on the step-89 countdown
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * True once the user has picked the half-faded "4) The truth" option at
+     * step 89. Persisted: the option is a one-shot, so it keeps showing on
+     * every return to the countdown (timeout → scramble game → back) until it
+     * is actually used, and never again afterwards.
+     */
+    val truthOptionUsed: Boolean = false,
+
+    /** True while the full-screen static/reveal overlay is showing. */
+    val truthRevealActive: Boolean = false,
+
+    /** 0 = inactive, 1 = glitching static only, 2 = static + the line of text. */
+    val truthRevealPhase: Int = 0,
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // MINUS BUTTON DAMAGE - Post-crisis state (steps 93+)
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -303,7 +321,14 @@ data class CalculatorState(
      * 51 = banner ads submenu
      * 52 = fullscreen ads submenu
      * 6 = permissions
-     * 7 = design settings
+     * 7 = design settings (reached from General settings)
+     * 11 = date & time
+     * 12 = date format submenu
+     * 13 = automatic date & time submenu
+     * 14 = language & region
+     * 15 = software update (admin-gated)
+     * 16 = user guide
+     * 17 = software update result
      * 31 = contribute link
      * 99 = success message
      */
@@ -311,6 +336,38 @@ data class CalculatorState(
 
     /** True after entering admin code (12340) */
     val adminCodeEntered: Boolean = false,
+
+    // ── General settings → Date & time ──────────────────────────────────────
+    // Both are deliberately tri-state: null means the user has not chosen yet,
+    // and the menu shows "Not set" rather than defaulting to a value. The
+    // Software Update gate only opens on 24-hour + manual, so a default would
+    // hand the user half the combination for free.
+
+    /** null = not set, true = 24-hour, false = 12-hour. */
+    val consoleDateFormat24h: Boolean? = null,
+
+    /** null = not set, true = automatic, false = manual (system clock). */
+    val consoleAutoDateTime: Boolean? = null,
+
+    /** True once 7384 (from the console's own User Guide) has been entered. */
+    val consoleUpdateUnlocked: Boolean = false,
+
+    /**
+     * True after re-entering the admin code inside Software Update. Separate
+     * from [adminCodeEntered] on purpose: the update section challenges again
+     * even if Administrator settings were already unlocked this session.
+     */
+    val consoleUpdateAdminEntered: Boolean = false,
+
+    /**
+     * True once the optional software update has actually been run.
+     *
+     * This is a *side* branch — it deliberately does not touch
+     * [conversationStep]. The main story still only advances when banner
+     * advertising is disabled. Persisted, because it gates the red button in
+     * the city's DEL building long after the console has been closed.
+     */
+    val softwareUpdated: Boolean = false,
 
     // ═══════════════════════════════════════════════════════════════════════════
     // EASTER-EGG CONSOLE - Hidden colour/grayscale tweaks (codes 58008 / 707)

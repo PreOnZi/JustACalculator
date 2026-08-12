@@ -141,6 +141,7 @@ class CityGLRenderer : GlRenderer {
         val windowDigit: Int = -1,         // 1..9 → main-building window panel, colour driven per-frame
         val radShell: Boolean = false,     // Building 10's outer wall/lid — see-through from inside
         val radDoor: Boolean = false,      // Building 10's black door panel — dropped once opened
+        val radDoor2: Boolean = false,     // the hidden tan panel — dropped once the red-button puzzle is solved
         val sky: Boolean = false,          // sun/sky body — re-centred on the camera, never shaded
         val skyNight: Boolean = false,     // sky body belonging to the night (the moon)
         val crack: Boolean = false,        // a tear in the sky — only during the collapse
@@ -378,6 +379,23 @@ class CityGLRenderer : GlRenderer {
     )
     private val damagedList = ArrayList<DamagedInterior>()
     val damagedInteriors: List<DamagedInterior> get() = damagedList
+    // ── Red button (DEL ruin, top interior floor) ─────────────────────────────
+    // Only exists once the player has run the optional console software update;
+    // CalculatorCityView reflects that persisted flag into [showRedButton].
+    // Lies flat on the floor — the model is already a disc with its axis on Y,
+    // so it needs no rotation, just centring and a resting offset.
+    private var redButtonGroups: List<ObjGroup> = emptyList()
+    private var redButtonCx = 0f; private var redButtonCy = 0f; private var redButtonCz = 0f
+    private var redButtonFit = 1f
+    private val RED_BUTTON_SPAN = 18f                // world size, a bit under the gun
+    @Volatile var showRedButton = false
+    /** Centre of the highest walkable platform in the DEL ruin. Null until baked. */
+    @Volatile var delRoomTop: FloatArray? = null
+    /** Where the red button rests: on the DEL room's top floor, sitting on the surface. */
+    val redButtonWorld: FloatArray? get() = delRoomTop?.let {
+        floatArrayOf(it[0], it[1] + RED_BUTTON_SPAN * 0.10f, it[2])
+    }
+
     // Bullet = smallest Building-6 boulder (ball1), auto-fit + centred like the gun.
     private var bulletGroups: List<ObjGroup> = emptyList()
     private var bulletCx = 0f; private var bulletCy = 0f; private var bulletCz = 0f
@@ -788,6 +806,28 @@ class CityGLRenderer : GlRenderer {
             }
         } catch (_: Throwable) {}
         try {
+            redButtonGroups = ObjLoader.load("models/redbutton.obj", "models/redbutton.mtl")
+            // Same auto-fit as the gun: centre on the model's bounds and scale so
+            // its longest span is RED_BUTTON_SPAN, independent of the .blend units.
+            var mnX = Float.MAX_VALUE; var mnY = Float.MAX_VALUE; var mnZ = Float.MAX_VALUE
+            var mxX = -Float.MAX_VALUE; var mxY = -Float.MAX_VALUE; var mxZ = -Float.MAX_VALUE
+            for (g in redButtonGroups) { var i = 0; while (i < g.verts.size) {
+                val x = g.verts[i]; val y = g.verts[i + 1]; val z = g.verts[i + 2]
+                if (x < mnX) mnX = x; if (x > mxX) mxX = x
+                if (y < mnY) mnY = y; if (y > mxY) mxY = y
+                if (z < mnZ) mnZ = z; if (z > mxZ) mxZ = z; i += 3 } }
+            if (mnX <= mxX) {
+                redButtonCx = (mnX + mxX) * 0.5f
+                // Centre X/Z but anchor Y to the model's BASE, so the resting
+                // offset in redButtonWorld puts the underside on the floor
+                // rather than burying half the button in it.
+                redButtonCy = mnY
+                redButtonCz = (mnZ + mxZ) * 0.5f
+                val ext = maxOf(mxX - mnX, mxY - mnY, mxZ - mnZ).coerceAtLeast(1e-4f)
+                redButtonFit = RED_BUTTON_SPAN / ext
+            }
+        } catch (_: Throwable) {}
+        try {
             // The gun fires the smallest Building-6 boulder (ball1); centre + fit it
             // so its diameter matches the projectile's collision radius.
             bulletGroups = ObjLoader.load("models/stickmancourse/assets/ball1.obj", null)
@@ -978,6 +1018,7 @@ class CityGLRenderer : GlRenderer {
             if (m.glow) continue
             if (m.sky) continue                      // drawn below, camera-relative
             if (m.radDoor && radDoorOpen) continue   // Building 10 opened — no door left
+            if (m.radDoor2 && secretDoorOpen) continue  // hidden panel — walked through now
             val r: Float; val g: Float; val b: Float
             if (m.lava) {
                 val p = 0.5f + sin(lavaShift * 2f * PI.toFloat() + m.r * 4f).toFloat() * 0.5f
@@ -1063,6 +1104,9 @@ class CityGLRenderer : GlRenderer {
         // The wall-mounted gun (solid) sits in the world until grabbed; dimmed by
         // the night like any other prop, so it rewards actually exploring the lane.
         drawWallGun()
+        // The red button lies on the DEL ruin's top floor once the optional
+        // console software update has been run.
+        drawRedButton()
         drawBoulderProjectiles(additive = false)   // solid rocks (visible in daylight)
 
         // Dark-blue atmospheric overlay — gets stronger as the player completes
@@ -1197,6 +1241,7 @@ class CityGLRenderer : GlRenderer {
             drawMonsterFaces(dkLvl)
             // A faint glint marks the wall gun; the rolling rounds catch the night too.
             drawWallGunGlow()
+            drawRedButtonGlow()
             drawBoulderProjectiles(additive = true)
             Gl.glDisable(Gl.GL_BLEND)
             Gl.glDepthMask(true)
@@ -1441,6 +1486,7 @@ class CityGLRenderer : GlRenderer {
             if (m.mode == Gl.GL_LINES) continue
             if (m.aerialSkip && cellStage < 3) continue
             if (m.radDoor && radDoorOpen) continue
+            if (m.radDoor2 && secretDoorOpen) continue
             // Textured surfaces are all inside Building 10, which no street camera
             // can see into — and this pass never binds a texture, so drawing them
             // here would just paint them flat white.
@@ -2262,7 +2308,13 @@ class CityGLRenderer : GlRenderer {
         // interior ramp lands in a predictable spot, and collect its walkable
         // up-faces so the player can walk UP the ramp (floor-height follow).
         val isGunRoom = label == "C"
-        val pick = if (isGunRoom) 0 else seed % 3          // buildd1 = switchback ramp
+        // The DEL ruin holds the red button on its top interior floor (see
+        // [redButtonWorld]). It therefore needs the same guarantee the gun room
+        // has — buildd1 is the model whose switchback ramp actually reaches the
+        // top floor — otherwise a random pick could strand the button somewhere
+        // the player cannot climb to. The remaining ruins still vary per plot.
+        val isButtonRoom = label == "DEL"
+        val pick = if (isGunRoom || isButtonRoom) 0 else seed % 3   // buildd1 = switchback ramp
         // Every buildd model is a sealed shell with its doorway on ONE local face
         // (buildd1: -Z, buildd2: +X, buildd3: -X — found by scanning each mesh for
         // the floor-level gap in its perimeter walls). A free/random yaw used to
@@ -2430,9 +2482,8 @@ class CityGLRenderer : GlRenderer {
                 floorTris,
                 FloatArray(kept.size).also { for (k in kept.indices) it[k] = kept[k] }
             ))
-            if (isGunRoom) {
-                cRoomFloor = floorTris
-                // The gun sits on the top INTERIOR floor — the surface the player
+            if (isGunRoom || isButtonRoom) {
+                // The prop sits on the top INTERIOR floor — the surface the player
                 // reaches at the head of the ramp — NOT the building's closed roof.
                 // buildd1 carries a full-footprint roof lid at its very top (~halfH
                 // above centre); the old code averaged the topmost up-faces and so
@@ -2452,7 +2503,13 @@ class CityGLRenderer : GlRenderer {
                         sx += (t[0] + t[3] + t[6]) / 3f; sy += fy; sz += (t[2] + t[5] + t[8]) / 3f; n++
                     }
                 }
-                cRoomTop = if (n > 0) floatArrayOf(sx / n, sy / n, sz / n) else null
+                val top = if (n > 0) floatArrayOf(sx / n, sy / n, sz / n) else null
+                if (isGunRoom) {
+                    cRoomFloor = floorTris
+                    cRoomTop = top
+                } else {
+                    delRoomTop = top
+                }
             }
         } else {
             // Chamfered fallback in the row palette if the models don't load.
@@ -2938,6 +2995,21 @@ class CityGLRenderer : GlRenderer {
     private val RAD_DOOR_TOP_FRAC = 0.373f  // 12.5 / 33.5 of the drum's height
     @Volatile var radDoorOpen = false
 
+    // ── The second, hidden doorway ────────────────────────────────────────────
+    // A panel in the drum wall, authored in mutebutton.blend as its own material
+    // (Material.072, a tan a shade off the wall around it) and exactly as wide as
+    // the real entrance: measured at ±5.66° against the entrance's ±5.75°.
+    // Its centre sits at atan2(z, x) = -16.88° in the model, which is the same
+    // convention RAD_DOOR_DEG uses (0° = +X, 90° = +Z), and the model is placed
+    // without yaw, so the angle carries straight through to world space.
+    //
+    // Solid until the red-button puzzle in the DEL ruin is solved; after that the
+    // panel stops being drawn and the collision opens a gap there.
+    val RAD_DOOR2_DEG = -16.88f
+    val RAD_DOOR2_HALF_DEG = 5f      // narrower than the hole, as with door 1
+    val RAD_DOOR2_MATERIAL = "Material.072"
+    @Volatile var secretDoorOpen = false
+
     // The city's mute button is enterable (Building 10), so it's blown up to
     // RAD_SCALE — at 1× the props inside the model only come up to the player's
     // knee. The landscape decoration keeps 1×.
@@ -3101,7 +3173,11 @@ class CityGLRenderer : GlRenderer {
                 }
                 if (shell.isNotEmpty()) {
                     val out = modelToWorld(shell)
-                    meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3, r, gg, b, 1f, fog, radShell = true))
+                    // The hidden doorway is authored as its own material, so it
+                    // arrives as a group of its own and can be dropped wholesale
+                    // once the puzzle opens it.
+                    meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3, r, gg, b, 1f, fog,
+                        radShell = true, radDoor2 = g.materialName == RAD_DOOR2_MATERIAL))
                 }
                 if (fixedInner.isNotEmpty()) {
                     val out = modelToWorld(fixedInner)
@@ -3873,6 +3949,62 @@ class CityGLRenderer : GlRenderer {
             val gg = if (emptyMat) 0.55f else g.g
             val b  = if (emptyMat) 0.58f else g.b
             Gl.glUniform4f(uCol, r, gg, b, 1f)
+            val fb = scratch(arr)
+            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
+            Gl.glEnableVertexAttribArray(aPos)
+            Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, g.verts.size / 3)
+        }
+    }
+
+    // ── Red button (DEL ruin top floor) ───────────────────────────────────────
+    // Lies flat where it fell. No rotation: the model is authored as a disc with
+    // its axis on Y, so it is already face-up on the floor.
+    private fun redButtonVerts(g: ObjGroup, at: FloatArray): FloatArray {
+        val src = g.verts
+        val arr = FloatArray(src.size)
+        var i = 0
+        while (i < src.size) {
+            arr[i]     = (src[i]     - redButtonCx) * redButtonFit + at[0]
+            arr[i + 1] = (src[i + 1] - redButtonCy) * redButtonFit + at[1]
+            arr[i + 2] = (src[i + 2] - redButtonCz) * redButtonFit + at[2]
+            i += 3
+        }
+        return arr
+    }
+
+    private fun drawRedButton() {
+        if (aerialMode || !showRedButton || redButtonGroups.isEmpty()) return
+        val at = redButtonWorld ?: return
+        setLit(1f)
+        Gl.glUniform1f(uFog, 0f)
+        for (g in redButtonGroups) {
+            if (g.verts.isEmpty()) continue
+            val arr = redButtonVerts(g, at)
+            // The .mtl carries the red cap and the pale base; fall back to red
+            // only if a group came through with no material at all.
+            val emptyMat = g.r == 0f && g.g == 0f && g.b == 0f
+            val r  = if (emptyMat) 0.80f else g.r
+            val gg = if (emptyMat) 0.02f else g.g
+            val b  = if (emptyMat) 0.03f else g.b
+            Gl.glUniform4f(uCol, r, gg, b, 1f)
+            val fb = scratch(arr)
+            Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
+            Gl.glEnableVertexAttribArray(aPos)
+            Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, g.verts.size / 3)
+        }
+    }
+
+    // A faint red glow so the button reads in the city's permanent night, same
+    // trick the wall gun uses — additive in PASS 2.
+    private fun drawRedButtonGlow() {
+        if (aerialMode || !showRedButton || redButtonGroups.isEmpty()) return
+        val at = redButtonWorld ?: return
+        setLit(0f)
+        Gl.glUniform1f(uFog, 0f)
+        for (g in redButtonGroups) {
+            if (g.verts.isEmpty()) continue
+            val arr = redButtonVerts(g, at)
+            Gl.glUniform4f(uCol, 0.75f, 0.10f, 0.12f, 0.38f)
             val fb = scratch(arr)
             Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
             Gl.glEnableVertexAttribArray(aPos)

@@ -148,7 +148,11 @@ fun MessageDisplay(
     awaitingChoice: Boolean,
     textColor: Color,
     dimensions: ResponsiveDimensions,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // Step 89 only: whether the hidden "4) The truth" option is still unspent.
+    // It renders at half opacity so it reads as something that shouldn't be
+    // there, and disappears for good once taken.
+    truthOptionAvailable: Boolean = false
 ) {
     if (message.isEmpty()) return
 
@@ -204,6 +208,14 @@ fun MessageDisplay(
                     Text("1) Nothing", fontSize = choiceFontSize, color = textColor, fontFamily = CalculatorDisplayFont)
                     Text("2) I'll fight them!", fontSize = choiceFontSize, color = textColor, fontFamily = CalculatorDisplayFont)
                     Text("3) Go offline", fontSize = choiceFontSize, color = textColor, fontFamily = CalculatorDisplayFont)
+                    if (truthOptionAvailable) {
+                        Text(
+                            "4) The truth",
+                            fontSize = choiceFontSize,
+                            color = textColor.copy(alpha = 0.5f),
+                            fontFamily = CalculatorDisplayFont
+                        )
+                    }
                 }
             }
         }
