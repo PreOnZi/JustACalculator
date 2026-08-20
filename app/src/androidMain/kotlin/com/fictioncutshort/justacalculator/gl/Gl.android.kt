@@ -23,6 +23,7 @@ actual object Gl {
     actual val GL_FLOAT: Int = GLES30.GL_FLOAT
     actual val GL_FRAGMENT_SHADER: Int = GLES30.GL_FRAGMENT_SHADER
     actual val GL_FRAMEBUFFER: Int = GLES30.GL_FRAMEBUFFER
+    actual val GL_FRAMEBUFFER_BINDING: Int = GLES30.GL_FRAMEBUFFER_BINDING
     actual val GL_FRAMEBUFFER_COMPLETE: Int = GLES30.GL_FRAMEBUFFER_COMPLETE
     actual val GL_LEQUAL: Int = GLES30.GL_LEQUAL
     actual val GL_LESS: Int = GLES30.GL_LESS
@@ -56,6 +57,7 @@ actual object Gl {
     actual fun glBindBuffer(target: Int, buffer: Int) = GLES30.glBindBuffer(target, buffer)
     actual fun glBindBufferBase(target: Int, index: Int, buffer: Int) = GLES30.glBindBufferBase(target, index, buffer)
     actual fun glBindFramebuffer(target: Int, framebuffer: Int) = GLES30.glBindFramebuffer(target, framebuffer)
+    actual fun glGetIntegerv(pname: Int, out: IntArray, offset: Int) = GLES30.glGetIntegerv(pname, out, offset)
     actual fun glBindRenderbuffer(target: Int, renderbuffer: Int) = GLES30.glBindRenderbuffer(target, renderbuffer)
     actual fun glBindTexture(target: Int, texture: Int) = GLES30.glBindTexture(target, texture)
     actual fun glBindVertexArray(array: Int) = GLES30.glBindVertexArray(array)

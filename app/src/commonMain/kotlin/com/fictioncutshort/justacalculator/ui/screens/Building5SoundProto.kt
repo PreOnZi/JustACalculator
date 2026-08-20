@@ -82,8 +82,10 @@ private const val FFT_SIZE        = 2048
 private const val FFT_HOP         = 1024
 private const val REC_SECONDS     = 3
 private const val SCANS           = 3      // scans combined into one place-picture
-private const val M_COLS          = 12     // grid width
-private const val M_ROWS          = 12     // grid height (144 tiles total)
+// internal, not private: the confrontation redraws a mosaic of its own and has
+// to agree with this grid exactly (see ConfrontationMosaic.kt).
+internal const val M_COLS         = 12     // grid width
+internal const val M_ROWS         = 12     // grid height (144 tiles total)
 private const val SLICES_PER_SCAN = 16     // 3 scans × 16 slices × 3 tones = 144 tiles
 private const val PK_BANDS        = 30     // frequency resolution for peak-picking
 private const val PEAKS_PER_SLICE = 3
@@ -450,15 +452,17 @@ private fun BoxScope.MicGate(onRequest: () -> Unit) {
 // COLOUR + TILE LABELS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Frequency → hue, light-spectrum order: low = red (0°) … high = violet (285°). */
-private fun hueForFreq(hz: Float): Float {
+/** Frequency → hue, light-spectrum order: low = red (0°) … high = violet (285°).
+ *  Internal because the confrontation's forged mosaic must land on the same
+ *  colours the player already learned to read here. */
+internal fun hueForFreq(hz: Float): Float {
     if (hz <= 0f) return 0f
     val frac = ((log10(hz.toDouble()) - log10(FREQ_LO)) /
                 (log10(FREQ_HI) - log10(FREQ_LO))).coerceIn(0.0, 1.0)
     return (frac * 285.0).toFloat()
 }
 
-private fun freqName(hz: Float): String = when {
+internal fun freqName(hz: Float): String = when {
     hz < 150f  -> "deep bass"
     hz < 350f  -> "bass"
     hz < 800f  -> "low-mid"
@@ -838,14 +842,14 @@ internal fun SoundMosaicGallery(captures: List<PlaceCapture>, onBack: () -> Unit
     }
 }
 
-private fun mosaicFileName(cap: PlaceCapture) =
+internal fun mosaicFileName(cap: PlaceCapture) =
     "sound_mosaic_loc${cap.index}_${cap.timeMs}.png"
 
 /**
  * Draw a mosaic to an image for saving. The caption holds date + dominant Hz —
  * never the coordinates, so a shared image can't give the place away.
  */
-private fun renderMosaic(cap: PlaceCapture, textMeasurer: TextMeasurer): ImageBitmap {
+internal fun renderMosaic(cap: PlaceCapture, textMeasurer: TextMeasurer): ImageBitmap {
     val caption = "${formatDateTime(cap.timeMs)}   ~${cap.dominantHz} Hz"
     val tile = 64; val gap = 5; val pad = 28
     val gridW = M_COLS * tile + (M_COLS - 1) * gap

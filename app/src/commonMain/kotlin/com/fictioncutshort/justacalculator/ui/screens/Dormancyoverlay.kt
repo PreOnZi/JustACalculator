@@ -4,6 +4,8 @@ import com.fictioncutshort.justacalculator.platform.screenMetrics
 import com.fictioncutshort.justacalculator.platform.AppContext
 import com.fictioncutshort.justacalculator.platform.nowMillis
 import com.fictioncutshort.justacalculator.platform.currentAppContext
+import com.fictioncutshort.justacalculator.platform.createSoundPlayer
+import com.fictioncutshort.justacalculator.platform.Sounds
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -66,25 +68,27 @@ fun DormancyStaticBackground(modifier: Modifier = Modifier) {
         }
     }
 
+    // One Canvas draw pass per tick rather than a Box per noise cell. The Box
+    // version emitted rows × cols composables — roughly ten thousand on a 1080p
+    // phone — and invalidated every one of them each tick. Same grid, same
+    // seeding, same 12fps cadence; only the emission changed.
     Box(
         modifier = modifier.background(Color(0xFF1A1A1A))
     ) {
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val cellSize = 6.dp
-            val cols = (maxWidth / cellSize).toInt().coerceAtLeast(1)
-            val rows = (maxHeight / cellSize).toInt().coerceAtLeast(1)
-
-            val rng = remember(tick) { Random(tick * 7919L) }
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val cellPx = 6.dp.toPx()
+            val cols = (size.width / cellPx).toInt() + 1
+            val rows = (size.height / cellPx).toInt() + 1
+            val rng = Random(tick * 7919L)
 
             for (row in 0 until rows) {
                 for (col in 0 until cols) {
                     val gray = rng.nextInt(60, 200)
                     val alpha = rng.nextFloat() * 0.7f + 0.1f
-                    Box(
-                        modifier = Modifier
-                            .offset(x = cellSize * col, y = cellSize * row)
-                            .size(cellSize)
-                            .background(Color(gray, gray, gray, (alpha * 255).toInt()))
+                    drawRect(
+                        color = Color(gray / 255f, gray / 255f, gray / 255f, alpha),
+                        topLeft = Offset(col * cellPx, row * cellPx),
+                        size = Size(cellPx, cellPx),
                     )
                 }
             }
@@ -334,6 +338,10 @@ private fun DormancyRadCell(
  * Rendered in place of the standard calculator layout (not on top), so no
  * letterbox borders show through and nothing else can intrude.
  */
+/** Plays at the top of dormancy: counts, a beat, screentime, a beat, delete. */
+private val DORMANCY_OPENING = listOf("counts", "screentime", "delete")
+private const val DORMANCY_CLIP_GAP = 5000L
+
 @Composable
 fun DormancyScreen(
     state: MutableState<CalculatorState>,
@@ -344,6 +352,21 @@ fun DormancyScreen(
     modifier: Modifier = Modifier
 ) {
     val context = currentAppContext()
+
+    // The three things it says as dormancy sets in, in order, with a beat between
+    // each. Keyed to Unit so it runs once when the screen appears — re-entering
+    // dormancy later starts it again, which is the intent: it is the opening of
+    // the state, not a one-off in the save file.
+    LaunchedEffect(Unit) {
+        for ((i, clip) in DORMANCY_OPENING.withIndex()) {
+            if (i > 0) kotlinx.coroutines.delay(DORMANCY_CLIP_GAP)
+            val sp = createSoundPlayer(Sounds.path(clip).orEmpty())
+            try { sp?.start() } catch (_: Throwable) {}
+            kotlinx.coroutines.delay((sp?.duration?.toLong() ?: 3000L))
+            try { sp?.stop(); sp?.release() } catch (_: Throwable) {}
+        }
+    }
+
     // Local-only: tracks which keyboard cells the user has clicked away
     // during dormancy. Not persisted — on app restart the keyboard re-fills
     // and the user can clear it again. The "additional" grid above keeps its

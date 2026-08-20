@@ -49,12 +49,20 @@ import platform.CoreMedia.CMSampleBufferGetImageBuffer
 import platform.CoreMedia.CMSampleBufferRef
 import platform.CoreVideo.CVPixelBufferGetBaseAddress
 import platform.CoreVideo.CVPixelBufferGetBytesPerRow
+import platform.CoreVideo.CVPixelBufferGetPixelFormatType
+import platform.CoreVideo.kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+import platform.CoreVideo.CVPixelBufferRef
+import platform.CoreVideo.CVPixelBufferIsPlanar
+import platform.CoreVideo.CVPixelBufferGetBytesPerRowOfPlane
+import platform.CoreVideo.CVPixelBufferGetBaseAddressOfPlane
 import platform.CoreVideo.CVPixelBufferGetHeight
 import platform.CoreVideo.CVPixelBufferGetWidth
 import platform.CoreVideo.CVPixelBufferLockBaseAddress
 import platform.CoreVideo.CVPixelBufferUnlockBaseAddress
 import platform.CoreVideo.kCVPixelBufferPixelFormatTypeKey
 import platform.CoreVideo.kCVPixelFormatType_32BGRA
+import platform.Foundation.NSNumber
+import com.fictioncutshort.justacalculator.platform.logWarn
 import platform.Foundation.NSError
 import platform.QuartzCore.CATransaction
 import platform.UIKit.UIImage
@@ -204,12 +212,30 @@ private class FrameDelegate(
 
         CVPixelBufferLockBaseAddress(pixelBuffer, 0u)
         try {
-            val base = CVPixelBufferGetBaseAddress(pixelBuffer) ?: return
-            val bytes = base.reinterpret<UByteVar>()
+            // NOT `?: return`. CVPixelBufferGetBaseAddress is documented to return
+            // NULL for a PLANAR buffer — the data lives behind the per-plane
+            // accessors instead — so bailing here would drop every YUV frame
+            // before the format branch below ever got to look at it.
+            val bytes = CVPixelBufferGetBaseAddress(pixelBuffer)?.reinterpret<UByteVar>()
             val width = CVPixelBufferGetWidth(pixelBuffer).toInt()
             val height = CVPixelBufferGetHeight(pixelBuffer).toInt()
             val stride = CVPixelBufferGetBytesPerRow(pixelBuffer).toInt()
             if (width <= 0 || height <= 0) return
+            // Take the frame in whatever format the camera actually hands over.
+            // Asking for 32BGRA in videoSettings is not reliable from Kotlin —
+            // the dictionary has to bridge to ObjC and, when it does not,
+            // AVFoundation silently keeps its default biplanar YUV with no error
+            // at all. Reading that as BGRA produced the smeared, skewed picture
+            // with a green band; refusing it produced no picture. So: handle
+            // both, and let the format decide which reader runs.
+            val format = CVPixelBufferGetPixelFormatType(pixelBuffer)
+            val planar = CVPixelBufferIsPlanar(pixelBuffer)
+            // Interleaved formats genuinely need that base pointer.
+            if (!planar && bytes == null) return
+            if (!warnedAboutFormat) {
+                warnedAboutFormat = true
+                logWarn("Camera", "frame format=$format planar=$planar ${width}x$height")
+            }
 
             if (samples != null && rows > 0 && cols > 0) {
                 val out = IntArray(rows * cols)
@@ -219,12 +245,17 @@ private class FrameDelegate(
                     for (col in 0 until cols) {
                         val px = (col * cellW + cellW / 2).coerceAtMost(width - 1)
                         val py = (row * cellH + cellH / 2).coerceAtMost(height - 1)
-                        val offset = py * stride + px * 4
-                        // 32BGRA: blue, green, red, alpha.
-                        val b = bytes[offset].toInt()
-                        val g = bytes[offset + 1].toInt()
-                        val r = bytes[offset + 2].toInt()
-                        out[row * cols + col] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                        val rgb = if (planar) {
+                            yuvPixel(pixelBuffer, px, py, format)
+                        } else {
+                            val offset = py * stride + px * 4
+                            // 32BGRA: blue, green, red, alpha.
+                            val b = bytes!![offset].toInt()
+                            val g = bytes[offset + 1].toInt()
+                            val r = bytes[offset + 2].toInt()
+                            (r shl 16) or (g shl 8) or b
+                        }
+                        out[row * cols + col] = (0xFF shl 24) or rgb
                     }
                 }
                 samples(out)
@@ -237,7 +268,14 @@ private class FrameDelegate(
                 // unless asked otherwise. Only the front camera's mirroring is
                 // applied here, to both image and coordinates so they agree.
                 val detected = detectFaces(pixelBuffer, width, height)
-                val image = bgraToImageBitmap(bytes, width, height, stride, mirror)
+                val image = if (planar) {
+                    biplanarToImageBitmap(pixelBuffer, width, height, format, mirror)
+                } else {
+                    bgraToImageBitmap(bytes!!, width, height, stride, mirror)
+                }
+                // A planar buffer whose planes could not be mapped: skip this
+                // frame rather than publish a face frame with no picture in it.
+                if (image == null) return
                 faces(
                     FaceFrame(
                         faces = detected
@@ -347,8 +385,16 @@ actual fun PlatformCameraSurface(
                 videoOutput.alwaysDiscardsLateVideoFrames = true
                 // BGRA rather than the default YUV, so the sampler reads colour
                 // components directly instead of converting a frame at a time.
+                // The value has to be an NSNumber. kCVPixelFormatType_32BGRA is a
+                // raw OSType (UInt); handing that straight to an ObjC dictionary
+                // does not necessarily bridge, and AVFoundation answers an
+                // unreadable videoSettings by silently keeping its DEFAULT format
+                // — biplanar YUV. The frame reader below assumes 4-byte BGRA, so
+                // that shows up as a smeared, diagonally-skewed picture with a
+                // green/magenta band where the chroma plane starts.
                 videoOutput.videoSettings = mapOf(
-                    kCVPixelBufferPixelFormatTypeKey to kCVPixelFormatType_32BGRA,
+                    kCVPixelBufferPixelFormatTypeKey to
+                        NSNumber(unsignedInt = kCVPixelFormatType_32BGRA),
                 )
                 val delegate = FrameDelegate(scanRows, scanCols, mirror = useFrontCamera)
                 delegate.onSamples = samplesCallback
@@ -411,6 +457,86 @@ private fun DetectedFace.mirroredIn(width: Int): DetectedFace {
         rollDegrees = -rollDegrees,
     )
 }
+
+
+/**
+ * BT.601 YCbCr -> RGB for the two biplanar formats AVFoundation hands out by
+ * default ('420v' video-range and '420f' full-range).
+ *
+ * Plane 0 is luma at full resolution; plane 1 is Cb/Cr interleaved at half
+ * resolution in both axes, which is why the chroma index halves x and y. Each
+ * plane carries its OWN stride — they are not the same number, and using
+ * CVPixelBufferGetBytesPerRow (which reports plane 0's) for both is a classic
+ * way to get a skewed picture.
+ */
+private fun yuvToRgb(yy: Int, cb: Int, cr: Int, videoRange: Boolean): Int {
+    // Video range packs luma into 16..235; full range uses the whole byte.
+    val y = if (videoRange) ((yy - 16).coerceAtLeast(0) * 255) / 219 else yy
+    val u = cb - 128
+    val v = cr - 128
+    val r = (y + 1.402f * v).toInt().coerceIn(0, 255)
+    val g = (y - 0.344136f * u - 0.714136f * v).toInt().coerceIn(0, 255)
+    val b = (y + 1.772f * u).toInt().coerceIn(0, 255)
+    return (r shl 16) or (g shl 8) or b
+}
+
+private fun isVideoRange(format: UInt): Boolean =
+    format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+
+/** One pixel out of a biplanar buffer, as 0xRRGGBB. */
+@OptIn(ExperimentalForeignApi::class)
+private fun yuvPixel(pb: CVPixelBufferRef?, x: Int, y: Int, format: UInt): Int {
+    val yBase = CVPixelBufferGetBaseAddressOfPlane(pb, 0u)?.reinterpret<UByteVar>() ?: return 0
+    val cBase = CVPixelBufferGetBaseAddressOfPlane(pb, 1u)?.reinterpret<UByteVar>() ?: return 0
+    val yStride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0u).toInt()
+    val cStride = CVPixelBufferGetBytesPerRowOfPlane(pb, 1u).toInt()
+    val luma = yBase[y * yStride + x].toInt()
+    val ci = (y / 2) * cStride + (x / 2) * 2
+    return yuvToRgb(luma, cBase[ci].toInt(), cBase[ci + 1].toInt(), isVideoRange(format))
+}
+
+/** Whole biplanar frame -> ImageBitmap, optionally mirrored. */
+@OptIn(ExperimentalForeignApi::class)
+private fun biplanarToImageBitmap(
+    pb: CVPixelBufferRef?,
+    width: Int,
+    height: Int,
+    format: UInt,
+    mirror: Boolean,
+): ImageBitmap? {
+    val yBase = CVPixelBufferGetBaseAddressOfPlane(pb, 0u)?.reinterpret<UByteVar>() ?: return null
+    val cBase = CVPixelBufferGetBaseAddressOfPlane(pb, 1u)?.reinterpret<UByteVar>() ?: return null
+    val yStride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0u).toInt()
+    val cStride = CVPixelBufferGetBytesPerRowOfPlane(pb, 1u).toInt()
+    val videoRange = isVideoRange(format)
+
+    val out = ByteArray(width * height * 4)
+    for (y in 0 until height) {
+        val yRow = y * yStride
+        val cRow = (y / 2) * cStride
+        val destRow = y * width * 4
+        for (x in 0 until width) {
+            val ci = cRow + (x / 2) * 2
+            val rgb = yuvToRgb(
+                yBase[yRow + x].toInt(), cBase[ci].toInt(), cBase[ci + 1].toInt(), videoRange,
+            )
+            val dest = destRow + (if (mirror) width - 1 - x else x) * 4
+            // Skia N32 is BGRA on this platform — same order bgraToImageBitmap writes.
+            out[dest] = (rgb and 0xFF).toByte()
+            out[dest + 1] = ((rgb shr 8) and 0xFF).toByte()
+            out[dest + 2] = ((rgb shr 16) and 0xFF).toByte()
+            out[dest + 3] = 0xFF.toByte()
+        }
+    }
+
+    val bitmap = Bitmap()
+    bitmap.allocN32Pixels(width, height, opaque = true)
+    bitmap.installPixels(out)
+    return bitmap.asComposeImageBitmap()
+}
+
+/** One-shot guard so a bad pixel format logs once, not once per frame. */
+private var warnedAboutFormat = false
 
 /**
  * Copies a BGRA buffer into an ImageBitmap, optionally mirrored.

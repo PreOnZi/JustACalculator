@@ -51,6 +51,7 @@ actual object Gl {
     actual val GL_FLOAT: Int = platform.gles3.GL_FLOAT.toInt()
     actual val GL_FRAGMENT_SHADER: Int = platform.gles3.GL_FRAGMENT_SHADER.toInt()
     actual val GL_FRAMEBUFFER: Int = platform.gles3.GL_FRAMEBUFFER.toInt()
+    actual val GL_FRAMEBUFFER_BINDING: Int = platform.gles3.GL_FRAMEBUFFER_BINDING.toInt()
     actual val GL_FRAMEBUFFER_COMPLETE: Int = platform.gles3.GL_FRAMEBUFFER_COMPLETE.toInt()
     actual val GL_LEQUAL: Int = platform.gles3.GL_LEQUAL.toInt()
     actual val GL_LESS: Int = platform.gles3.GL_LESS.toInt()
@@ -84,6 +85,13 @@ actual object Gl {
     actual fun glBindBuffer(target: Int, buffer: Int) = platform.gles3.glBindBuffer(target.toUInt(), buffer.toUInt())
     actual fun glBindBufferBase(target: Int, index: Int, buffer: Int) = platform.gles3.glBindBufferBase(target.toUInt(), index.toUInt(), buffer.toUInt())
     actual fun glBindFramebuffer(target: Int, framebuffer: Int) = platform.gles3.glBindFramebuffer(target.toUInt(), framebuffer.toUInt())
+    actual fun glGetIntegerv(pname: Int, out: IntArray, offset: Int) {
+        kotlinx.cinterop.memScoped {
+            val buf = allocArray<kotlinx.cinterop.IntVar>(1)
+            platform.gles3.glGetIntegerv(pname.toUInt(), buf)
+            out[offset] = buf[0]
+        }
+    }
     actual fun glBindRenderbuffer(target: Int, renderbuffer: Int) = platform.gles3.glBindRenderbuffer(target.toUInt(), renderbuffer.toUInt())
     actual fun glBindTexture(target: Int, texture: Int) = platform.gles3.glBindTexture(target.toUInt(), texture.toUInt())
     actual fun glBindVertexArray(array: Int) = platform.gles3.glBindVertexArray(array.toUInt())

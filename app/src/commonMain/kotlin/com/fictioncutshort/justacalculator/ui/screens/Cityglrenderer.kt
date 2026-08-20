@@ -5,6 +5,7 @@ import com.fictioncutshort.justacalculator.gl.throttleRenderThread
 import com.fictioncutshort.justacalculator.gl.toGlBuffer
 import kotlin.concurrent.Volatile
 import com.fictioncutshort.justacalculator.platform.nowMillis
+import com.fictioncutshort.justacalculator.platform.supportsOffscreenFeeds
 import com.fictioncutshort.justacalculator.platform.logWarn
 import com.fictioncutshort.justacalculator.gl.uploadTextureFromAsset
 import com.fictioncutshort.justacalculator.gl.GlRenderer
@@ -51,15 +52,64 @@ class CityGLRenderer : GlRenderer {
     // The city's cream is already 0.96 albedo, so key + ambient must stay at or
     // under 1.0 or every sunlit face clips to flat white.
     private val SUN_STRENGTH  = 0.62f
-    private val MOON_STRENGTH = 0.40f
+    // The moon was doing too much of the work: the city read as dusk rather than
+    // night. Pulled back so the dark is genuinely dark and the torch has something
+    // to do — the ambient below came down with it.
+    private val MOON_STRENGTH = 0.20f
+
+    // The torch. Cold and slightly blue against the sodium-warm street lamps, so
+    // the two never read as the same light. Range sits a little past a lamp's pool
+    // (190) — far enough to walk by, short enough to leave the city dark.
+    private val FLASH_COL   = floatArrayOf(0.60f, 0.73f, 1.00f)
+    private val FLASH_RANGE = 340f
+
+    // The hold's cell cameras: how far out into the room they hang, and how high
+    // above the cell floor. 55 is the player's own eye height, so each one meets
+    // whoever is behind the bars at their level.
+    /** How far behind the bars the cell's standing point sits. */
+    // How far a cell's barrier runs past its outermost bar, at each end. See the
+    // barrier itself for why it cannot stop at the bar centres.
+    private val HOLD_BAR_OVERHANG = 16f
+    private val HOLD_CELL_DEPTH   = 40f
+    private val HOLD_CAM_STANDOFF = 46f
+    private val HOLD_CAM_EYE      = 55f
+
+    /**
+     * How far below the drum's floor the underground stops being drawn as the
+     * drum's see-through shell and becomes solid, in MODEL units.
+     *
+     * The shell is transparent from inside so the city stays visible past it, and
+     * every underground wall used to qualify (shellR is the drum's own ~31-unit
+     * radius; the tunnel reaches 144), which is why the hold's walls showed the
+     * lit second room straight through them. The top of the tunnel is wanted that
+     * way though, so only what lies deeper than this is forced opaque.
+     *
+     * Set to 5 — i.e. the drum floor itself — so NOTHING underground is see-through.
+     * Keeping a transparent band at the top of the tunnel kept catching the hold's
+     * corners and the run to the second room, because a triangle is classified by
+     * its centroid and the tall wall panels there straddle any height line you pick.
+     * Raise it again only if the band can be made to follow the tunnel rather than a
+     * depth.
+     */
+    private val SHELL_OPAQUE_DEPTH = 5f
 
     // Sky bodies are re-centred on the camera every frame, so they behave like
     // bodies at infinity: never closer, always the same bearing, with the city
     // passing in front of them as the player walks.
     private val SKY_DIST = 2200f
 
-    // How far a lamp / lit window throws light.
-    private val LAMP_LIGHT_RADIUS   = 190f
+    // How far a lamp / lit window throws light. The lamp reaches further than it
+    // used to: it is now the ONLY thing lighting the street beneath it, since the
+    // painted ground disc that used to fake that pool is gone.
+    // The hold's cone lamp is the only thing lighting a 420 x 275 room with the
+    // torch forced off, so it has to reach the far corners (~265 units from the
+    // cone) with something left over — the falloff is quadratic.
+    private val HOLD_CONE_LIGHT_RADIUS   = 520f
+    private val HOLD_SCREEN_LIGHT_RADIUS = 190f
+    // The damaged room's monitor keeps the reach it always had; only the cone
+    // was asked to light a whole room.
+    private val DAMAGED_SCREEN_LIGHT_RADIUS = 230f
+    private val LAMP_LIGHT_RADIUS   = 265f
     private val WINDOW_LIGHT_RADIUS = 230f
 
     private fun norm(x: Float, y: Float, z: Float): FloatArray {
@@ -71,6 +121,17 @@ class CityGLRenderer : GlRenderer {
     @Volatile var camX = 0f;      @Volatile var camY = 1300f
     @Volatile var camZ = 0f;      @Volatile var camYaw = 0f
     @Volatile var camPitch = -90f; @Volatile var lavaShift = 0f
+    /** The framebuffer the host draws the screen into — see [captureDefaultFbo]. */
+    private var defaultFbo = 0
+    private var defaultFboKnown = false
+
+    private fun captureDefaultFbo() {
+        val fb = IntArray(1)
+        Gl.glGetIntegerv(Gl.GL_FRAMEBUFFER_BINDING, fb, 0)
+        defaultFbo = fb[0]
+        defaultFboKnown = true
+        cctv.defaultFbo = fb[0]
+    }
     @Volatile var fov = 80f;       @Volatile var aerialMode = true
     @Volatile var introLookZ = 0f
     @Volatile var aerialBlend = 1f
@@ -115,6 +176,11 @@ class CityGLRenderer : GlRenderer {
     private val modelTextures = HashMap<String, Int>()
     private var uLit=0; private var uDark=0; private var uKeyDir=0; private var uKeyCol=0
     private var uCamPos=0; private var uLightPos=0; private var uLightRad=0
+    private var uLightCold=0
+    private var uFlash=0; private var uFlashDir=0; private var uUnder=0
+
+    /** Torch brightness, 0..1. Driven automatically — see [updateFlashlight]. */
+    @Volatile var flashLevel = 0f
     // False if GL_OES_standard_derivatives is unavailable — we then run the old
     // flat shader and skip all lighting work.
     private var lightingOn = true
@@ -127,6 +193,9 @@ class CityGLRenderer : GlRenderer {
     private val lampLights = mutableListOf<FloatArray>()
     private val lightPosBuf = FloatArray(MAX_LIGHTS * 3)
     private val lightRadBuf = FloatArray(MAX_LIGHTS)
+    // 0 = a city lamp: warm, and only burning after dusk. 1 = a light that is
+    // underground: cold white-blue, and on whatever the hour is overhead.
+    private val lightColdBuf = FloatArray(MAX_LIGHTS)
 
     private data class Mesh(
         val buf: GlFloatBuffer, val mode: Int, val cnt: Int,
@@ -298,6 +367,7 @@ class CityGLRenderer : GlRenderer {
     private var lampOnGroups:  List<ObjGroup> = emptyList()
     private var lampOffGroups: List<ObjGroup> = emptyList()
     private var cameraOnGroups: List<ObjGroup> = emptyList()
+    private var tvRickGroups: List<ObjGroup> = emptyList()
     private var doorGroups:    List<ObjGroup> = emptyList()
     private var bridgeGroups:   Array<List<ObjGroup>> = arrayOf()   // 9 custom bridge pieces
     private var muteButtonGroups: List<ObjGroup> = emptyList()      // building-10 mute button body
@@ -376,6 +446,40 @@ class CityGLRenderer : GlRenderer {
         val h: Float,                     // world height (scales the door band)
         val floors: List<FloatArray>,
         val walls: FloatArray,            // stride 6: x0,z0,x1,z1,yBot,yTop
+        /**
+         * How close the player may get to a wall here. The ruins use the default;
+         * Building 10's tunnel needs less, because its doorways are far tighter
+         * than a ruin's. The hold's is ~24 world units from centre to jamb, so at
+         * the standard 10 the clear width is only ~27 and you have to thread it
+         * dead centre — which reads as an invisible wall the moment you approach
+         * at an angle.
+         */
+        val collideR: Float = 10f,
+        /**
+         * Head clearance in world units: a wall whose base sits higher than this
+         * above the floor is an overhead you walk under, not something you hit.
+         *
+         * The ruins derive it from [h] (26% of the building), which works because
+         * a ruin's height IS roughly one storey. Building 10's model is one mesh
+         * spanning the drum AND the tunnel system 60 units below it, so [h] comes
+         * out around 745 world units and the derived band around 194 — taller than
+         * every tunnel, which made every doorway lintel a solid wall. -1 keeps the
+         * old fraction; the tunnel passes a real body height instead.
+         */
+        val duckH: Float = -1f,
+        /**
+         * How far the player may step DOWN onto a lower surface in one go. Stepping
+         * UP stays capped at 30 everywhere — you never climb a cliff.
+         *
+         * The ruins keep 30 both ways: they're sealed shells where a big drop means
+         * the mesh has a hole, and following it drops the player through the floor.
+         * The tunnel is the opposite case — it arrives at the TOP of the hold's
+         * wall and the floor is ~135 units below, a deliberate drop into the room.
+         * With only 30 the player can't acquire that floor, so they keep the tunnel's
+         * height, and at that height the hold's walls are at body level and read as
+         * an invisible wall across an obviously open doorway.
+         */
+        val stepDown: Float = 30f,
     )
     private val damagedList = ArrayList<DamagedInterior>()
     val damagedInteriors: List<DamagedInterior> get() = damagedList
@@ -391,10 +495,38 @@ class CityGLRenderer : GlRenderer {
     @Volatile var showRedButton = false
     /** Centre of the highest walkable platform in the DEL ruin. Null until baked. */
     @Volatile var delRoomTop: FloatArray? = null
-    /** Where the red button rests: on the DEL room's top floor, sitting on the surface. */
-    val redButtonWorld: FloatArray? get() = delRoomTop?.let {
-        floatArrayOf(it[0], it[1] + RED_BUTTON_SPAN * 0.10f, it[2])
+    /** Centre of the DEL ruin's footprint — the button is nudged toward it. */
+    @Volatile var delRoomCentre: FloatArray? = null
+    /**
+     * Where the red button rests. Its base sits ON the floor (the vertex transform
+     * anchors the model's underside, so no lift is needed — adding one just made
+     * it hover), and it is pulled [RED_BUTTON_INSET] of the way from the sampled
+     * platform centre toward the ruin's middle, because the sampled centroid can
+     * land near a platform edge on an L-shaped floor.
+     */
+    val redButtonWorld: FloatArray? get() {
+        val t = delRoomTop ?: return null
+        val c = delRoomCentre
+        if (c == null) return floatArrayOf(t[0], t[1] + RED_BUTTON_LIFT, t[2])
+        return floatArrayOf(
+            t[0] + (c[0] - t[0]) * RED_BUTTON_INSET + RED_BUTTON_OFFSET_X,
+            t[1] + RED_BUTTON_LIFT,
+            t[2] + (c[1] - t[2]) * RED_BUTTON_INSET + RED_BUTTON_OFFSET_Z,
+        )
     }
+    private val RED_BUTTON_INSET = 0.45f
+    /** Hand-placement nudge on top of the inset: +X is east, +Z is south. */
+    private val RED_BUTTON_OFFSET_X = 40f
+    private val RED_BUTTON_OFFSET_Z = 40f
+    /**
+     * Lift off the sampled platform height. delRoomTop is the AVERAGE height of
+     * the top-floor triangles, so on an uneven platform it can sit below the
+     * surface the player actually walks on — which buried the button. Its own
+     * thickness is enough to clear that.
+     */
+    private val RED_BUTTON_LIFT = 7f
+    /** How high standing on the button lifts the eye — its own scaled thickness. */
+    val redButtonStepHeight: Float get() = RED_BUTTON_SPAN * 0.18f
 
     // Bullet = smallest Building-6 boulder (ball1), auto-fit + centred like the gun.
     private var bulletGroups: List<ObjGroup> = emptyList()
@@ -540,6 +672,10 @@ class CityGLRenderer : GlRenderer {
         uniform vec3  uCamPos;
         uniform vec3  uLightPos[$MAX_LIGHTS];
         uniform float uLightRad[$MAX_LIGHTS];
+        uniform float uLightCold[$MAX_LIGHTS];
+        uniform float uFlash;
+        uniform vec3  uFlashDir;
+        uniform float uUnder;
         uniform sampler2D uTex;
         uniform float uTexOn;
         varying float vDepth;
@@ -571,7 +707,7 @@ class CityGLRenderer : GlRenderer {
                 // about the lighting depends on where the player is standing.
                 float ndl = max(dot(N, uKeyDir), 0.0);
                 vec3 key = uKeyCol * ndl;
-                vec3 amb = mix(vec3(0.19, 0.22, 0.33), vec3(0.38, 0.39, 0.43), day);
+                vec3 amb = mix(vec3(0.055, 0.060, 0.085), vec3(0.38, 0.39, 0.43), day);
 
                 // Lamps and the lit windows of unexplored buildings. Each carries
                 // its own radius; a radius of 0 means "off" (branch-free).
@@ -585,12 +721,59 @@ class CityGLRenderer : GlRenderer {
                     float att = clamp(1.0 - dist / rad, 0.0, 1.0);
                     att = att * att * on;
                     float nl = max(dot(N, d / max(dist, 0.001)), 0.0);
-                    lamps += vec3(1.00, 0.82, 0.45) * att * (0.35 + 0.65 * nl) * 0.75;
+                    // Two kinds of light share this loop. A street lamp is warm
+                    // and only exists after dusk, so it is scaled by uDark. A
+                    // light underground is cold, and uDark says nothing about it
+                    // — the hold is 350 units of rock below the sky whatever the
+                    // hour is. Gating those on uDark is what left the hold pitch
+                    // black: crossing the bridge sets darknessLevel to 0, so the
+                    // cone was uploaded every frame and then multiplied away.
+                    // A cold light is also brighter: uUnder has already zeroed the
+                    // ambient and the key light, so underground this is not one
+                    // contribution among several — it is the entire image.
+                    vec3  lcol = mix(vec3(1.00, 0.82, 0.45), vec3(0.62, 0.78, 1.00), uLightCold[i]);
+                    float gain = mix(uDark, 1.9, uLightCold[i]);
+                    lamps += lcol * att * (0.35 + 0.65 * nl) * 1.15 * gain;
                 }
                 // Several can overlap; cap the total so a junction doesn't blow out.
-                lamps = min(lamps, vec3(1.3)) * uDark;
+                lamps = min(lamps, vec3(1.8));
 
-                col = albedo * (amb + key + lamps);
+                // The torch. vRel is already camera-relative, so the direction from
+                // the lens to this fragment is just its normalized self, and the
+                // distance is its length — no extra uniforms, no world-space round
+                // trip. Cone edges are soft so the beam has no cut-out rim.
+                vec3 flash = vec3(0.0);
+                if (uFlash > 0.001) {
+                    float fdist = length(vRel);
+                    vec3  fdir  = vRel / max(fdist, 0.001);
+                    // Two nested cones: a tight hot centre inside a soft spill, so
+                    // the beam reads unmistakably as pointing where you're facing
+                    // instead of as a general brightening around the player.
+                    float axis  = dot(fdir, uFlashDir);
+                    float spill = smoothstep(0.62, 0.88, axis);
+                    float hot   = smoothstep(0.90, 0.985, axis);
+                    float cone  = spill * 0.55 + hot * 0.85;
+                    float fatt  = clamp(1.0 - fdist / ${FLASH_RANGE}, 0.0, 1.0);
+                    fatt = fatt * fatt;
+                    float fnl = max(dot(N, -fdir), 0.0);
+                    flash = vec3(${FLASH_COL[0]}, ${FLASH_COL[1]}, ${FLASH_COL[2]})
+                            * cone * fatt * (0.25 + 0.75 * fnl) * uFlash * 1.9;
+                }
+
+                // Night pulls the colour out of whatever is lit only by the sky and
+                // the moon. The lamps and the torch are added AFTER this, so the
+                // light sources keep their hue while the city around them goes grey.
+                vec3 sky = albedo * (amb + key);
+                float skyLuma = dot(sky, vec3(0.299, 0.587, 0.114));
+                sky = mix(sky, vec3(skyLuma), uDark * 0.62);
+
+                // Underground there is no sky and no moon — both are 350 units of
+                // rock away. uUnder eases the whole ambient+key term out as the
+                // player descends, which leaves the tunnels and the hold lit by
+                // nothing but the torch (and any lamp actually down there).
+                sky *= (1.0 - uUnder);
+
+                col = sky + albedo * (lamps + flash);
             } else {
                 // Unlit - lines, lava, the arcs, glows, shadow blobs, the sky, and
                 // the whole aerial intro. Keeps the original fake vertical-gradient
@@ -761,8 +944,15 @@ class CityGLRenderer : GlRenderer {
             uCamPos   = Gl.glGetUniformLocation(prog, "uCamPos")
             uLightPos = Gl.glGetUniformLocation(prog, "uLightPos")
             uLightRad = Gl.glGetUniformLocation(prog, "uLightRad")
+            uLightCold = Gl.glGetUniformLocation(prog, "uLightCold")
+            uFlash    = Gl.glGetUniformLocation(prog, "uFlash")
+            uFlashDir = Gl.glGetUniformLocation(prog, "uFlashDir")
+            uUnder    = Gl.glGetUniformLocation(prog, "uUnder")
         }
-        cctv.init()
+        // Skipped on iOS — see supportsOffscreenFeeds. Not just unused: never
+        // creating the framebuffer means nothing can rebind it, so the render
+        // target is left alone entirely.
+        if (supportsOffscreenFeeds) cctv.init()
         loadModels()
         buildScene()
     }
@@ -771,6 +961,7 @@ class CityGLRenderer : GlRenderer {
         try { lampOnGroups   = ObjLoader.load("models/lampon.obj",   "models/lampon.mtl") } catch (_: Throwable) {}
         try { lampOffGroups  = ObjLoader.load("models/lampoff.obj",  "models/lampoff.mtl") } catch (_: Throwable) {}
         try { cameraOnGroups = ObjLoader.load("models/cameraon.obj", "models/cameraon.mtl") } catch (_: Throwable) {}
+        try { tvRickGroups = ObjLoader.load("models/tvrick.obj", "models/tvrick.mtl") } catch (_: Throwable) {}
         try {
             val night = ObjLoader.load("models/cameranight.obj", "models/cameranight.mtl")
             // Only the per-material colors matter — geometry is identical to cameraon.
@@ -785,6 +976,8 @@ class CityGLRenderer : GlRenderer {
         }
         try { muteButtonGroups = ObjLoader.load("models/mutebutton.obj", "models/mutebutton.mtl") } catch (_: Throwable) {}
         try { muteButtonBounds = ObjLoader.loadBounds("models/mutebutton.obj") } catch (_: Throwable) {}
+        // The hold and its tunnel now live inside mutebutton.obj itself, authored
+        // in place — there is no second model to load, scale, rotate or anchor.
         try { damagedGroupsA  = ObjLoader.load("models/builddamage/buildd1.obj",  "models/builddamage/buildd1.mtl") } catch (_: Throwable) {}
         try { damagedGroupsB  = ObjLoader.load("models/builddamage/buildd2.obj",  "models/builddamage/buildd2.mtl") } catch (_: Throwable) {}
         try { damagedGroupsC  = ObjLoader.load("models/builddamage/buildd3.obj",  "models/builddamage/buildd3.mtl") } catch (_: Throwable) {}
@@ -858,6 +1051,8 @@ class CityGLRenderer : GlRenderer {
 
     override fun onSurfaceChanged(w: Int, h: Int) {
         Gl.glViewport(0, 0, w, h); sw = w; sh = h
+        // The surface was (re)created, so the drawable's framebuffer may be new.
+        captureDefaultFbo()
     }
     private var sw = 1; private var sh = 1
 
@@ -866,6 +1061,12 @@ class CityGLRenderer : GlRenderer {
     // world stammers along with the glitched voiceover. Cleared once Building 3 is done.
     @Volatile var glitchStutter = false
     override fun onDrawFrame() {
+        // Learn the real screen target once, not every frame. On Android it is 0;
+        // on iOS the drawable lives on a non-zero FBO owned by the view. It can
+        // only change when the surface does, so onSurfaceChanged re-reads it and
+        // this is just the first-frame case — keeping a per-frame driver query
+        // (and, on iOS, a per-frame cinterop allocation) out of the hot path.
+        if (!defaultFboKnown) captureDefaultFbo()
         // Frame-rate cap (~33 fps). The scene rendered continuously at full device
         // frame-rate, which ran the GPU hot and drained the battery; pacing the GL
         // thread here roughly halves that sustained load with no visible cost.
@@ -947,6 +1148,10 @@ class CityGLRenderer : GlRenderer {
         Gl.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
         Gl.glUniform1f(uAerial, aerialBlend)
 
+        // The beam points where the camera points, so this needs the finished view
+        // matrix — it can't ride along with the other lighting uniforms further up.
+        if (lightingOn) updateFlashlight(view)
+
         // Frustum for the main camera, so the mesh passes below can skip
         // anything off screen. The machinery already existed for the CCTV feed;
         // the camera the player actually looks through never used it, so every
@@ -967,6 +1172,7 @@ class CityGLRenderer : GlRenderer {
         val insideRad = !aerialMode && radOuterR > 0f &&
             hypot(camX - radBx, camZ - radBz) < radOuterR
 
+
         // ── The collapse ─────────────────────────────────────────────────────
         // Each building's meshes are shifted (and eventually dropped) as one, so
         // the skyline comes apart building by building instead of all at once.
@@ -986,7 +1192,7 @@ class CityGLRenderer : GlRenderer {
         // atlas, and it is the one thing in the frame that costs a second look at
         // the whole scene. Runs BEFORE pass 1 so it can borrow the shader's
         // uniforms and hand them straight back.
-        if (insideRad && cctv.ready) drawCctvFeeds(mvp, col, groupOf)
+        if (insideRad && supportsOffscreenFeeds && cctv.ready) drawCctvFeeds(mvp, col, groupOf)
 
         // ── PASS 1 — opaque + soft-shadow meshes (glow deferred to pass 2)
         var blendMode = 0   // 0=off, 1=alpha (shadows)
@@ -1121,7 +1327,12 @@ class CityGLRenderer : GlRenderer {
             Gl.glEnable(Gl.GL_BLEND)
             Gl.glBlendFunc(Gl.GL_SRC_ALPHA, Gl.GL_ONE_MINUS_SRC_ALPHA)
             val a = (darknessLevel * 0.70f).coerceIn(0f, 1f)
-            Gl.glUniform4f(uCol, 0.010f, 0.016f, 0.045f, a)
+            // Near-neutral now rather than deep blue: the scrim sits over the torch
+            // as well as the city, so a strong tint here put a blue cast on the one
+            // light that is supposed to read cold against the warm lamps. The night
+            // gets its darkness from the ambient and key terms instead, which the
+            // torch can actually push back against — alpha deliberately unchanged.
+            Gl.glUniform4f(uCol, 0.014f, 0.016f, 0.026f, a)
             val quad = nightScrimQuad
             quad.position(0)
             Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, quad)
@@ -1140,7 +1351,7 @@ class CityGLRenderer : GlRenderer {
         // The monitors. Drawn AFTER the night overlay — a screen is a light source,
         // and in a dark room it is the only thing you can see. Depth still holds, so
         // walking behind the desk hides them.
-        if (insideRad && cctv.ready) {
+        if (insideRad && supportsOffscreenFeeds && cctv.ready) {
             cctv.draw(mvp, dkLvl)
             Gl.glUseProgram(prog)
         }
@@ -1606,6 +1817,7 @@ class CityGLRenderer : GlRenderer {
         addLava()
         addGreenNorth()
         addRadButton(80f * buildingHeightScale, scale = RAD_SCALE)
+        addGroundBase()   // after the button: the hole it leaves is holdRegion
         addDebris()
         addStickmen()
         if (bridgePieces > 0) addBridge(bridgePieces)
@@ -1662,7 +1874,10 @@ class CityGLRenderer : GlRenderer {
     // the same way its model is aimed — over a different distance, so no two
     // screens show the same slab of street.
     private fun buildCctvFeeds() {
-        val mounts = cameraMounts
+        // Street cameras only. The hold's cell cameras are mounts too, but a feed
+        // from one would put a pitch-black cell on the drum's monitors in place of
+        // a street — they watch the cells, not the wall.
+        val mounts = cameraMounts.filter { it.size <= 6 }
         if (mounts.isEmpty()) { cctv.feeds = emptyList(); return }
         cctv.feeds = List(CityCctv.CELLS) { i ->
             val m = mounts[i * mounts.size / CityCctv.CELLS]
@@ -1837,9 +2052,37 @@ class CityGLRenderer : GlRenderer {
 
     // ── Ground ────────────────────────────────────────────────────────────────
 
+    /**
+     * The ground slab, with a hole cut where Building 10's tunnel descends.
+     *
+     * Drawn AFTER addRadButton, because the hole is [holdRegion] and that is only
+     * known once the button's model has been placed. Sized to everywhere the
+     * player can stand rather than just the building grid — it used to stop at
+     * x -700..700 / z -1100..700, leaving bare void west of the wall (WALL_X is
+     * -860) and all the way north around Building 10 — and cut open over the
+     * tunnel, which otherwise roofs the descent over with cream and you stand
+     * looking at a slab where the ramp should be.
+     */
+    private fun addGroundBase() {
+        val x0 = -1400f; val x1 = 800f
+        val z0 = -2700f; val z1 = 800f
+        val r = 0.96f; val g = 0.94f; val b = 0.88f
+        val hole = holdHole
+        if (hole == null) {
+            addQ(x0,0f,z0, x1,0f,z0, x1,0f,z1, x0,0f,z1, r,g,b, fog=0.0f)
+            return
+        }
+        val hx0 = hole[0].coerceIn(x0, x1); val hx1 = hole[1].coerceIn(x0, x1)
+        val hz0 = hole[2].coerceIn(z0, z1); val hz1 = hole[3].coerceIn(z0, z1)
+        // Four strips around the opening.
+        addQ(x0,0f,z0,  x1,0f,z0,  x1,0f,hz0, x0,0f,hz0, r,g,b, fog=0.0f)
+        addQ(x0,0f,hz1, x1,0f,hz1, x1,0f,z1,  x0,0f,z1,  r,g,b, fog=0.0f)
+        addQ(x0,0f,hz0, hx0,0f,hz0, hx0,0f,hz1, x0,0f,hz1, r,g,b, fog=0.0f)
+        addQ(hx1,0f,hz0, x1,0f,hz0, x1,0f,hz1, hx1,0f,hz1, r,g,b, fog=0.0f)
+    }
+
     private fun addGround() {
-        addQ(-700f,0f,-1100f, 700f,0f,-1100f, 700f,0f,700f, -700f,0f,700f,
-            0.96f,0.94f,0.88f, fog=0.0f)
+
         val sg = (CELL - 2f*BD) / 2f
         for (rowZ in listOf(lerp(RA,RB,0.5f), lerp(RB,RC,0.5f), lerp(RC,RD,0.5f), lerp(RD,RE,0.5f))) {
             addQ(CITY_W,0.3f,rowZ-sg, CITY_E,0.3f,rowZ-sg, CITY_E,0.3f,rowZ+sg, CITY_W,0.3f,rowZ+sg,
@@ -2509,6 +2752,7 @@ class CityGLRenderer : GlRenderer {
                     cRoomTop = top
                 } else {
                     delRoomTop = top
+                    delRoomCentre = floatArrayOf((bMinX + bMaxX) * 0.5f, (bMinZ + bMaxZ) * 0.5f)
                 }
             }
         } else {
@@ -2566,6 +2810,32 @@ class CityGLRenderer : GlRenderer {
         val lxW=-600f; val lxE=600f
         addRoundedRectFill(lxW, LAVA_Y, LAVA_N, lxE, LAVA_S - 20f,
             12f, 1.0f, 0.32f, 0.04f, fog=0.05f)
+
+        // Side wings. The strip above is a fixed -600..600 and reads well from
+        // the air, but on the ground the city spreads to CITY_W..CITY_E (-690..690
+        // at full pitch) plus the west lane, so the sheet stopped short and left
+        // walkable ground either side of it. Gameplay never had a hole — the
+        // portrait lava test is a pure Z band with no X bounds — but it LOOKED
+        // like you could round the end.
+        //
+        // Tagged aerialSkip, which is skipped while cellStage < 3 or the camera is
+        // aerial: the aerial view keeps exactly the framed strip it always had,
+        // and the wings appear only once the city has spread and the player is
+        // walking. They start slightly inside ±600 so the rounded corners of the
+        // fill above don't leave a notch at the join.
+        run {
+            val zN = LAVA_N
+            val zS = LAVA_S - 20f
+            val west = minOf(WALL_X, CITY_W) - 80f
+            val east = CITY_E + 80f
+            val overlap = 20f
+            addQ(west, LAVA_Y, zN,  lxW + overlap, LAVA_Y, zN,
+                 lxW + overlap, LAVA_Y, zS,  west, LAVA_Y, zS,
+                 1.0f, 0.32f, 0.04f, a=1f, fog=0.05f, aerialSkip = true)
+            addQ(lxE - overlap, LAVA_Y, zN,  east, LAVA_Y, zN,
+                 east, LAVA_Y, zS,  lxE - overlap, LAVA_Y, zS,
+                 1.0f, 0.32f, 0.04f, a=1f, fog=0.05f, aerialSkip = true)
+        }
         // Molten streaks — red/orange, glow so they emit light at night (PASS 2).
         val rnd = kotlin.random.Random(4242L)
         val y = LAVA_Y + 1f
@@ -2995,6 +3265,48 @@ class CityGLRenderer : GlRenderer {
     private val RAD_DOOR_TOP_FRAC = 0.373f  // 12.5 / 33.5 of the drum's height
     @Volatile var radDoorOpen = false
 
+    /**
+     * One entry per cell in the hold: `[insideX, floorY, insideZ, outX, outZ]`,
+     * where the inside point stands a little way behind the bars and (outX, outZ)
+     * points out into the room. Built with the barriers, so the two can never
+     * disagree about where a cell is.
+     */
+    @Volatile var holdCells: List<FloatArray> = emptyList()
+
+    /** World position of the hold's cone, and of the damaged room's screen. */
+    @Volatile var holdConeWorld: FloatArray? = null
+    /** World position of the hold's monitor, by the entrance. */
+    @Volatile var holdScreenWorld: FloatArray? = null
+    @Volatile var damagedScreenWorld: FloatArray? = null
+
+    /** Lit only once the confrontation puts the player in a cell. */
+    @Volatile var holdLightsOn = false
+    /** Swaps the hold's monitor for the tvrick set (the picture already on it). */
+    @Volatile var holdRickOn = false
+    /** Forces the torch off — the cell is lit by the room, not by the player. */
+    @Volatile var flashOff = false
+    /** How far the damaged room comes up out of pitch dark for the confrontation. */
+    @Volatile var confLight = 0f
+
+    /**
+     * World XZ box [minX, maxX, minZ, maxZ] covering everything Building 10's
+     * model puts BELOW its floor — the tunnel and the hold. Null until built.
+     * The city view exempts this area from the lava/city-bounds rules so the
+     * player can leave the drum through the panel.
+     */
+    @Volatile var holdRegion: FloatArray? = null
+
+    /** Debug: collide against the tunnel/hold walls. See the debug menu row. */
+    @Volatile var undergroundWalls = true
+
+    /**
+     * The tighter box actually BELOW the floor — the descent itself. Used to cut
+     * the ground open. [holdRegion] is deliberately larger (it includes the room,
+     * since the tunnel runs under it) and cutting that much ground away would
+     * leave void around the outside of the button.
+     */
+    @Volatile var holdHole: FloatArray? = null
+
     // ── The second, hidden doorway ────────────────────────────────────────────
     // A panel in the drum wall, authored in mutebutton.blend as its own material
     // (Material.072, a tan a shade off the wall around it) and exactly as wide as
@@ -3008,6 +3320,19 @@ class CityGLRenderer : GlRenderer {
     val RAD_DOOR2_DEG = -16.88f
     val RAD_DOOR2_HALF_DEG = 5f      // narrower than the hole, as with door 1
     val RAD_DOOR2_MATERIAL = "Material.072"
+
+    /** The hold's monitor, by the hold entrance. Self-lit once the cells light up. */
+    private val HOLD_SCREEN_MTL = "Material.100"
+    /** The bezel around it. Dropped with the screen when the rick set swaps in. */
+    private val HOLD_BEZEL_MTL  = "Material.099"
+
+    // Placing tvrick.obj over the hold's monitor. Measured, not guessed: the
+    // monitor's screen face normal is (0.636, 0, -0.772) — yaw -39.46° — and its
+    // true box is 4.13 x 2.00 against tvrick's 4.10 x 2.00, i.e. the same scale,
+    // so this is a rotate-and-place with no scaling at all.
+    private val RICK_YAW_DEG = -39.46f
+    private val RICK_PIVOT   = floatArrayOf(0f, 2.24f, -0.32f)      // tvrick Cube.001 centre
+    private val RICK_AT      = floatArrayOf(23.40f, -38.48f, 0.75f) // monitor centre, model space
     @Volatile var secretDoorOpen = false
 
     // The city's mute button is enterable (Building 10), so it's blown up to
@@ -3015,7 +3340,11 @@ class CityGLRenderer : GlRenderer {
     // knee. The landscape decoration keeps 1×.
     private fun addRadButton(h: Float, bx: Float = 0f, bz: Float = -CELL * 5.75f,
                              scale: Float = 1f) {
-        val baseY = 0f               // sits on ground level
+        // Just clear of the ground. The model's floor is its own y=0, and the city
+        // ground slab sits at 0 with its road strips at 0.3 — so placing the room
+        // floor at exactly 0 let the ground draw through it, which is the striped,
+        // stair-stepped floor inside the button. Anything above the strips is fine.
+        val baseY = 3f
         var topY  = baseY + h
         val r0    = 88f * scale      // outer radius
         val rimW  = 60f * scale      // rim width
@@ -3033,16 +3362,35 @@ class CityGLRenderer : GlRenderer {
         val mute = muteButtonGroups
         if (mute.isNotEmpty()) {
             // Building 10 = the player's mutebutton model, scaled to radius r0.
+            //
+            // Measured from the ROOM DRUM alone ("Cylinder"), not from the whole
+            // model. The model now carries the tunnel and the hold as well, which
+            // reach far out in -X and well below the floor in -Y; sizing off the
+            // overall bounds would shrink the room to a third and drop its floor
+            // to the bottom of the hold. Taking the drum keeps the room sitting
+            // exactly where it always has, and the underground parts land wherever
+            // the model says relative to it — which is the whole point of them
+            // being authored in one file.
+            val drum = muteButtonBounds.firstOrNull { it.name == "Cylinder" }
+                ?: muteButtonBounds.filter { it.name.startsWith("Cylinder") }
+                    .minByOrNull { hypot((it.minX + it.maxX) * 0.5f, (it.minZ + it.maxZ) * 0.5f) }
             var mnX=Float.MAX_VALUE; var mxX=-Float.MAX_VALUE
             var mnY=Float.MAX_VALUE; var mxY=-Float.MAX_VALUE
             var mnZ=Float.MAX_VALUE; var mxZ=-Float.MAX_VALUE
-            for (g in mute) { var k=0; while (k < g.verts.size) {
-                val x=g.verts[k]; val y=g.verts[k+1]; val z=g.verts[k+2]
-                if (x<mnX) mnX=x; if (x>mxX) mxX=x; if (y<mnY) mnY=y; if (y>mxY) mxY=y
-                if (z<mnZ) mnZ=z; if (z>mxZ) mxZ=z; k+=3 } }
+            if (drum != null) {
+                mnX=drum.minX; mxX=drum.maxX; mnY=drum.minY; mxY=drum.maxY
+                mnZ=drum.minZ; mxZ=drum.maxZ
+            } else {
+                for (g in mute) { var k=0; while (k < g.verts.size) {
+                    val x=g.verts[k]; val y=g.verts[k+1]; val z=g.verts[k+2]
+                    if (x<mnX) mnX=x; if (x>mxX) mxX=x; if (y<mnY) mnY=y; if (y>mxY) mxY=y
+                    if (z<mnZ) mnZ=z; if (z>mxZ) mxZ=z; k+=3 } }
+            }
             val cxL=(mnX+mxX)*0.5f; val czL=(mnZ+mxZ)*0.5f
             val wdt=maxOf(mxX-mnX, mxZ-mnZ).coerceAtLeast(1e-3f)
             val scl=(2f*r0)/wdt
+            // Anything dipping below the drum's floor is tunnel/hold, not room.
+            val undergroundY = mnY - 5f
             topY = (mxY-mnY)*scl
             // Split each material group into the button's SHELL (the drum wall and
             // its lid) and its INTERIOR (everything standing on the floor — the
@@ -3052,6 +3400,33 @@ class CityGLRenderer : GlRenderer {
             //   · lid    → sits high above the floor clutter
             // The interior props all top out at ~23% of the model's height and
             // stay inside 0.92 of its radius, so these thresholds separate cleanly.
+            // Everything at floor level or below is walkable structure: the room's
+            // own floor, the tunnel's ramp, the hold. Furniture tops sit well above
+            // this and are deliberately left out, or the player would snap onto
+            // tables. The previous rule took only geometry deep underground, which
+            // meant the tunnel had NO floor registered where it meets the door —
+            // so you walked in at city level with nothing underfoot and carried
+            // straight on through the roof.
+            val underWorldY = baseY + 25f
+            // The hold's cone lamp, in MODEL space. Its triangles are pulled out
+            // of the geometry loop below and drawn self-lit, so the thing the
+            // room is lit BY looks like it is on — a point light with no visible
+            // source reads as a bug, not as a lamp. Matched exactly the way
+            // holdConeWorld is (an underground "Cone*" on the hold's side of the
+            // model), so the glow and the light can never end up on different
+            // objects.
+            var coneBox: FloatArray? = null
+            for (ob in muteButtonBounds) {
+                if (ob.minY >= undergroundY || !ob.name.startsWith("Cone")) continue
+                if (((ob.minX + ob.maxX) * 0.5f - cxL) * scl + bx <= -400f) continue
+                coneBox = floatArrayOf(ob.minX, ob.maxX, ob.minY, ob.maxY, ob.minZ, ob.maxZ)
+                break
+            }
+            val underFloors = ArrayList<FloatArray>(512)
+            val underWalls = ArrayList<Float>(2048)
+            var uMinX = 1e9f; var uMaxX = -1e9f; var uMinZ = 1e9f; var uMaxZ = -1e9f
+            var hMinX = 1e9f; var hMaxX = -1e9f; var hMinZ = 1e9f; var hMaxZ = -1e9f
+
             val shellR = (wdt * 0.5f) * 0.94f
             val shellY = (mxY - mnY) * 0.45f
             radDoorTopY = (mxY - mnY) * RAD_DOOR_TOP_FRAC * scl
@@ -3065,12 +3440,26 @@ class CityGLRenderer : GlRenderer {
             val drumH = (mxY - mnY)
             fun isDrum(ob: ObjBounds) =
                 ob.name.startsWith("Cylinder") && (ob.maxY - ob.minY) > drumH * 0.45f
+            // NOTE: this used to match NOTHING. Measured against the shipped model
+            // (wdt 65.76, drumH 33.77) the old span test demanded > 19.73 units,
+            // but the floor slab ("Plane") is only 15.96 across — so it failed,
+            // floated off with the furniture, and the player lost the ground on
+            // the way to the door. Only the drum was ever anchored.
+            //
+            // Rebalanced: the span bar is lowered to catch the slab, and the
+            // height bar is tightened to keep it exclusive. The nearest thing to
+            // a false positive is Mball.003 (span 13.19, height 1.02) — it fails
+            // on height, so a low blob still flies while the ground stays put.
             fun isFloor(ob: ObjBounds): Boolean =
                 (ob.minY - mnY) < drumH * 0.06f &&                          // sits on the floor
-                (ob.maxY - ob.minY) < drumH * 0.05f &&                      // barely any height
-                maxOf(ob.maxX - ob.minX, ob.maxZ - ob.minZ) > wdt * 0.30f   // and wide
+                (ob.maxY - ob.minY) < drumH * 0.01f &&                      // essentially a slab
+                maxOf(ob.maxX - ob.minX, ob.maxZ - ob.minZ) > wdt * 0.20f   // and wide
             // Objects eligible to float (drum + floor/carpet excluded → they stay put).
-            val furnObjs = muteButtonBounds.filter { !isDrum(it) && !isFloor(it) }
+            // The tunnel and the hold stay put while the city comes down — they are
+            // structure, not furniture, and the player may be standing in them.
+            val furnObjs = muteButtonBounds.filter {
+                !isDrum(it) && !isFloor(it) && it.minY >= undergroundY
+            }
             // Union-find: objects whose boxes overlap merge into one floating unit.
             val uf = IntArray(furnObjs.size) { it }
             fun find(i: Int): Int { var x = i; while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x] }; return x }
@@ -3149,6 +3538,8 @@ class CityGLRenderer : GlRenderer {
 
                 val shell = ArrayList<Float>()       // drum wall/lid — see-through, fixed
                 val fixedInner = ArrayList<Float>()  // monitors, floor, strays — fixed
+                val litScreen = ArrayList<Float>()   // the hold's monitor, when on
+                val litCone = ArrayList<Float>()     // the hold's cone lamp, when on
                 var k = 0
                 while (k + 8 < g.verts.size) {
                     var cX = 0f; var cY = 0f; var cZ = 0f
@@ -3158,8 +3549,42 @@ class CityGLRenderer : GlRenderer {
                     cX /= 3f; cY /= 3f; cZ /= 3f
                     val rLoc = hypot(cX - cxL, cZ - czL)
                     val cid = if (isScreen) -1 else clusterOf(cX, cY, cZ)
+                    // Anything below the drum's floor is tunnel/hold/second room, and
+                    // must never be shell. shellR is the DRUM's radius (~31 model
+                    // units); the underground reaches out to 144, so every one of its
+                    // walls cleared that test and was drawn see-through — which is why
+                    // the tunnel showed a lit mutebutton2 straight through its walls
+                    // and the hold's corners appeared to come apart. They weren't
+                    // moving; they were transparent.
+                    // …but only BELOW a depth. The top of the tunnel reads well
+                    // see-through, so the shell treatment is kept up there and only
+                    // the deeper structure (the tunnel's lower walls, the hold, the
+                    // second room) is forced opaque. Tunnel geometry runs from model
+                    // y -28.9 down to -45.6, so this keeps roughly its top third.
+                    val underTri = cY < mnY - SHELL_OPAQUE_DEPTH
                     when {
-                        rLoc > shellR || (cY - mnY) > shellY -> for (v in 0 until 9) shell.add(g.verts[k + v])
+                        // The rick set stands in for the monitor entirely, so the
+                        // original's bezel and screen are dropped rather than drawn
+                        // underneath it.
+                        holdRickOn && (g.materialName == HOLD_SCREEN_MTL ||
+                                       g.materialName == HOLD_BEZEL_MTL) -> Unit
+                        // The monitor by the hold entrance. A screen is a light
+                        // source, so it is drawn emissive rather than merely lit —
+                        // otherwise its own lamp sits behind the glass and leaves
+                        // the face it is supposed to brighten in shadow.
+                        holdLightsOn && g.materialName == HOLD_SCREEN_MTL ->
+                            for (v in 0 until 9) litScreen.add(g.verts[k + v])
+                        // The cone in the middle of the hold. Taken by its box
+                        // rather than by material, because it shares its material
+                        // with props all over the model — the box is the only
+                        // thing that means "this cone and nothing else".
+                        holdLightsOn && coneBox != null &&
+                            cX >= coneBox[0] && cX <= coneBox[1] &&
+                            cY >= coneBox[2] && cY <= coneBox[3] &&
+                            cZ >= coneBox[4] && cZ <= coneBox[5] ->
+                            for (v in 0 until 9) litCone.add(g.verts[k + v])
+                        !underTri && (rLoc > shellR || (cY - mnY) > shellY) ->
+                            for (v in 0 until 9) shell.add(g.verts[k + v])
                         cid < 0 -> for (v in 0 until 9) fixedInner.add(g.verts[k + v])
                         else -> {
                             val bucket = pieceOf(cid).flat
@@ -3171,6 +3596,115 @@ class CityGLRenderer : GlRenderer {
                     }
                     k += 9
                 }
+                // Underground triangles (tunnel + hold) become a walkable interior
+                // of their own, exactly like a damaged ruin: up-faces are floor and
+                // ramp, near-vertical faces are walls. Without this the player has
+                // nothing underfoot down there and walks straight through it at
+                // city level — there is no falling, feet snap to a surface within
+                // 30 units, so the tunnel has to be a continuous ramp from the door.
+                run {
+                    var t = 0
+                    while (t + 8 < g.verts.size) {
+                        val wy0 = (g.verts[t + 1] - mnY) * scl + baseY
+                        val wy1 = (g.verts[t + 4] - mnY) * scl + baseY
+                        val wy2 = (g.verts[t + 7] - mnY) * scl + baseY
+                        // Floors by their top edge, walls by their base, so a tall
+                        // tunnel wall rising from the ramp is still captured.
+                        if (minOf(wy0, wy1, wy2) < underWorldY) {
+                            val ax = (g.verts[t]     - cxL) * scl + bx
+                            val az = (g.verts[t + 2] - czL) * scl + bz
+                            val bx2 = (g.verts[t + 3] - cxL) * scl + bx
+                            val bz2 = (g.verts[t + 5] - czL) * scl + bz
+                            val cx2 = (g.verts[t + 6] - cxL) * scl + bx
+                            val cz2 = (g.verts[t + 8] - czL) * scl + bz
+                            val ux2 = bx2 - ax; val uy2 = wy1 - wy0; val uz2 = bz2 - az
+                            val vx2 = cx2 - ax; val vy2 = wy2 - wy0; val vz2 = cz2 - az
+                            var nx = uy2 * vz2 - uz2 * vy2
+                            var ny = uz2 * vx2 - ux2 * vz2
+                            var nz = ux2 * vy2 - uy2 * vx2
+                            val nl = sqrt(nx * nx + ny * ny + nz * nz)
+                            if (nl > 1e-6f) { nx /= nl; ny /= nl; nz /= nl }
+                            if (ax < uMinX) uMinX = ax; if (ax > uMaxX) uMaxX = ax
+                            if (bx2 < uMinX) uMinX = bx2; if (bx2 > uMaxX) uMaxX = bx2
+                            if (cx2 < uMinX) uMinX = cx2; if (cx2 > uMaxX) uMaxX = cx2
+                            if (az < uMinZ) uMinZ = az; if (az > uMaxZ) uMaxZ = az
+                            if (bz2 < uMinZ) uMinZ = bz2; if (bz2 > uMaxZ) uMaxZ = bz2
+                            if (cz2 < uMinZ) uMinZ = cz2; if (cz2 > uMaxZ) uMaxZ = cz2
+                            // Where the ground gets cut open. ONLY the stretch the
+                            // slab actually slices through earns a hole: geometry
+                            // that crosses y=0 and lies clear of the drum (whose own
+                            // footprint is covered by the drum itself, and whose
+                            // bounding square would otherwise open gaps at the disc's
+                            // corners). Everything deeper — the tunnel, the hold, the
+                            // second room — runs 120+ units below the slab and stays
+                            // covered. Cutting to the whole underground footprint is
+                            // what left the openings you could see the hold through:
+                            // that box reached x -1160, this one stops around -50.
+                            val hLo = minOf(wy0, wy1, wy2); val hHi = maxOf(wy0, wy1, wy2)
+                            val outA = (ax - bx) * (ax - bx) + (az - bz) * (az - bz) > r0 * r0
+                            val outB = (bx2 - bx) * (bx2 - bx) + (bz2 - bz) * (bz2 - bz) > r0 * r0
+                            val outC = (cx2 - bx) * (cx2 - bx) + (cz2 - bz) * (cz2 - bz) > r0 * r0
+                            if (hLo < 6f && hHi > -6f && outA && outB && outC) {
+                                if (ax < hMinX) hMinX = ax; if (ax > hMaxX) hMaxX = ax
+                                if (bx2 < hMinX) hMinX = bx2; if (bx2 > hMaxX) hMaxX = bx2
+                                if (cx2 < hMinX) hMinX = cx2; if (cx2 > hMaxX) hMaxX = cx2
+                                if (az < hMinZ) hMinZ = az; if (az > hMaxZ) hMaxZ = az
+                                if (bz2 < hMinZ) hMinZ = bz2; if (bz2 > hMaxZ) hMaxZ = bz2
+                                if (cz2 < hMinZ) hMinZ = cz2; if (cz2 > hMaxZ) hMaxZ = cz2
+                            }
+                            // Near-horizontal counts as walkable whichever way it
+                            // faces. The tunnel's interior surfaces are wound the
+                            // opposite way to the ruins': measured against the model,
+                            // the "up-facing" triangles out there sit ~90 units ABOVE
+                            // the "down-facing" ones, i.e. the ceiling faces up and
+                            // the floor you stand on faces DOWN. Testing ny > 0.30
+                            // therefore found only the ceiling — which is exactly the
+                            // height the player kept walking along. The highest-within
+                            // -30 rule below still picks the floor rather than the
+                            // ceiling, since the ceiling is far outside a step.
+                            if (kotlin.math.abs(ny) > 0.30f) {
+                                // Test the triangle's LOWEST corner, not its highest.
+                                // The tunnel ramp is built from a handful of enormous
+                                // triangles — 2 to 10 per 20 model units, each spanning
+                                // tens of units vertically — so testing the top threw
+                                // away the very pieces that form the descent, while
+                                // keeping the small flat ones. Furniture tops sit
+                                // entirely above floor level and still fail this.
+                                if (minOf(wy0, wy1, wy2) < underWorldY) {
+                                    underFloors.add(
+                                        floatArrayOf(ax, wy0, az, bx2, wy1, bz2, cx2, wy2, cz2))
+                                }
+                            } else if (ny > -0.30f) {
+                                val vTop = maxOf(wy0, wy1, wy2); val vBot = minOf(wy0, wy1, wy2)
+                                // Walls only BELOW the room floor — i.e. the tunnel and
+                                // the hold. The room's own shell is already handled by
+                                // the drum's radius test, which knows where both
+                                // doorways are; collecting it here as well re-sealed
+                                // the secret door, because the tan panel is still a
+                                // wall in the mesh even when it is not drawn. Never
+                                // collect that panel's material at all, for the same
+                                // reason.
+                                if (vBot < baseY - 2f &&
+                                    g.materialName != RAD_DOOR2_MATERIAL &&
+                                    vTop - vBot > 4f) {
+                                    val d01 = (bx2-ax)*(bx2-ax) + (bz2-az)*(bz2-az)
+                                    val d12 = (cx2-bx2)*(cx2-bx2) + (cz2-bz2)*(cz2-bz2)
+                                    val d20 = (ax-cx2)*(ax-cx2) + (az-cz2)*(az-cz2)
+                                    var px=ax; var pz=az; var qx=bx2; var qz=bz2; var bestE=d01
+                                    if (d12 > bestE) { bestE=d12; px=bx2; pz=bz2; qx=cx2; qz=cz2 }
+                                    if (d20 > bestE) { bestE=d20; px=cx2; pz=cz2; qx=ax; qz=az }
+                                    if (bestE > 4f) {
+                                        underWalls.add(px); underWalls.add(pz)
+                                        underWalls.add(qx); underWalls.add(qz)
+                                        underWalls.add(vBot); underWalls.add(vTop)
+                                    }
+                                }
+                            }
+                        }
+                        t += 9
+                    }
+                }
+
                 if (shell.isNotEmpty()) {
                     val out = modelToWorld(shell)
                     // The hidden doorway is authored as its own material, so it
@@ -3182,6 +3716,20 @@ class CityGLRenderer : GlRenderer {
                 if (fixedInner.isNotEmpty()) {
                     val out = modelToWorld(fixedInner)
                     meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3, r, gg, b, 1f, fog, radShell = false))
+                }
+                if (litScreen.isNotEmpty()) {
+                    val out = modelToWorld(litScreen)
+                    meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3,
+                        0.62f, 0.80f, 0.92f, 1f, 0f, noAO = true, radShell = false))
+                }
+                // Brighter than the monitor and bluer: this one is not showing a
+                // picture, it is the lamp. noAO drops it out of the shading pass
+                // entirely, so it holds its colour in a room where every other
+                // surface is being lit by it.
+                if (litCone.isNotEmpty()) {
+                    val out = modelToWorld(litCone)
+                    meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3,
+                        0.78f, 0.90f, 1.00f, 1f, 0f, noAO = true, radShell = false))
                 }
             }
             // Interior image planes not tied to any floating unit are drawn fixed.
@@ -3236,8 +3784,15 @@ class CityGLRenderer : GlRenderer {
                 val a0 = RAD_DOOR_DEG - RAD_DOOR_HALF_DEG
                 val a1 = RAD_DOOR_DEG + RAD_DOOR_HALF_DEG
                 for (i in 0 until segs) {
-                    val t0 = (((a0 + (a1 - a0) * PI / 180.0) * i / segs).toDouble())
-                    val t1 = (((a0 + (a1 - a0) * PI / 180.0) * (i + 1) / segs).toDouble())
+                    // Interpolate the ANGLE across the arc, then convert to radians.
+                    // This used to read (a0 + (a1-a0) * PI/180) * i/segs, which
+                    // multiplied the whole thing by i/segs instead of stepping
+                    // between a0 and a1: the six quads came out at 0, 15, 30 …
+                    // 90 RADIANS, i.e. scattered right around and through the
+                    // drum, which is the door panel "pushed inside the building,
+                    // sticking through the sides".
+                    val t0 = ((a0 + (a1 - a0) * i / segs) * PI / 180.0)
+                    val t1 = ((a0 + (a1 - a0) * (i + 1) / segs) * PI / 180.0)
                     val x0 = bx + cos(t0).toFloat() * r0; val z0 = bz + sin(t0).toFloat() * r0
                     val x1 = bx + cos(t1).toFloat() * r0; val z1 = bz + sin(t1).toFloat() * r0
                     val v = floatArrayOf(
@@ -3249,9 +3804,199 @@ class CityGLRenderer : GlRenderer {
                 }
             }
 
+            // ── The hold's cells ──────────────────────────────────────────────
+            // The bars are authored as one thin tall cylinder each, 12 to a cell.
+            // They're far too slender to survive the wall collector (its segments
+            // need a 2-unit projected span), so the cells were open. Group the bars
+            // into rows, seal each row with one barrier segment, and hang a camera
+            // in front of it.
+            run {
+                val barObjs = muteButtonBounds.filter {
+                    it.minY < undergroundY &&
+                        (it.maxY - it.minY) > 6f &&
+                        maxOf(it.maxX - it.minX, it.maxZ - it.minZ) < 3f
+                }
+                if (barObjs.size >= 4) {
+                    // Union-find on XZ proximity: bars in a row nearly touch, and
+                    // the gap between two cells is far wider than the bar pitch.
+                    val cx = FloatArray(barObjs.size); val cz = FloatArray(barObjs.size)
+                    for (i in barObjs.indices) {
+                        cx[i] = (barObjs[i].minX + barObjs[i].maxX) * 0.5f
+                        cz[i] = (barObjs[i].minZ + barObjs[i].maxZ) * 0.5f
+                    }
+                    val uf2 = IntArray(barObjs.size) { it }
+                    fun find2(i: Int): Int {
+                        var x = i; while (uf2[x] != x) { uf2[x] = uf2[uf2[x]]; x = uf2[x] }; return x
+                    }
+                    for (i in barObjs.indices) for (j in i + 1 until barObjs.size) {
+                        val dx = cx[i] - cx[j]; val dz = cz[i] - cz[j]
+                        if (dx * dx + dz * dz < 3f * 3f) uf2[find2(i)] = find2(j)
+                    }
+                    val rows = HashMap<Int, MutableList<Int>>()
+                    for (i in barObjs.indices) rows.getOrPut(find2(i)) { mutableListOf() }.add(i)
+                    val cellsOut = ArrayList<FloatArray>()
+
+                    // Room centre at the cell floor, so each barrier knows which side
+                    // the player walks on and the camera goes on that side.
+                    val barBotW = (barObjs.minOf { it.minY } - mnY) * scl + baseY
+                    val barTopW = (barObjs.maxOf { it.maxY } - mnY) * scl + baseY
+                    var rcx = 0f; var rcz = 0f; var rn = 0
+                    for (t in underFloors) {
+                        if (abs(t[1] - barBotW) > 60f) continue
+                        rcx += (t[0] + t[3] + t[6]) / 3f; rcz += (t[2] + t[5] + t[8]) / 3f; rn++
+                    }
+                    if (rn > 0) { rcx /= rn; rcz /= rn }
+
+                    for ((_, idxs) in rows) {
+                        if (idxs.size < 4) continue          // a stray bar, not a cell front
+                        // Row extent in world space, taken from its end bars.
+                        var ax = 0f; var az = 0f; var bx2 = 0f; var bz2 = 0f; var best = -1f
+                        for (p in idxs) for (q in idxs) {
+                            val dx = cx[p] - cx[q]; val dz = cz[p] - cz[q]
+                            val d2 = dx * dx + dz * dz
+                            if (d2 > best) {
+                                best = d2
+                                ax = (cx[p] - cxL) * scl + bx; az = (cz[p] - czL) * scl + bz
+                                bx2 = (cx[q] - cxL) * scl + bx; bz2 = (cz[q] - czL) * scl + bz
+                            }
+                        }
+                        // Barrier: one segment along the row, standing the bars' own
+                        // height so it lands inside the body band exactly as they look.
+                        //
+                        // Run PAST the end bars. The segment is measured centre to
+                        // centre of the outermost two, so it stops half a bar short
+                        // of the bars themselves and further still from the jambs
+                        // they are set into. Flood-filling the hold against this
+                        // exact collision test found three of the five cells open
+                        // at an end — gaps of 3.5 to 5 units, and one cell whose
+                        // row simply stops well short of its opening. Eight units
+                        // of overhang closes all five (bar pitch is ~8); this is
+                        // double that, and the piers between cells are far wider,
+                        // so there is nothing for the overhang to seal off.
+                        var ex2 = bx2 - ax; var ez2 = bz2 - az
+                        val el = sqrt(ex2 * ex2 + ez2 * ez2).coerceAtLeast(1e-4f)
+                        ex2 /= el; ez2 /= el
+                        underWalls.add(ax - ex2 * HOLD_BAR_OVERHANG)
+                        underWalls.add(az - ez2 * HOLD_BAR_OVERHANG)
+                        underWalls.add(bx2 + ex2 * HOLD_BAR_OVERHANG)
+                        underWalls.add(bz2 + ez2 * HOLD_BAR_OVERHANG)
+                        underWalls.add(barBotW); underWalls.add(barTopW)
+
+                        // Camera: centred on the row, pushed out into the room, at the
+                        // player's eye height, staring back at the bars.
+                        val mx2 = (ax + bx2) * 0.5f; val mz2 = (az + bz2) * 0.5f
+                        var nx2 = -(bz2 - az); var nz2 = (bx2 - ax)
+                        val nl2 = sqrt(nx2 * nx2 + nz2 * nz2).coerceAtLeast(1e-4f)
+                        nx2 /= nl2; nz2 /= nl2
+                        if (rn > 0 && (nx2 * (rcx - mx2) + nz2 * (rcz - mz2)) < 0f) { nx2 = -nx2; nz2 = -nz2 }
+                        val camX2 = mx2 + nx2 * HOLD_CAM_STANDOFF
+                        val camZ2 = mz2 + nz2 * HOLD_CAM_STANDOFF
+                        cameraMounts.add(floatArrayOf(
+                            camX2, barBotW + HOLD_CAM_EYE, camZ2,
+                            -nx2, -nz2,          // faces back toward the bars
+                            mx2, mz2))           // 7 elements ⇒ fixed aim
+
+                        // Where a prisoner stands: behind the bars, facing out.
+                        cellsOut.add(floatArrayOf(
+                            mx2 - nx2 * HOLD_CELL_DEPTH, barBotW,
+                            mz2 - nz2 * HOLD_CELL_DEPTH, nx2, nz2))
+                    }
+                    holdCells = cellsOut
+                }
+
+                // The rick set, standing exactly where the monitor was. Its own local
+            // space is rotated onto the monitor's facing and dropped at the
+            // monitor's centre, then carried into world space by the same
+            // transform as the rest of the model — so it lands with it, whatever
+            // the building is doing.
+            if (holdRickOn && tvRickGroups.isNotEmpty()) {
+                val ry = (RICK_YAW_DEG.toDouble() * PI / 180.0)
+                val cy2 = cos(ry).toFloat(); val sy2 = sin(ry).toFloat()
+                for (g in tvRickGroups) {
+                    val src = g.verts
+                    if (src.isEmpty()) continue
+                    val out = FloatArray(src.size)
+                    var i = 0
+                    while (i + 2 < src.size) {
+                        val lx = src[i]     - RICK_PIVOT[0]
+                        val ly = src[i + 1] - RICK_PIVOT[1]
+                        val lz = src[i + 2] - RICK_PIVOT[2]
+                        val mxr = lx * cy2 + lz * sy2 + RICK_AT[0]
+                        val mzr = -lx * sy2 + lz * cy2 + RICK_AT[2]
+                        val myr = ly + RICK_AT[1]
+                        out[i]     = (mxr - cxL) * scl + bx
+                        out[i + 1] = (myr - mnY) * scl + baseY
+                        out[i + 2] = (mzr - czL) * scl + bz
+                        i += 3
+                    }
+                    val texName = g.texture
+                    val texId = if (texName != null && g.uvs.isNotEmpty()) modelTexture(texName) else 0
+                    if (texId != 0) {
+                        meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3,
+                            1f, 1f, 1f, 1f, 0f, noAO = true,
+                            tex = texId, uv = g.uvs.toFB()))
+                    } else {
+                        meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3,
+                            g.r, g.g, g.b, 1f, 0f, noAO = true))
+                    }
+                }
+            }
+
+            // Props the confrontation lights up. Taken by shape and depth rather
+                // than by name, so re-exporting the model can rename them freely.
+                for (ob in muteButtonBounds) {
+                    if (ob.minY >= undergroundY) continue
+                    val wx = ((ob.minX + ob.maxX) * 0.5f - cxL) * scl + bx
+                    val wy = (ob.minY - mnY) * scl + baseY
+                    val wz = ((ob.minZ + ob.maxZ) * 0.5f - czL) * scl + bz
+                    if (ob.name.startsWith("Cone") && wx > -400f && holdConeWorld == null) {
+                        holdConeWorld = floatArrayOf(wx, wy + 40f, wz)
+                    }
+                    // The hold's monitor sits on its counter by the entrance; it is
+                    // a boxy little thing, not a flat plate, so it is matched on the
+                    // screen material's own object rather than by silhouette.
+                    if (wx > -400f && holdScreenWorld == null &&
+                        ob.name.startsWith("Cube") &&
+                        (ob.maxX - ob.minX) in 2.5f..3.6f && (ob.maxY - ob.minY) in 1.5f..2.2f) {
+                        holdScreenWorld = floatArrayOf(wx, (ob.minY + ob.maxY) * 0.5f
+                            .let { (it - mnY) * scl + baseY }, wz)
+                    }
+                    val d = floatArrayOf(ob.maxX - ob.minX, ob.maxY - ob.minY, ob.maxZ - ob.minZ)
+                    d.sort()
+                    if (wx < -600f && d[0] < 0.4f && d[1] > 1.4f && d[2] < 3.2f &&
+                        damagedScreenWorld == null) {
+                        damagedScreenWorld = floatArrayOf(wx, (ob.minY + ob.maxY) * 0.5f
+                            .let { (it - mnY) * scl + baseY }, wz)
+                    }
+                }
+            }
+
+            if (underFloors.isNotEmpty()) {
+                holdRegion = floatArrayOf(uMinX, uMaxX, uMinZ, uMaxZ)
+                if (hMinX <= hMaxX) holdHole = floatArrayOf(hMinX, hMaxX, hMinZ, hMaxZ)
+                damagedList.add(DamagedInterior(
+                    uMinX, uMaxX, uMinZ, uMaxZ, (topY - baseY).coerceAtLeast(1f),
+                    underFloors,
+                    if (undergroundWalls)
+                        FloatArray(underWalls.size).also { for (k in underWalls.indices) it[k] = underWalls[k] }
+                    else FloatArray(0),
+                    // The tunnels are cut far tighter than the ruins this system was
+                    // built for. Narrowest point on the route is the damaged room's
+                    // doorway (~5.6 units from centreline to jamb), so anything near
+                    // the 10f default seals it; 2.5f leaves usable slack on both sides.
+                    collideR = 2.5f,
+                    // Eye height is 55, so 75 clears the player's head with a little
+                    // room to spare. Anything above that is a lintel to duck under.
+                    duckH = 75f,
+                    // The drop from the tunnel mouth into the hold measures ~135
+                    // world units; 220 covers it and the shallower drops further in.
+                    stepDown = 220f,
+                ))
+            }
+
             // The desk. Only the enterable Building 10 gets live monitors — the
             // landscape scene keeps the button as a 1x decoration you never walk into.
-            if (scale > 1f) buildCctvScreens(mute, cxL, czL, mnY, scl, bx, baseY, bz)
+            if (scale > 1f && supportsOffscreenFeeds) buildCctvScreens(mute, cxL, czL, mnY, scl, bx, baseY, bz)
 
             // Collision footprints for the furniture inside — anything tall enough to
             // walk into. Skips the drum itself and the floor-flat props (rugs, papers).
@@ -3472,9 +4217,10 @@ class CityGLRenderer : GlRenderer {
                 registerLampLight(g, px, baseY, pz, s, yawRad)
             }
         }
-        // Warm pool of light on the street under each building-corner lamp.
-        addHaloRing(px, pz, 1f,  30f, 1.00f, 0.78f, 0.34f, 0.75f)
-        addHaloRing(px, pz, 30f, 64f, 1.00f, 0.78f, 0.34f, 0.42f)
+        // No painted pool on the street. The lamp registered just above is a real
+        // point light now, so the ground under it is lit by the shader — the flat
+        // disc that used to stand in for that was drawn on top of the real lighting
+        // and read as a hard 16-sided cut-out.
     }
 
     // Place the Blender-authored lamp at each position. The "off" model is
@@ -3507,10 +4253,8 @@ class CityGLRenderer : GlRenderer {
                     registerLampLight(g, px, yOff, pz, s, yaw)
                 }
             }
-            // Warm ground halo — fades in with darkness via glow flag. Boosted so
-            // each lamp throws a visible pool of light onto the street at night.
-            addHaloRing(px, pz, 1f,  30f, 1.00f, 0.78f, 0.34f, 0.75f)
-            addHaloRing(px, pz, 30f, 64f, 1.00f, 0.78f, 0.34f, 0.42f)
+            // No painted ground halo — see addBuildingLamp. The registered point
+            // light does this properly, and follows the surface it falls on.
         }
     }
 
@@ -4174,7 +4918,11 @@ class CityGLRenderer : GlRenderer {
             val outX = mount[3]; val outZ = mount[4]
 
             var falls = false
-            if (col > 0f) {
+            // Fixed-aim mounts are the hold's, 350 units underground. They are not
+            // bolted to any building, so they neither fall with one nor vanish when
+            // one is gone — the whole underground stays stationary through the
+            // collapse. Looking them up by XZ would match the city group overhead.
+            if (col > 0f && mount.size <= 6) {
                 val g = collapseGroupNear(mx, mz)
                 if (g != null) {
                     if (!collapseXform(g, col, xf)) continue   // its building is gone, and so is it
@@ -4182,16 +4930,37 @@ class CityGLRenderer : GlRenderer {
                 }
             }
 
-            val tdx = tx - mx; val tdz = tz - mz
-            val tdy = ty - my
+            // A mount carrying a 6th/7th element is one of the hold's. Until the
+            // player is put in a cell those stare into their own cell — the room
+            // reads as a place that was watching prisoners before this one
+            // arrived. From the moment the lights come up, every one of them
+            // turns and follows the player instead, wherever they walk.
+            val holdMount = mount.size > 6
+            val fixedAim = holdMount && !holdLightsOn
+            val aimX = if (fixedAim) mount[5] else tx
+            val aimZ = if (fixedAim) mount[6] else tz
+            // The hold sits 350 units below the city, so the city's ground-level
+            // look height would tip every lens at the ceiling. The mount knows
+            // its own floor: it was placed HOLD_CAM_EYE above it.
+            val aimY = when {
+                fixedAim  -> my                          // level, into its own cell
+                holdMount -> my - HOLD_CAM_EYE + PLAYER_LOOK_Y
+                else      -> ty
+            }
+            val tdx = aimX - mx; val tdz = aimZ - mz
+            val tdy = aimY - my
             val hLen = sqrt(tdx * tdx + tdz * tdz)
             val hSafe = if (hLen < 0.001f) 1f else hLen
             var fx = tdx / hSafe
             var fz = tdz / hSafe
 
-            // Same ±90° clamp as before — keeps camera body off the wall.
+            // Same ±90° clamp as before — keeps a camera bolted to a building
+            // corner from rotating into the wall behind it. The hold's are on
+            // free-standing posts out in the room, with nothing behind them to
+            // clip, and they are the ones that have to be able to turn all the
+            // way round to keep the player: they are exempt.
             val dot = fx * outX + fz * outZ
-            if (dot < 0f) {
+            if (!holdMount && dot < 0f) {
                 val cross = outX * fz - outZ * fx
                 if (cross >= 0f) { fx = -outZ; fz =  outX }
                 else             { fx =  outZ; fz = -outX }
@@ -4293,14 +5062,19 @@ class CityGLRenderer : GlRenderer {
             val mx = mount[0]; val my = mount[1]; val mz = mount[2]
             val outX = mount[3]; val outZ = mount[4]
 
-            val tdx = tx - mx; val tdz = tz - mz
+            // Hold mounts, and their switch to following the player once the
+            // cell lights come up — see drawCamerasModel.
+            val holdMount = mount.size > 6
+            val fixedAim = holdMount && !holdLightsOn
+            val tdx = (if (fixedAim) mount[5] else tx) - mx
+            val tdz = (if (fixedAim) mount[6] else tz) - mz
             var len = sqrt(tdx * tdx + tdz * tdz)
             if (len < 0.001f) len = 1f
             var fx = tdx / len
             var fz = tdz / len
 
             val dot = fx * outX + fz * outZ
-            if (dot < 0f) {
+            if (!holdMount && dot < 0f) {
                 val cross = outX * fz - outZ * fx
                 if (cross >= 0f) { fx = -outZ; fz =  outX }
                 else             { fx =  outZ; fz = -outX }
@@ -4777,6 +5551,57 @@ class CityGLRenderer : GlRenderer {
     // frame itself, and the security camera's own position when a CCTV feed is
     // being rendered (otherwise a feed of a distant street would be lit by the
     // lamps standing behind the player, back in Building 10).
+    // The torch has no switch. It comes up wherever the moon and the street lamps
+    // don't reach, and drops again the moment the player walks back into light, so
+    // it never washes out a lamp-lit street or the lit half of a building.
+    //
+    // Must run AFTER uploadNearestLights: it reads the very buffers that were just
+    // filled, so the "am I already lit?" test uses exactly the lights the shader
+    // will use, with the same attenuation curve.
+    private fun updateFlashlight(view: FloatArray) {
+        // Camera forward, taken straight out of the view matrix rather than rebuilt
+        // from yaw/pitch — that way it follows the look-at camera, the free camera
+        // and the collapse shake alike, with no second version of the maths to keep
+        // in sync. Column-major: the third row of the rotation block, negated.
+        var fx = -view[2]; var fy = -view[6]; var fz = -view[10]
+        val fl = sqrt(fx*fx + fy*fy + fz*fz)
+        if (fl > 1e-4f) { fx /= fl; fy /= fl; fz /= fl } else { fx = 0f; fy = 0f; fz = -1f }
+
+        val target = if (aerialMode || flashOff) 0f else {
+            var lit = 0f
+            for (i in 0 until MAX_LIGHTS) {
+                val rad = lightRadBuf[i]
+                if (rad < 0.5f) continue
+                val dx = lightPosBuf[i*3] - camX
+                val dy = lightPosBuf[i*3+1] - camY
+                val dz = lightPosBuf[i*3+2] - camZ
+                val a = (1f - sqrt(dx*dx + dy*dy + dz*dz) / rad).coerceIn(0f, 1f)
+                lit += a * a
+            }
+            // Ramps in over the second half of dusk, and is held off entirely by
+            // standing in a lamp's pool.
+            val dark = ((darknessLevel - 0.45f) / 0.35f).coerceIn(0f, 1f)
+            // Underground there is no sky to begin with, so the tunnels light up
+            // whatever the hour is overhead.
+            val below = if (camY < -20f) 1f else 0f
+            maxOf(dark * (1f - (lit * 1.25f).coerceIn(0f, 1f)), below)
+        }
+        // Eased rather than switched, so it comes up like eyes adjusting.
+        flashLevel += (target - flashLevel) * 0.07f
+        if (flashLevel < 0.002f) flashLevel = 0f
+
+        Gl.glUniform1f(uFlash, flashLevel)
+        Gl.glUniform3f(uFlashDir, fx, fy, fz)
+
+        // Sky/moon light dies off with depth rather than switching at a line, so
+        // walking down the tunnel dims steadily instead of popping dark at a
+        // threshold. Fully out well before the hold.
+        // …and the confrontation lifts part of it back, so the damaged room comes
+        // up out of pitch black while it talks rather than staying invisible.
+        val under = ((-camY - 20f) / 150f).coerceIn(0f, 1f) * (1f - confLight * 0.55f)
+        Gl.glUniform1f(uUnder, if (aerialMode) 0f else under)
+    }
+
     private fun uploadNearestLights(px: Float = camX, pz: Float = camZ) {
         var n = 0
         if (darknessLevel > 0.5f && !aerialMode && lampLights.isNotEmpty()) {
@@ -4792,20 +5617,59 @@ class CityGLRenderer : GlRenderer {
                     val dx = l[0] - px; val dz = l[2] - pz
                     dx * dx + dz * dz
                 }
-                .take(MAX_LIGHTS)
+                // Underground lights are appended below and are not optional —
+                // the cone is the only thing lighting the hold once the torch is
+                // forced off. Keep their slots free rather than letting a
+                // junction full of street lamps crowd them out.
+                .take(MAX_LIGHTS - (if (holdLightsOn) 2 else 0) - (if (confLight > 0.01f) 1 else 0))
             for (l in near) {
                 lightPosBuf[n * 3] = l[0]; lightPosBuf[n * 3 + 1] = l[1]; lightPosBuf[n * 3 + 2] = l[2]
                 lightRadBuf[n] = l[3]
+                lightColdBuf[n] = 0f          // a street lamp: warm, and only after dusk
+                n++
+            }
+        }
+        // The confrontation's own lights: the hold's cone once the player is in a
+        // cell, and the damaged room's screen while it is talking. They ignore the
+        // darkness gate above — underground there is no dusk to wait for.
+        // All three are underground, so all three are cold and none of them waits
+        // for dusk. The cone is the room's only light once the torch is forced
+        // off in the cell, so it goes in FIRST — with 12 slots and the city's
+        // lamps filling from the top, the one the player cannot do without must
+        // not be the one that gets dropped.
+        if (holdLightsOn && n < MAX_LIGHTS) {
+            holdConeWorld?.let {
+                lightPosBuf[n * 3] = it[0]; lightPosBuf[n * 3 + 1] = it[1]; lightPosBuf[n * 3 + 2] = it[2]
+                lightRadBuf[n] = HOLD_CONE_LIGHT_RADIUS
+                lightColdBuf[n] = 1f
+                n++
+            }
+        }
+        if (holdLightsOn && n < MAX_LIGHTS) {
+            holdScreenWorld?.let {
+                lightPosBuf[n * 3] = it[0]; lightPosBuf[n * 3 + 1] = it[1]; lightPosBuf[n * 3 + 2] = it[2]
+                lightRadBuf[n] = HOLD_SCREEN_LIGHT_RADIUS
+                lightColdBuf[n] = 1f
+                n++
+            }
+        }
+        if (confLight > 0.01f && n < MAX_LIGHTS) {
+            damagedScreenWorld?.let {
+                lightPosBuf[n * 3] = it[0]; lightPosBuf[n * 3 + 1] = it[1]; lightPosBuf[n * 3 + 2] = it[2]
+                lightRadBuf[n] = DAMAGED_SCREEN_LIGHT_RADIUS * confLight
+                lightColdBuf[n] = 1f
                 n++
             }
         }
         while (n < MAX_LIGHTS) {
             lightPosBuf[n * 3] = 0f; lightPosBuf[n * 3 + 1] = 0f; lightPosBuf[n * 3 + 2] = 0f
             lightRadBuf[n] = 0f
+            lightColdBuf[n] = 0f
             n++
         }
         Gl.glUniform3fv(uLightPos, MAX_LIGHTS, lightPosBuf, 0)
         Gl.glUniform1fv(uLightRad, MAX_LIGHTS, lightRadBuf, 0)
+        Gl.glUniform1fv(uLightCold, MAX_LIGHTS, lightColdBuf, 0)
     }
 
     // Returns 0 if anything fails to compile or link, so callers can fall back

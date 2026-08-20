@@ -3302,6 +3302,31 @@ object CalculatorActions {
 
     fun loadRedButtonAttempts(): Int = prefs?.getInt("red_button_attempts", 0) ?: 0
 
+    /**
+     * Debug only: show the red button in the DEL ruin regardless of the software
+     * update, the attempt count or whether the door is already open, and let it
+     * be stepped on repeatedly. Purely for checking that it renders in the right
+     * place and that the trigger fires.
+     */
+    fun persistForceRedButton(on: Boolean) {
+        prefs?.edit()?.putBoolean("debug_force_red_button", on)?.commit()
+    }
+
+    fun loadForceRedButton(): Boolean = prefs?.getBoolean("debug_force_red_button", false) ?: false
+
+    /**
+     * Debug: whether the tunnel/hold walls are collided against at all.
+     * Turning them off lets you walk through the hold drum while it still has
+     * no doorway cut in it. Default on — the walls are correct, the model is
+     * simply sealed.
+     */
+    fun persistUndergroundWalls(on: Boolean) {
+        prefs?.edit()?.putBoolean("debug_underground_walls", on)?.commit()
+    }
+
+    fun loadUndergroundWalls(): Boolean =
+        prefs?.getBoolean("debug_underground_walls", true) ?: true
+
     /** True once the red-button puzzle in the DEL ruin has been solved. */
     fun persistDoorOpen(open: Boolean) {
         prefs?.edit()?.putBoolean("secret_door_open", open)?.commit()

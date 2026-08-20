@@ -360,6 +360,30 @@ fun CityDebugMenu(
                         write { }
                     }
                 )
+                DebugToggleRow(
+                    label = "tunnel/hold walls",
+                    on = CalculatorActions.loadUndergroundWalls(),
+                    note = "off = walk through them; the hold drum has no doorway " +
+                        "cut yet, so its wall blocks the entrance",
+                    onToggle = {
+                        CalculatorActions.persistUndergroundWalls(
+                            !CalculatorActions.loadUndergroundWalls()
+                        )
+                        write { }
+                    }
+                )
+                DebugToggleRow(
+                    label = "red button: force show",
+                    on = CalculatorActions.loadForceRedButton(),
+                    note = "puts it in the DEL ruin's top floor regardless of the " +
+                        "update/attempts/door, and keeps it steppable",
+                    onToggle = {
+                        CalculatorActions.persistForceRedButton(
+                            !CalculatorActions.loadForceRedButton()
+                        )
+                        write { }
+                    }
+                )
                 run {
                     val used = CalculatorActions.loadRedButtonAttempts()
                     val burned = used >= RED_BUTTON_MAX_ATTEMPTS

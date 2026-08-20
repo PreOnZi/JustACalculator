@@ -999,7 +999,10 @@ private fun saveCaptures(context: AppContext, list: List<PlaceCapture>) {
     com.fictioncutshort.justacalculator.logic.BuildingProgress.putString(context, 5, "captures", sb.toString())
 }
 
-private fun loadCaptures(context: AppContext): List<PlaceCapture> {
+/** Internal, not private: the confrontation reads the player's own captures back
+ *  out of [BuildingProgress] to put one of them on screen. They are persisted
+ *  whether or not the player ever pressed SAVE, so the picture always exists. */
+internal fun loadCaptures(context: AppContext): List<PlaceCapture> {
     val raw = com.fictioncutshort.justacalculator.logic.BuildingProgress.getString(context, 5, "captures")
     if (raw.isBlank()) return emptyList()
     val out = mutableListOf<PlaceCapture>()

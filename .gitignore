@@ -21,3 +21,8 @@ local.properties
 xcuserdata/
 *.xcuserstate
 DerivedData/
+
+# Editor sources and scratch backups must never reach app/src/**/assets —
+# that tree ships verbatim into both the APK and the iOS .app bundle.
+*.afdesign
+*.bak-*

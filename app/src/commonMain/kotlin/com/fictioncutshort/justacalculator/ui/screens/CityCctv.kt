@@ -281,9 +281,44 @@ class CityCctv {
             Gl.glClearColor(0.01f, 0.02f, 0.02f, 1f)
             Gl.glClear(Gl.GL_COLOR_BUFFER_BIT or Gl.GL_DEPTH_BUFFER_BIT)
         }
-        Gl.glBindFramebuffer(Gl.GL_FRAMEBUFFER, 0)
+        Gl.glBindFramebuffer(Gl.GL_FRAMEBUFFER, restoreTarget())
         if (!ok) { release(); logWarn("CityGL", "CCTV framebuffer incomplete") }
     }
+
+
+    /**
+     * The framebuffer the caller was drawing into.
+     *
+     * NOT hard-coded to 0. On Android the window's framebuffer really is name 0,
+     * but on iOS the drawable is attached to a NON-ZERO FBO owned by the view, so
+     * "restoring" 0 there points every later draw at nothing: the 3D scene silently
+     * vanishes and you are left looking at the clear colour with the UI still
+     * composited on top. That was the white screen on iPad — and it only appeared
+     * inside Building 10, because the CCTV desk is the one thing that renders
+     * off-screen and so the one thing that ever rebinds.
+     */
+    private fun currentFbo(): Int {
+        val out = IntArray(1)
+        Gl.glGetIntegerv(Gl.GL_FRAMEBUFFER_BINDING, out, 0)
+        return out[0]
+    }
+
+    /**
+     * The framebuffer to hand back when a feed pass is done.
+     *
+     * Set once per frame by the renderer, from the binding that was live at the
+     * very top of onDrawFrame — i.e. the drawable the host just bound for us.
+     * Sampling it here instead (with [currentFbo]) was not safe: if any pass had
+     * already left something else bound, this would capture THAT and faithfully
+     * restore the wrong target, so the scene rendered off-screen on some frames
+     * and on-screen on others. That is the flashing.
+     *
+     * -1 means the renderer has not told us yet, in which case we fall back to
+     * reading the live binding.
+     */
+    var defaultFbo: Int = -1
+
+    private fun restoreTarget(): Int = if (defaultFbo >= 0) defaultFbo else currentFbo()
 
     fun release() {
         val ids = IntArray(1)
@@ -351,7 +386,7 @@ class CityCctv {
             drawScene(mvp, f.ex, f.ey, f.ez)
         }
         Gl.glDisable(Gl.GL_SCISSOR_TEST)
-        Gl.glBindFramebuffer(Gl.GL_FRAMEBUFFER, 0)
+        Gl.glBindFramebuffer(Gl.GL_FRAMEBUFFER, restoreTarget())
     }
 
     /**

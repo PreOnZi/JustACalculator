@@ -40,6 +40,13 @@
 	<true/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
+	<!-- Orientation locking does not work on iPad without this. An iPad app that
+	     supports multitasking (Slide Over / Split View) MUST support every
+	     orientation, and iPadOS ignores supportedInterfaceOrientations outright —
+	     so AppDelegate's lock was never consulted there. Declaring full screen
+	     opts out of multitasking and makes the lock effective. -->
+	<key>UIRequiresFullScreen</key>
+	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

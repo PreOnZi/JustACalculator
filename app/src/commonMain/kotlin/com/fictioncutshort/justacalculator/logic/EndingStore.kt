@@ -115,6 +115,15 @@ object EndingStore {
         line = 0
     }
 
+    /**
+     * Lock an ending in directly, bypassing [predict]. The confrontation under the
+     * city is not a prediction from complicity scores — the player walked out of
+     * their own ending and got a different one, so it is recorded as fact.
+     */
+    fun force(ctx: AppContext, ending: String) {
+        prefs(ctx).edit().putString(CHOSEN, ending).apply()
+    }
+
     /** The locked-in ending, or null if the city hasn't come down yet. */
     fun chosen(ctx: AppContext): String? = prefs(ctx).getString(CHOSEN, null)
 

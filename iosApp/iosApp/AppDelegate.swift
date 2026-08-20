@@ -15,8 +15,20 @@ import JustACalculatorKit
 /// down and rebuild the GL surface mid-scene to do it.
 final class AppDelegate: NSObject, UIApplicationDelegate {
 
-    /// Sampled when the lock is taken; `nil` means no restriction.
+    /// Sampled when a screen takes the per-screen lock; `nil` means no restriction.
     private var lockedMask: UIInterfaceOrientationMask?
+
+    /// Sampled once, the first time UIKit asks while a scene is actually on
+    /// screen. From then on the whole app stays in the orientation it launched
+    /// in.
+    ///
+    /// This is a deliberately blunter policy than the per-screen lock above,
+    /// and it exists because rotation has been crashing the app: Compose tears
+    /// down and rebuilds the GL surface on every interface-orientation change,
+    /// and not rotating at all is the reliable way to avoid that. It masks the
+    /// crash rather than fixing it — if the underlying fault is ever found,
+    /// deleting `launchMask` restores free rotation.
+    private var launchMask: UIInterfaceOrientationMask?
 
     func application(
         _ application: UIApplication,
@@ -32,7 +44,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         supportedInterfaceOrientationsFor window: UIWindow?
     ) -> UIInterfaceOrientationMask {
-        lockedMask ?? unrestrictedMask
+        // A screen-level lock still wins — it is sampled at the moment it is
+        // taken, so it can only ever agree with or narrow the launch lock.
+        if let locked = lockedMask { return locked }
+        if let launched = launchMask { return launched }
+
+        // Freeze on the first answer given while a scene is genuinely on screen.
+        // UIKit asks this several times during launch, before the window scene
+        // has settled; answering from a non-active scene there would pin the
+        // default portrait even for someone who started the app in landscape.
+        if let now = Self.activeOrientationMask() {
+            launchMask = now
+            return now
+        }
+        return unrestrictedMask
     }
 
     /// Mirrors the `UISupportedInterfaceOrientations` entries in Info.plist.
@@ -62,6 +87,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         }
     }
 
+    /// The orientation on screen right now, but only once a scene is actually
+    /// foreground-active. Returns nil during launch, so the caller can leave
+    /// things unrestricted until there is a real answer to freeze.
+    private static func activeOrientationMask() -> UIInterfaceOrientationMask? {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+        return mask(for: scene?.interfaceOrientation)
+    }
+
     /// The orientation on screen right now, as a single-value mask.
     private static func currentOrientationMask() -> UIInterfaceOrientationMask? {
         let scene = UIApplication.shared.connectedScenes
@@ -70,7 +105,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             .first { $0.activationState == .foregroundActive }
             ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
 
-        switch scene?.interfaceOrientation {
+        return mask(for: scene?.interfaceOrientation)
+    }
+
+    private static func mask(for o: UIInterfaceOrientation?) -> UIInterfaceOrientationMask? {
+        switch o {
         case .portrait:            return .portrait
         case .portraitUpsideDown:  return .portraitUpsideDown
         case .landscapeLeft:       return .landscapeLeft

@@ -28,6 +28,7 @@ expect object Gl {
     val GL_FLOAT: Int
     val GL_FRAGMENT_SHADER: Int
     val GL_FRAMEBUFFER: Int
+    val GL_FRAMEBUFFER_BINDING: Int
     val GL_FRAMEBUFFER_COMPLETE: Int
     val GL_LEQUAL: Int
     val GL_LESS: Int
@@ -61,6 +62,8 @@ expect object Gl {
     fun glBindBuffer(target: Int, buffer: Int)
     fun glBindBufferBase(target: Int, index: Int, buffer: Int)
     fun glBindFramebuffer(target: Int, framebuffer: Int)
+    /** Reads [n] ints of GL state into [out] — used to learn the real default FBO. */
+    fun glGetIntegerv(pname: Int, out: IntArray, offset: Int)
     fun glBindRenderbuffer(target: Int, renderbuffer: Int)
     fun glBindTexture(target: Int, texture: Int)
     fun glBindVertexArray(array: Int)

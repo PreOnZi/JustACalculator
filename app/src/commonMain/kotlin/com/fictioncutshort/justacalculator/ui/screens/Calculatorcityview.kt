@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -176,6 +177,12 @@ private const val PROJ_R           = 6f    // gun projectile radius (world units
 // must rise more than WALL_STEP_OVER above the floor (so low steps are walked
 // over) AND its base must sit below floor + WALL_DUCK_FRAC×height (so you pass
 // UNDER any overhead lintel/arch even when headroom is tight).
+// Slack added around Building 10's underground region when the city's walk
+// bounds are relaxed down there. holdRegion is measured from the triangles
+// themselves, so its edge IS the outer face of a wall; without a little padding
+// the clamp would land on that face and re-create the same invisible wall a few
+// units further out.
+private const val UG_BOUND_PAD     = 60f
 private const val WALL_COLLIDE_R   = 10f   // world units from a wall segment
 private const val WALL_STEP_OVER   = 20f   // walls shorter than this (a step) don't block
 private const val WALL_DUCK_FRAC   = 0.26f // overhead clearance, × building height
@@ -209,6 +216,11 @@ private val SIDEWALK_Z_HALF = BD_V * (3.063f + (5.74f - 3.063f) * SIDEWALK_SKIRT
 // Tuned to roughly the visual thickness of the sidewalk after the renderer's
 // MAIN_BUILDING_HEIGHT_SCALE × buildingHeightScale=2 scaling.
 private const val SIDEWALK_BUMP    = 20f
+// Radius within which you count as standing on the red button — its own
+// footprint, matching the radius that opens the puzzle panel.
+private const val RED_BUTTON_STEP_R = 22f
+// Grace after dismissing the panel before standing on the button re-opens it.
+private const val RED_BUTTON_COOLDOWN_MS = 3000L
 // How high the eye climbs over the arched bridge (peak, above the flat approach).
 private const val BRIDGE_PEAK_RISE = 45f
 // Half-width of the walkable bridge deck (the rails act as walls here).
@@ -366,6 +378,32 @@ private const val COLLAPSE_STARTS_AT_MS = 30_000L
 // Used only until res/raw/ending_vo exists — then the real recording's length
 // drives the sequence and this is ignored.
 private const val ENDING_VO_PLACEHOLDER_MS = 75_000L
+// How far past the drum wall the ending monologue takes to fade to its floor.
+// The tunnel is ~1400 world units long (174 model units at the 8.03x building-10
+// scale), so the fade is spread across its full length rather than dropping off
+// just outside the door.
+// How deep the player must go for the ending monologue to reach silence. The
+// tunnel drops ~360 units from the drum floor to the hold, so by the hold it is
+// fully gone. Replaces a horizontal falloff that could never work: the hold is
+// barely 300 units from the drum in plan view.
+private const val ENDING_VO_DEPTH = 330f
+// How close counts as "in this cell", and where the damaged room begins.
+// How long each credit line holds on the black. The other endings type these on
+// the calculator one at a time; on black they get the same rhythm, read rather
+// than typed.
+private const val CONF_CREDIT_HOLD = 2000L
+
+private const val HOLD_CELL_R      = 70f
+private const val DAMAGED_ROOM_X   = -600f
+private const val CONF_START_DELAY = 5000L
+private const val CONF_GAP_MS      = 3000L   // conf01 ends → conf02 starts
+private const val CONF_POPUP_OUT   = 2000L   // conf02 starts → popup goes
+// Positional voice in the hold: how far it carries, and how hard it pans. The
+// pan is what sells it on headphones — the voice has to be somewhere, not just
+// quieter. 0.85 leaves a little in the far ear so it never sounds broken.
+private const val CONF_AUDIO_RANGE = 520f
+private const val CONF_AUDIO_FLOOR = 0.14f
+private const val CONF_AUDIO_PAN   = 0.85f
 
 private fun buzzEnding(context: AppContext, ms: Long) {
     // The seam already handles the API-level branching this used to do by hand.
@@ -589,6 +627,31 @@ fun CalculatorCityView(
     var joyTapCount  by remember { mutableIntStateOf(0) }
     var joyLastTapMs by remember { mutableLongStateOf(0L) }
     var showDebugGate by remember { mutableStateOf(false) }
+    // Set once the player walks into the tunnel during the ending. From then on the
+    // ending stops acting on them — no shake, no fade to black, no credits.
+    var endingAbandoned by remember { mutableStateOf(false) }
+    // The confrontation in the damaged room, and the cell it ends in.
+    var confBlack   by remember { mutableStateOf(0f) }
+    var confPopup   by remember { mutableStateOf(false) }
+    var confDone    by remember { mutableStateOf(false) }
+    var confTeleport by remember { mutableStateOf<FloatArray?>(null) }
+    var confRick    by remember { mutableStateOf(false) }   // rick.png on the monitor
+    var confOver    by remember { mutableStateOf(false) }   // black, no controls
+    var confCreditLine by remember { mutableStateOf(-1) }   // credits on the black
+    // conf10: the player's own sound mosaic, put on screen and then edited in
+    // front of them into a recording of a man begging. See ConfrontationMosaic.kt.
+    var confMosaic  by remember { mutableStateOf<PlaceCapture?>(null) }
+    var confMosaicEdited by remember { mutableStateOf<SoundMosaic?>(null) }
+    var confMosaicFlip by remember { mutableStateOf(0) }      // tiles rewritten so far
+    var confMosaicSaved by remember { mutableStateOf(false) }
+    // Rendering the mosaic's caption for the gallery needs a measurer, and one
+    // only exists inside a composition — so it is taken here, not in the
+    // coroutine that does the saving.
+    val confTextMeasurer = rememberTextMeasurer()
+    // Live collision probe. Filled in each frame while the player is underground
+    // (or wedged anywhere), so the exact rule that refused a move can be read off
+    // the screen instead of inferred.
+    var dbgText by remember { mutableStateOf("") }
     var showDebugMenu by remember { mutableStateOf(false) }
 
     // First-person eye height — bumped up when the player crosses onto a
@@ -737,6 +800,11 @@ fun CalculatorCityView(
     }
     // Brief "Door is open" confirmation after a correct answer.
     var doorOpenNoteUntil by remember { mutableStateOf(0L) }
+    // Stepping off the button and back on re-opens the panel instantly, so
+    // dismissing it while stood on the thing put the player in a loop of
+    // pressing LEAVE. Hold the trigger off for a moment afterwards; walking
+    // away and returning re-arms it early.
+    var redButtonArmedAt by remember { mutableStateOf(0L) }
     LaunchedEffect(secretDoorOpen) { renderer.secretDoorOpen = secretDoorOpen }
 
     LaunchedEffect(gunGrabbed) { renderer.gunGrabbed = gunGrabbed }
@@ -747,10 +815,19 @@ fun CalculatorCityView(
     // play, and the flag is persisted for exactly this reason.
     // Keyed on showDebugMenu, not Unit, so flipping "software updated" in the
     // city debug panel takes effect as soon as the panel closes.
+    // Debug: show the button unconditionally and keep it steppable.
+    var forceRedButton by remember { mutableStateOf(com.fictioncutshort.justacalculator.logic.CalculatorActions.loadForceRedButton()) }
     LaunchedEffect(showDebugMenu) {
-        renderer.showRedButton = com.fictioncutshort.justacalculator.logic.CalculatorActions.loadSoftwareUpdated() &&
-            com.fictioncutshort.justacalculator.logic.CalculatorActions.loadRedButtonAttempts() < RED_BUTTON_MAX_ATTEMPTS
+        forceRedButton = com.fictioncutshort.justacalculator.logic.CalculatorActions.loadForceRedButton()
+        renderer.showRedButton = forceRedButton ||
+            (com.fictioncutshort.justacalculator.logic.CalculatorActions.loadSoftwareUpdated() &&
+                com.fictioncutshort.justacalculator.logic.CalculatorActions.loadRedButtonAttempts() < RED_BUTTON_MAX_ATTEMPTS)
         secretDoorOpen = com.fictioncutshort.justacalculator.logic.CalculatorActions.loadDoorOpen()
+        val walls = com.fictioncutshort.justacalculator.logic.CalculatorActions.loadUndergroundWalls()
+        if (walls != renderer.undergroundWalls) {
+            renderer.undergroundWalls = walls
+            renderer.needsRebuild = true      // walls are baked at build time
+        }
     }
     LaunchedEffect(monsterKilled) {
         if (monsterKilled) { renderer.monsterActive = false; renderer.monsterClones = emptyList() }
@@ -980,27 +1057,45 @@ fun CalculatorCityView(
             val p = (e.toFloat() / fallMs).coerceIn(0f, 1f)
             renderer.collapse = p
 
-            // The phone shakes with the ground.
-            buzzEnding(context, (18L + (p * 55f).toLong()))
-
-            // Explosions: white flashes, more often as it goes.
-            val gap = (900L - (p * 700f).toLong()).coerceAtLeast(120L)
-            if (e - lastBoom > gap) {
-                lastBoom = e
-                whiteFlash = 0.30f + p * 0.55f
-                delay(45)
-                whiteFlash = 0f
+            // The monologue is anchored to the button, not the player — but by
+            // DEPTH, not by distance. The hold sits only ~300 units from the drum's
+            // centre, so the old horizontal falloff (1400 units, floored at 0.18)
+            // still played it at ~0.97 down there: you could stand in the hold and
+            // hear the ending at full volume. Walking down the tunnel takes you
+            // ~360 units below the floor, which is the axis that actually separates
+            // "in the room" from "underground", and it reaches true silence.
+            run {
+                val depth = (-cRoomFloorY / ENDING_VO_DEPTH).coerceIn(0f, 1f)
+                val vol = (1f - depth).coerceIn(0f, 1f)
+                try { vo?.setVolume(vol, vol) } catch (_: Throwable) {}
             }
 
-            // The last stretch fades to black under the noise.
-            endBlack = ((p - 0.72f) / 0.28f).coerceIn(0f, 1f)
+            // Down the tunnel the ending stops happening TO the player: no shake,
+            // no fade, and (below) no credits. The city still comes down overhead —
+            // they simply aren't in it any more. Only the voiceover plays on, at
+            // whatever the depth above leaves of it.
+            if (!endingAbandoned && cRoomFloorY < -40f) endingAbandoned = true
+
+            if (!endingAbandoned) {
+                // The phone shakes with the ground.
+                buzzEnding(context, (18L + (p * 55f).toLong()))
+                // The last stretch fades to black under the noise.
+                endBlack = ((p - 0.72f) / 0.28f).coerceIn(0f, 1f)
+            } else if (endBlack != 0f) {
+                endBlack = 0f          // undo any dimming already applied
+            }
 
             if (p >= 1f) break
             delay(30)
         }
-        endBlack = 1f
         renderer.collapse = 1f
+        if (!endingAbandoned) endBlack = 1f
         try { vo?.stop(); vo?.release() } catch (_: Throwable) {}
+
+        // Went underground: the ending is over as far as they're concerned. No
+        // black screen, no goodbye, no credits — they walked out of their own
+        // ending and there is more game down there.
+        if (endingAbandoned) return@LaunchedEffect
 
         // Out of the city. Every ending now says its whole goodbye on the black
         // screen (NAME phase); the calculator only comes back afterwards, to type
@@ -1009,6 +1104,257 @@ fun CalculatorCityView(
         com.fictioncutshort.justacalculator.logic.EndingStore.line = 0
         com.fictioncutshort.justacalculator.logic.EndingStore.phase =
             com.fictioncutshort.justacalculator.logic.EndingStore.Phase.NAME
+    }
+
+    // Put the player in the cell. Its own effect rather than a step inside the
+    // frame loop: that loop sits behind several gates (intro, overlays, controls)
+    // and if any of them is closed the teleport is silently skipped — which is
+    // exactly what happened, the screen went black and the player never moved.
+    LaunchedEffect(confTeleport) {
+        val c = confTeleport ?: return@LaunchedEffect
+        pX = c[0]; pZ = c[2]
+        cRoomFloorY = c[1]
+        eyeY = c[1] + CAM_EYE_H
+        camYaw = (atan2(c[3].toDouble(), -c[4].toDouble()) * 180.0 / kotlin.math.PI).toFloat()
+        confTeleport = null
+    }
+
+    // ── The confrontation, in the damaged room ────────────────────────────────
+    // Arrive, wait, and it starts talking. Ends by shutting the player in a cell
+    // back in the hold. Runs once per playthrough.
+    LaunchedEffect(Unit) {
+        while (!confDone) {
+            delay(250)
+            val inRoom = cRoomFloorY < -40f && pX < DAMAGED_ROOM_X
+            if (!inRoom) continue
+            // Five seconds of nothing, and it has to be five seconds SPENT there.
+            var held = 0L
+            while (held < CONF_START_DELAY) {
+                delay(100); held += 100
+                if (!(cRoomFloorY < -40f && pX < DAMAGED_ROOM_X)) { held = -1; break }
+            }
+            if (held < 0) continue
+            confDone = true
+
+            // conf01, and the room comes up out of pitch dark a little.
+            val c1 = createSoundPlayer(Sounds.path("conf01").orEmpty())
+            try { c1?.start() } catch (_: Throwable) {}
+            run {
+                val t0 = nowMillis()
+                while (nowMillis() - t0 < 1200L) {
+                    renderer.confLight = ((nowMillis() - t0) / 1200f).coerceIn(0f, 1f)
+                    delay(40)
+                }
+                renderer.confLight = 1f
+            }
+            delay(((c1?.duration?.toLong() ?: 10_000L) - 1200L).coerceAtLeast(0L))
+            try { c1?.stop(); c1?.release() } catch (_: Throwable) {}
+
+            // A question with two answers and no way to answer it.
+            confPopup = true
+            delay(CONF_GAP_MS)
+            val c2 = createSoundPlayer(Sounds.path("conf02").orEmpty())
+            try { c2?.start() } catch (_: Throwable) {}
+            delay(CONF_POPUP_OUT)
+            confPopup = false
+            delay(((c2?.duration?.toLong() ?: 10_000L) - CONF_POPUP_OUT).coerceAtLeast(0L))
+            try { c2?.stop(); c2?.release() } catch (_: Throwable) {}
+
+            // Out, and wake up locked in. A cut, not a fade — a fade reads as a
+            // transition the player is having; a cut reads as something done to them.
+            confBlack = 1f
+            renderer.confLight = 0f
+
+            // The middle cell of the side that has three of them. Sides are told
+            // apart by which way their bars face; the middle one is the median
+            // along the row those cells form.
+            val cells = renderer.holdCells
+            if (cells.isNotEmpty()) {
+                val a0 = cells[0]
+                val sideA = cells.filter { it[3] * a0[3] + it[4] * a0[4] > 0.7f }
+                val sideB = cells.filter { it[3] * a0[3] + it[4] * a0[4] <= 0.7f }
+                val side = if (sideA.size >= sideB.size) sideA else sideB
+                val ordered = side.sortedBy { it[0] * -a0[4] + it[2] * a0[3] }
+                confTeleport = ordered[ordered.size / 2]
+            }
+            delay(900)
+            renderer.holdLightsOn = true
+            renderer.flashOff = true          // the cell is lit by the room now
+            renderer.needsRebuild = true      // the monitor's faces turn emissive
+            // Give the teleport a frame or two to land before the lights come up,
+            // so the player never sees the old position.
+            var waited = 0
+            while (confTeleport != null && waited < 40) { delay(25); waited++ }
+            delay(120)
+            confBlack = 0f
+
+            // ── The voice in the room ────────────────────────────────────────
+            // Every cue after this point comes from somewhere. The player is
+            // locked in a cell and cannot turn to face it or walk away, so
+            // position is the only thing left that can move — which is the point.
+            // [onTick] gets (elapsed, duration) on the loop that is already running
+            // for the positional audio — the only clock in here that is tied to the
+            // voice rather than to the frame rate, which is what a cue written
+            // against a timecode ("at 17 s") needs.
+            suspend fun playAt(
+                name: String,
+                from: FloatArray?,
+                moveTo: FloatArray? = null,
+                onTick: ((Long, Long) -> Unit)? = null,
+            ) {
+                val sp = createSoundPlayer(Sounds.path(name).orEmpty())
+                val durMs = sp?.duration?.toLong() ?: 8000L
+                try { sp?.start() } catch (_: Throwable) {}
+                val t0 = nowMillis()
+                while (true) {
+                    val e = nowMillis() - t0
+                    onTick?.invoke(e, durMs)
+                    if (e >= durMs) break
+                    if (from != null) {
+                        val k = if (moveTo == null) 0f else (e.toFloat() / durMs).coerceIn(0f, 1f)
+                        val sx = from[0] + (moveTo?.get(0)?.minus(from[0]) ?: 0f) * k
+                        val sz = from[2] + (moveTo?.get(2)?.minus(from[2]) ?: 0f) * k
+                        val dx = sx - pX; val dz = sz - pZ
+                        val dist = sqrt(dx * dx + dz * dz)
+                        val vol = (1f - dist / CONF_AUDIO_RANGE).coerceIn(CONF_AUDIO_FLOOR, 1f)
+                        // Pan against where the player is FACING, so the voice keeps
+                        // its place in the room when they look around.
+                        val yr = camYaw.toDouble() * kotlin.math.PI / 180.0
+                        val rx = cos(yr).toFloat(); val rz = sin(yr).toFloat()
+                        val inv = 1f / dist.coerceAtLeast(1f)
+                        val side = (dx * inv * rx + dz * inv * rz).coerceIn(-1f, 1f)
+                        val l = vol * (1f - (if (side > 0f) side else 0f) * CONF_AUDIO_PAN)
+                        val r = vol * (1f - (if (side < 0f) -side else 0f) * CONF_AUDIO_PAN)
+                        try { sp?.setVolume(l, r) } catch (_: Throwable) {}
+                    }
+                    delay(50)
+                }
+                try { sp?.stop(); sp?.release() } catch (_: Throwable) {}
+            }
+
+            // Somewhere else in the room, and properly elsewhere: at least half the
+            // room away from where it just was, so a "loc change" always reads.
+            val cellsAll = renderer.holdCells
+            var loX = 0f; var loZ = 0f; var hiX = 0f; var hiZ = 0f
+            if (cellsAll.isNotEmpty()) {
+                loX = cellsAll.minOf { it[0] }; hiX = cellsAll.maxOf { it[0] }
+                loZ = cellsAll.minOf { it[2] }; hiZ = cellsAll.maxOf { it[2] }
+            }
+            val span = kotlin.math.hypot(hiX - loX, hiZ - loZ).coerceAtLeast(1f)
+            val here = renderer.holdCells.firstOrNull()
+            val ear = floatArrayOf(pX, here?.get(1) ?: 0f, pZ)
+            fun elsewhere(prev: FloatArray?): FloatArray {
+                var best = floatArrayOf(loX, ear[1], loZ); var bestD = -1f
+                repeat(24) {
+                    val cx = loX + kotlin.random.Random.nextFloat() * (hiX - loX)
+                    val cz = loZ + kotlin.random.Random.nextFloat() * (hiZ - loZ)
+                    val d = if (prev == null) kotlin.math.hypot(cx - pX, cz - pZ)
+                            else kotlin.math.hypot(cx - prev[0], cz - prev[2])
+                    if (d > bestD) { bestD = d; best = floatArrayOf(cx, ear[1], cz) }
+                    if (bestD > span * 0.5f) return best
+                }
+                return best
+            }
+
+            val screen = renderer.holdScreenWorld
+            playAt("conf03", screen)
+            // The monitor stops being blank: the whole set swaps for tvrick, which
+            // carries the picture on its own screen.
+            confRick = true
+            renderer.holdRickOn = true
+            renderer.needsRebuild = true
+            delay(2000)
+            playAt("conf04", screen)
+
+            var loc = elsewhere(screen); playAt("conf05", loc)
+            loc = elsewhere(loc);        playAt("conf06", loc)
+            loc = elsewhere(loc);        playAt("conf07", loc)
+            playAt("conf08", screen)              // back from the monitor
+            loc = elsewhere(screen);     playAt("conf09", loc)
+            // ── conf10: the mosaic ───────────────────────────────────────
+            // Their picture, then their picture edited. Both are built before the
+            // line starts, so neither the read from storage nor the forgery can
+            // land late on a cue that has to hit at a specific second.
+            val mosCap = confMosaicCapture(context, nowMillis())
+            val mosEdit = pleadingMosaic()
+            confMosaicEdited = mosEdit
+            confMosaicFlip = 0
+            confMosaicSaved = false
+            loc = elsewhere(loc)
+            playAt("conf10", loc) { e, _ ->
+                if (e >= CONF_MOSAIC_SHOW_MS && confMosaic == null) confMosaic = mosCap
+                if (e >= CONF_MOSAIC_EDIT_MS) {
+                    val k = ((e - CONF_MOSAIC_EDIT_MS).toFloat() /
+                        CONF_MOSAIC_EDIT_DUR_MS).coerceIn(0f, 1f)
+                    val n = (k * CONF_MOSAIC_CELLS).toInt()
+                    if (n > confMosaicFlip) confMosaicFlip = n
+                }
+            }
+            // If the track came up short — a missing asset, or a player whose
+            // device reports no duration and gets the 8 s fallback — the beat
+            // still plays out rather than being silently dropped.
+            if (confMosaic == null) { confMosaic = mosCap; delay(2200) }
+            if (confMosaicFlip < CONF_MOSAIC_CELLS) {
+                val tEdit = nowMillis()
+                while (confMosaicFlip < CONF_MOSAIC_CELLS) {
+                    val k = ((nowMillis() - tEdit).toFloat() /
+                        CONF_MOSAIC_EDIT_DUR_MS).coerceIn(0f, 1f)
+                    confMosaicFlip = maxOf(confMosaicFlip, (k * CONF_MOSAIC_CELLS).toInt())
+                    if (k >= 1f) break
+                    delay(30)
+                }
+                confMosaicFlip = CONF_MOSAIC_CELLS
+            }
+            // Saved without being asked, under their date and Building 5's own
+            // file name, so it sits in the camera roll looking like one of theirs.
+            confMosaicSaved = saveConfMosaic(mosCap, mosEdit, confTextMeasurer)
+            delay(CONF_MOSAIC_HOLD_MS)
+            confMosaic = null
+            loc = elsewhere(loc)
+
+            // conf11 closes the distance: it starts across the room and finishes
+            // standing over the player.
+            playAt("conf11", loc, moveTo = floatArrayOf(pX, ear[1], pZ))
+
+            // Out. Controls gone, then the credits, then the calculator — which
+            // never speaks again.
+            confOver = true
+            val t2 = nowMillis()
+            while (nowMillis() - t2 < 1500L) {
+                confBlack = ((nowMillis() - t2) / 1500f).coerceIn(0f, 1f)
+                delay(30)
+            }
+            confBlack = 1f
+
+            // Credits, alone on the black — the same list the other endings type
+            // out on the calculator, so this ending is credited identically.
+            delay(900)
+            val credits = com.fictioncutshort.justacalculator.logic.EndingStore.CREDITS
+            for (i in credits.indices) {
+                confCreditLine = i
+                delay(CONF_CREDIT_HOLD)
+            }
+            confCreditLine = -1
+            delay(500)
+
+            // A glitch, and it is a calculator again. RESISTANCE is recorded as
+            // fact rather than predicted: they walked out of the ending they were
+            // going to get. Phase OVER skips the black-screen goodbye entirely —
+            // the confrontation WAS the goodbye — and hands back a calculator with
+            // nothing left to say.
+            repeat(5) {
+                whiteFlash = 0.5f + kotlin.random.Random.nextFloat() * 0.4f
+                delay(45L + kotlin.random.Random.nextInt(60))
+                whiteFlash = 0f
+                delay(30L + kotlin.random.Random.nextInt(50))
+            }
+            com.fictioncutshort.justacalculator.logic.EndingStore.force(
+                context, com.fictioncutshort.justacalculator.logic.EndingStore.RESISTANCE)
+            com.fictioncutshort.justacalculator.logic.EndingStore.markDone(context)
+            com.fictioncutshort.justacalculator.logic.EndingStore.line = 0
+            com.fictioncutshort.justacalculator.logic.EndingStore.phase =
+                com.fictioncutshort.justacalculator.logic.EndingStore.Phase.OVER
+        }
     }
 
     // ── Door-open + walk-through sequence ─────────────────────────────────────
@@ -1508,8 +1854,23 @@ fun CalculatorCityView(
                 // Portrait west bound extended by one street width (matches the
                 // renderer's WEST_LANE) so the player can step into the lane west
                 // of building 7 to reach its west-facing door (~x -468).
-                val xBoundsMin = if (isLandscape) -CELL_V * 2.5f       else PC1 - BW_V - 150f  // -700 / -600
-                val xBoundsMax = if (isLandscape) LSC4 + CELL_V * 0.45f else PC4 + BW_V + 10f   // 1246 / 490
+                // Underground, the city's own bounds do not apply. Building 10's
+                // basement is authored inside mutebutton.obj and reaches x -1160
+                // (the damaged room's drum spans -1160..-632), while the city's west
+                // edge is -840 — so the clamp cut the damaged room in half and put an
+                // invisible wall through it. The probe caught it: the player pinned
+                // at exactly xBoundsMin, "moved yes" and no rule in `why:`, because a
+                // coerceIn is not a collision rule and never reports one. Down here
+                // the underground walls (the tunnel interior) are what contain the
+                // player, so the box just widens to the region the model covers.
+                val ugHr = renderer.holdRegion
+                val ugFree = ugHr != null && cRoomFloorY < -40f &&
+                    pX >= ugHr[0] - UG_BOUND_PAD && pX <= ugHr[1] + UG_BOUND_PAD &&
+                    pZ >= ugHr[2] - UG_BOUND_PAD && pZ <= ugHr[3] + UG_BOUND_PAD
+                val xBoundsMin = (if (isLandscape) -CELL_V * 2.5f       else PC1 - BW_V - 150f)
+                    .let { if (ugFree) minOf(it, ugHr!![0] - UG_BOUND_PAD) else it }
+                val xBoundsMax = (if (isLandscape) LSC4 + CELL_V * 0.45f else PC4 + BW_V + 10f)
+                    .let { if (ugFree) maxOf(it, ugHr!![1] + UG_BOUND_PAD) else it }
                 val nx = (pX + dx).coerceIn(xBoundsMin, xBoundsMax)
                 // North bound normally stops at the lava; once the bridge is complete
                 // (portrait) it extends north across the lava to the mute button.
@@ -1531,8 +1892,22 @@ fun CalculatorCityView(
                 // walking back over the deck into the city.
                 val zBoundsMax = if (crossedBridge) LAVA_NORTH_Z - 12f
                                  else PRE + CELL_V * 0.25f
-                val nz = (pZ + dz).coerceIn(zBoundsMin, zBoundsMax)                              // -644 / 630
+                val nz = (pZ + dz).coerceIn(
+                    if (ugFree) minOf(zBoundsMin, ugHr!![2] - UG_BOUND_PAD) else zBoundsMin,
+                    if (ugFree) maxOf(zBoundsMax, ugHr!![3] + UG_BOUND_PAD) else zBoundsMax)   // -644 / 630
 
+                // Debug: which rule rejected the last move, filled in by blocked()
+                // below. Only read when the on-screen probe is up, but always
+                // written — it is one string assignment on the paths that reject.
+                // A bounds clamp is not a collision rule, so it never reached the
+                // probe: the player stopped dead with why: "-" and nothing to point
+                // at. Report it like any other blocker, and name the edge.
+                var dbgWhy = when {
+                    nx != pX + dx && nz != pZ + dz -> "BOUNDS xz"
+                    nx != pX + dx -> "BOUNDS x=${xBoundsMin.toInt()}..${xBoundsMax.toInt()}"
+                    nz != pZ + dz -> "BOUNDS z"
+                    else -> ""
+                }
                 // Collision — slightly wider margin for first-person
                 fun blocked(tx: Float, tz: Float): Boolean {
                     // Damaged ruins now block against their WALLS (not their whole
@@ -1547,9 +1922,13 @@ fun CalculatorCityView(
                         if (tx < d.minX - WALL_COLLIDE_R || tx > d.maxX + WALL_COLLIDE_R ||
                             tz < d.minZ - WALL_COLLIDE_R || tz > d.maxZ + WALL_COLLIDE_R) continue
                         val stepTop  = cRoomFloorY + WALL_STEP_OVER      // taller than this → a wall, not a step
-                        val duckBase = cRoomFloorY + WALL_DUCK_FRAC * d.h // base above this → an overhead you pass under
+                        // Base above this → an overhead you pass under. Most interiors
+                        // scale it off their own height; the tunnel gives an absolute
+                        // figure, because its mesh height says nothing about its ceilings.
+                        val duckBase = cRoomFloorY +
+                            (if (d.duckH > 0f) d.duckH else WALL_DUCK_FRAC * d.h)
                         val w = d.walls
-                        val r2 = WALL_COLLIDE_R * WALL_COLLIDE_R
+                        val r2 = d.collideR * d.collideR
                         var j = 0
                         while (j + 5 < w.size) {
                             val yBot = w[j + 4]; val yTop = w[j + 5]
@@ -1561,7 +1940,13 @@ fun CalculatorCityView(
                                 t = t.coerceIn(0f, 1f)
                                 val cxp = ax + ex * t; val czp = az + ez * t
                                 val ddx = tx - cxp; val ddz = tz - czp
-                                if (ddx * ddx + ddz * ddz < r2) return true
+                                if (ddx * ddx + ddz * ddz < r2) {
+                                    dbgWhy = "WALL i$ri r=${d.collideR.toInt()} " +
+                                        "y=${yBot.toInt()}..${yTop.toInt()} " +
+                                        "band=${stepTop.toInt()}..${duckBase.toInt()} " +
+                                        "d=${sqrt(ddx * ddx + ddz * ddz).toInt()}"
+                                    return true
+                                }
                             }
                             j += 6
                         }
@@ -1571,21 +1956,57 @@ fun CalculatorCityView(
                     val lfp = if (isLandscape) LAMP_FP_L else LAMP_FP
                     for (fp in bfp) {
                         if (tx > fp[0]-BW_V-14f && tx < fp[0]+BW_V+14f &&
-                            tz > fp[1]-BD_V-14f && tz < fp[1]+BD_V+14f) return true
+                            tz > fp[1]-BD_V-14f && tz < fp[1]+BD_V+14f) {
+                            dbgWhy = "BUILDING fp"; return true
+                        }
                     }
                     for (dz2 in dfp) {
                         if (tx > dz2[0]-dz2[2] && tx < dz2[0]+dz2[2] &&
-                            tz > dz2[1]-dz2[3] && tz < dz2[1]+dz2[3]) return true
+                            tz > dz2[1]-dz2[3] && tz < dz2[1]+dz2[3]) {
+                            dbgWhy = "DEBRIS fp"; return true
+                        }
                     }
                     for (lp in lfp) {
                         val dxl = tx - lp[0]; val dzl = tz - lp[1]
-                        if (dxl*dxl + dzl*dzl < LAMP_R*LAMP_R) return true
+                        if (dxl*dxl + dzl*dzl < LAMP_R*LAMP_R) { dbgWhy = "LAMP fp"; return true }
                     }
                     val sfp = if (isLandscape) STICKMAN_FP_L else STICKMAN_FP
                     for (sp in sfp) {
                         val dxs = tx - sp[0]; val dzs = tz - sp[1]
                         if (dxs*dxs + dzs*dzs < sp[2]*sp[2]) return true
                     }
+                    // ── Through the secret door ──────────────────────────
+                    // The tunnel and the hold are part of Building 10's own model
+                    // now, and they sit outside the drum and below the city floor.
+                    // The rules below (lava, city bounds) would refuse to let the
+                    // player leave the drum at all, so once the panel is open the
+                    // area behind it is exempted from them. The drum's own wall
+                    // test above still applies, so this only opens the doorway.
+                    if (renderer.secretDoorOpen && renderer.holdRegion != null) {
+                        val hr = renderer.holdRegion!!
+                        // Outside the drum's radius, OR below its floor. The region box
+                        // necessarily covers the room too (the tunnel runs under it),
+                        // and exempting the room would switch off its furniture and
+                        // shell collision as well — so the room has to stay excluded.
+                        //
+                        // Radius alone was not enough. The drum's shell test is purely
+                        // 2D: it blocks anywhere inside the wall annulus at ANY height,
+                        // and the tunnel passes directly UNDER that wall, ~350 units
+                        // down. Standing on the hold floor the player was inside the
+                        // annulus in plan view, failed `outsideDrum`, fell through to
+                        // the shell test and was stopped by a wall far overhead —
+                        // reported as "DRUM SHELL" by the probe. Depth separates the
+                        // two cases cleanly: the room's floor is +3, everything
+                        // underground is -117 or lower.
+                        val hbx = if (isLandscape) -CELL_V * 1.25f else 0f
+                        val hbz = if (isLandscape) -CELL_V * 0.5f else -CELL_V * 5.75f
+                        val hdx = tx - hbx; val hdz = tz - hbz
+                        val outsideDrum = hdx * hdx + hdz * hdz > RAD_R * RAD_R
+                        val belowDrum = cRoomFloorY < -40f
+                        if ((outsideDrum || belowDrum) &&
+                            tx >= hr[0] && tx <= hr[1] && tz >= hr[2] && tz <= hr[3]) return false
+                    }
+
                     // Landscape: wall at X=95..115 blocks except at gap Z=265..335
                     if (isLandscape && tx < L_WALL_E && !(tz > L_GAP_N && tz < L_GAP_S)) return true
                     // Building 10 (the mute button) — a sealed body until its door
@@ -1602,25 +2023,40 @@ fun CalculatorCityView(
                         val throughDoorway = off < RAD_DOOR_HALF_DEG ||
                             (renderer.secretDoorOpen && off2 < RAD_DOOR2_HALF_DEG)
                         if (rd2 < RAD_R * RAD_R && rd2 > RAD_WALL_INNER * RAD_WALL_INNER &&
-                            !throughDoorway) return true
+                            !throughDoorway) {
+                            dbgWhy = "DRUM SHELL off=${off.toInt()} off2=${off2.toInt()}"
+                            return true
+                        }
                         // Furniture inside Building 10 — the shelves, desks, sofa.
                         // Skipped while the player is already standing in a footprint,
                         // so a bad spawn can always be walked out of rather than
                         // sealing them in on every axis.
                         if (rd2 < RAD_WALL_INNER * RAD_WALL_INNER) {
                             val fps = renderer.radPropFootprints
-                            val standingInProp = fps.any {
-                                pX > it[0] - it[2] - 10f && pX < it[0] + it[2] + 10f &&
-                                pZ > it[1] - it[3] - 10f && pZ < it[1] + it[3] + 10f
-                            }
-                            if (!standingInProp) for (fp in fps) {
+                            for (fp in fps) {
+                                // The escape hatch is PER PROP. It used to be global:
+                                // standing inside any one footprint disabled collision
+                                // for all of them, and since the room is densely
+                                // furnished (and the boxes carry a 10-unit margin) the
+                                // player is nearly always inside something — so every
+                                // shelf became walk-through. Now only the piece you are
+                                // actually stuck in lets you pass; the rest stay solid.
+                                val insideThis =
+                                    pX > fp[0] - fp[2] - 10f && pX < fp[0] + fp[2] + 10f &&
+                                    pZ > fp[1] - fp[3] - 10f && pZ < fp[1] + fp[3] + 10f
+                                if (insideThis) continue
                                 if (tx > fp[0] - fp[2] - 10f && tx < fp[0] + fp[2] + 10f &&
-                                    tz > fp[1] - fp[3] - 10f && tz < fp[1] + fp[3] + 10f) return true
+                                    tz > fp[1] - fp[3] - 10f && tz < fp[1] + fp[3] + 10f) {
+                                    dbgWhy = "FURNITURE"; return true
+                                }
                             }
                         }
-                    } else if (rd2 < RAD_R * RAD_R) return true
+                    } else if (rd2 < RAD_R * RAD_R) { dbgWhy = "DRUM SEALED"; return true }
                     return false
                 }
+                // The confrontation drops the player into a cell. Done here, inside
+                // the loop, so the floor tracker picks up the cell floor on the very
+                // next sample instead of gliding down from the damaged room.
                 val preMoveX = pX; val preMoveZ = pZ
                 if (!controlsLocked) {
                     if (!blocked(nx, nz)) { pX = nx; pZ = nz }
@@ -1655,6 +2091,42 @@ fun CalculatorCityView(
                 val movedForReal = movedD2 >= 0.6f
                 if (tryingToWalk && !movedForReal) stuckFrames++ else stuckFrames = 0
 
+                // ── Collision probe ──────────────────────────────────────────
+                // Underground, or whenever the player is wedged. Reports the rule
+                // that rejected the move, the interior actually in force, and the
+                // wall band the test compared against — everything needed to tell
+                // "the wall is real" from "the floor height is stale" apart.
+                if (eyeY < -20f || showUnstuck) {
+                    val dl = renderer.damagedInteriors
+                    var idx = -1
+                    for (ri in dl.indices) {
+                        val d = dl[ri]
+                        if (pX >= d.minX && pX <= d.maxX && pZ >= d.minZ && pZ <= d.maxZ) { idx = ri; break }
+                    }
+                    val di = if (idx >= 0) dl[idx] else null
+                    val hr = renderer.holdRegion
+                    val inHold = hr != null && pX >= hr[0] && pX <= hr[1] && pZ >= hr[2] && pZ <= hr[3]
+                    dbgText =
+                        "pos ${pX.toInt()},${pZ.toInt()}  floorY ${cRoomFloorY.toInt()}  eye ${eyeY.toInt()}\n" +
+                        "interior " + (if (di == null) "NONE" else
+                            "#$idx r=${di.collideR} duck=${di.duckH} down=${di.stepDown} " +
+                            "h=${di.h.toInt()} flr=${di.floors.size} wall=${di.walls.size / 6}") + "\n" +
+                        "moved " + (if (movedForReal) "yes" else "NO ") +
+                        "  why: " + (if (dbgWhy.isEmpty()) "-" else dbgWhy) + "\n" +
+                        "holdRegion=${if (hr == null) "null" else if (inHold) "IN" else "out"}" +
+                        "  secretDoor=${renderer.secretDoorOpen}" +
+                        "  ugWalls=${renderer.undergroundWalls}\n" +
+                        // collapse drives the float animation; if it reads 0 while
+                        // geometry is visibly askew, nothing is animating it and the
+                        // tearing is in how the model is split, not in the collapse.
+                        "collapse=${(renderer.collapse * 100f).toInt() / 100f}" +
+                        "  radDoor=${renderer.radDoorOpen}\n" +
+                        "cells=${renderer.holdCells.size}" +
+                        "  cone=${if (renderer.holdConeWorld != null) "y" else "N"}" +
+                        "  screen=${if (renderer.holdScreenWorld != null) "y" else "N"}" +
+                        "  lights=${renderer.holdLightsOn}  rick=${renderer.holdRickOn}"
+                } else if (dbgText.isNotEmpty()) dbgText = ""
+
                 if (stuckFrames > 44) {
                     showUnstuck = true
                     unstuckLinger = UNSTUCK_LINGER_FRAMES   // refreshed while still wedged
@@ -1672,6 +2144,34 @@ fun CalculatorCityView(
                 // ring of cardinal directions.
                 if (unstuckRequested) {
                     unstuckRequested = false
+                    var movedToCell = false
+                    // Sealed in a cell, "unstuck" cannot mean "get out" — the cells
+                    // are shut on purpose. It moves you to the next cell along, which
+                    // keeps the button honest (you were stuck, now you are somewhere
+                    // else) without opening the bars.
+                    val cells = renderer.holdCells
+                    if (cells.isNotEmpty()) {
+                        var here = -1; var hereD = HOLD_CELL_R * HOLD_CELL_R
+                        for (i in cells.indices) {
+                            val dx = pX - cells[i][0]; val dz = pZ - cells[i][2]
+                            val d2 = dx * dx + dz * dz
+                            if (d2 < hereD) { hereD = d2; here = i }
+                        }
+                        if (here >= 0) {
+                            // Anywhere but here, either side of the hold — cycling in
+                            // order kept the player on one side forever.
+                            val pick = if (cells.size > 1) {
+                                var r = kotlin.random.Random.nextInt(cells.size - 1)
+                                if (r >= here) r++
+                                r
+                            } else here
+                            val next = cells[pick]
+                            pX = next[0]; pZ = next[2]
+                            cRoomFloorY = next[1]
+                            stuckFrames = 0; unstuckLinger = 0; showUnstuck = false
+                            movedToCell = true
+                        }
+                    }
                     val ur = ((camYaw.toDouble()) * kotlin.math.PI / 180.0)
                     val fX = sin(ur).toFloat();  val fZ = -cos(ur).toFloat()   // forward
                     val rX = cos(ur).toFloat();  val rZ = sin(ur).toFloat()    // right
@@ -1681,14 +2181,44 @@ fun CalculatorCityView(
                         floatArrayOf(-rX, -rZ),   // left
                         floatArrayOf(fX, fZ)      // forward
                     )
-                    var freed = false
-                    for (step in intArrayOf(45, 90, 150, 230)) {
-                        for (dir in dirs) {
-                            val tx = (pX + dir[0] * step).coerceIn(xBoundsMin, xBoundsMax)
-                            val tz = (pZ + dir[1] * step).coerceIn(zBoundsMin, zBoundsMax)
-                            if (!blocked(tx, tz)) { pX = tx; pZ = tz; freed = true; break }
+                    // Underground, "nothing blocked me" is NOT "this is inside the
+                    // building": out past the tunnel wall there is no geometry to
+                    // collide with at all, so the old search would happily drop the
+                    // player into the rock outside the model. Above ground the city
+                    // floor is everywhere and the question does not arise.
+                    fun standable(tx: Float, tz: Float): Boolean {
+                        if (cRoomFloorY >= -40f) return true
+                        for (di in renderer.damagedInteriors) {
+                            if (tx < di.minX || tx > di.maxX || tz < di.minZ || tz > di.maxZ) continue
+                            for (t in di.floors) {
+                                val ax = t[0]; val az = t[2]; val bx2 = t[3]
+                                val bz2 = t[5]; val cx2 = t[6]; val cz2 = t[8]
+                                if (tx < minOf(ax, bx2, cx2) || tx > maxOf(ax, bx2, cx2)) continue
+                                if (tz < minOf(az, bz2, cz2) || tz > maxOf(az, bz2, cz2)) continue
+                                val den = (bz2 - cz2) * (ax - cx2) + (cx2 - bx2) * (az - cz2)
+                                if (abs(den) < 1e-4f) continue
+                                val u = ((bz2 - cz2) * (tx - cx2) + (cx2 - bx2) * (tz - cz2)) / den
+                                val v = ((cz2 - az) * (tx - cx2) + (ax - cx2) * (tz - cz2)) / den
+                                val w = 1f - u - v
+                                if (u < -0.02f || v < -0.02f || w < -0.02f) continue
+                                if (abs(u * t[1] + v * t[4] + w * t[7] - cRoomFloorY) < 60f) return true
+                            }
                         }
-                        if (freed) break
+                        return false
+                    }
+
+                    var freed = movedToCell
+                    if (!movedToCell) {
+                        for (step in intArrayOf(45, 90, 150, 230)) {
+                            for (dir in dirs) {
+                                val tx = (pX + dir[0] * step).coerceIn(xBoundsMin, xBoundsMax)
+                                val tz = (pZ + dir[1] * step).coerceIn(zBoundsMin, zBoundsMax)
+                                if (!blocked(tx, tz) && standable(tx, tz)) {
+                                    pX = tx; pZ = tz; freed = true; break
+                                }
+                            }
+                            if (freed) break
+                        }
                     }
                     stuckFrames = 0
                     unstuckLinger = 0
@@ -2088,12 +2618,15 @@ fun CalculatorCityView(
                     // you have to be on top of it — and the floor check stops it
                     // firing from the ground floor directly underneath.
                     val rb = renderer.redButtonWorld
-                    if (rb != null && renderer.showRedButton && !secretDoorOpen &&
+                    if (rb != null && renderer.showRedButton &&
+                        (!secretDoorOpen || forceRedButton) &&
                         !showRedButtonPuzzle && !overlayOpen) {
                         val dx = rb[0] - pX; val dz = rb[2] - pZ
-                        val onIt = dx * dx + dz * dz < 22f * 22f &&
-                            abs(cRoomFloorY - rb[1]) < 45f
-                        if (onIt) showRedButtonPuzzle = true
+                        val d2 = dx * dx + dz * dz
+                        // Well clear of it — re-arm immediately, no need to wait.
+                        if (d2 > 70f * 70f) redButtonArmedAt = 0L
+                        val onIt = d2 < 22f * 22f && abs(cRoomFloorY - rb[1]) < 45f
+                        if (onIt && nowMillis() >= redButtonArmedAt) showRedButtonPuzzle = true
                     }
 
                     // Spawn queued FIRE taps from the muzzle along the view heading,
@@ -2351,9 +2884,12 @@ fun CalculatorCityView(
                 // ruin does this now, not just the "C" gun room.
                 val ruinsF = renderer.damagedInteriors
                 var floors: List<FloatArray> = emptyList()
+                var stepDownLimit = 30f
                 for (ri in ruinsF.indices) {
                     val d = ruinsF[ri]
-                    if (pX >= d.minX && pX <= d.maxX && pZ >= d.minZ && pZ <= d.maxZ) { floors = d.floors; break }
+                    if (pX >= d.minX && pX <= d.maxX && pZ >= d.minZ && pZ <= d.maxZ) {
+                        floors = d.floors; stepDownLimit = d.stepDown; break
+                    }
                 }
                 val eyeTarget: Float
                 if (floors.isNotEmpty()) {
@@ -2373,11 +2909,27 @@ fun CalculatorCityView(
                     fun highestStep(px: Float, pz: Float): Float {
                         var b = Float.NaN
                         for (t in floors) {
+                            // Cheap XZ box reject before the barycentric test. The
+                            // ruins are small enough that this never mattered, but the
+                            // hold contributes ~12.4k walkable triangles and this runs
+                            // at nine probe points every frame — ~112k full tests
+                            // without it, a handful with it.
+                            val ax = t[0]; val bx2 = t[3]; val cx2 = t[6]
+                            if (px < minOf(ax, bx2, cx2) || px > maxOf(ax, bx2, cx2)) continue
+                            val az = t[2]; val bz2 = t[5]; val cz2 = t[8]
+                            if (pz < minOf(az, bz2, cz2) || pz > maxOf(az, bz2, cz2)) continue
                             val y = triH(px, pz, t) ?: continue
                             // Accept a generous step so steeper ramp sections (where the
                             // surface climbs faster than a footstep) are still followed
                             // instead of being left behind → the player falling through.
-                            if (abs(y - cRoomFloorY) < 30f && (b.isNaN() || y > b)) b = y
+                            // Asymmetric: climbing is always capped at 30 (so a wall
+                            // crest or a ceiling can never be stepped up onto), but a
+                            // drop may be much larger where the interior says so — the
+                            // tunnel drops into the hold from above. The per-frame
+                            // descent clamp below turns that into a glide down, not a
+                            // teleport.
+                            val dy = y - cRoomFloorY
+                            if (dy < 30f && -dy < stepDownLimit && (b.isNaN() || y > b)) b = y
                         }
                         return b
                     }
@@ -2408,7 +2960,16 @@ fun CalculatorCityView(
                     // through it. Climbing back up stays instant so ramps feel snappy.
                     if (best < cRoomFloorY - 6f) best = cRoomFloorY - 6f
                     cRoomFloorY = best
-                    eyeTarget = best + CAM_EYE_H
+                    // Standing ON the red button lifts you by its own thickness,
+                    // the same read the sidewalk and the bridge deck give — without
+                    // it there is no bodily cue that you are on the thing at all.
+                    val rbw = renderer.redButtonWorld
+                    val onRedButton = rbw != null && renderer.showRedButton &&
+                        (pX - rbw[0]) * (pX - rbw[0]) + (pZ - rbw[2]) * (pZ - rbw[2]) <
+                            RED_BUTTON_STEP_R * RED_BUTTON_STEP_R &&
+                        abs(best - rbw[1]) < 45f
+                    eyeTarget = best + CAM_EYE_H +
+                        (if (onRedButton) renderer.redButtonStepHeight else 0f)
                 } else {
                     cRoomFloorY = 0f
                     eyeTarget = (if (onSidewalk) CAM_EYE_H + SIDEWALK_BUMP else CAM_EYE_H) + bridgeRise
@@ -2721,10 +3282,28 @@ fun CalculatorCityView(
                         fontFamily = FontFamily.Monospace, fontSize = 13.sp)
                 }
             }
+
+            // Collision probe readout. Deliberately plain and top-aligned so it
+            // photographs legibly — this exists to be screenshotted and read.
+            if (dbgText.isNotEmpty()) {
+                Box(
+                    // Bottom-right: the top of the screen belongs to the calculator's
+                    // popups, which were clipping the first line off the readout.
+                    modifier = Modifier.align(Alignment.BottomEnd)
+                        .padding(end = 8.dp, bottom = 8.dp)
+                        .background(Color(0xE6101010), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    Text(dbgText,
+                        color = Color(0xFF7CFF9B),
+                        fontFamily = FontFamily.Monospace, fontSize = 10.sp,
+                        lineHeight = 13.sp)
+                }
+            }
         }
 
         // ── Gun: draw/holster toggle, aiming reticle + FIRE (once grabbed) ────
-        if (gunGrabbed && introDone && !overlayOpen && !forceAerial && doorOpeningDigit == null) {
+        if (gunGrabbed && introDone && !overlayOpen && !forceAerial && doorOpeningDigit == null && !confOver) {
             // Put-away / take-out toggle — always available while you carry the gun.
             val toggleMod = if (isLandscape)
                 Modifier.align(Alignment.CenterStart).padding(start = 24.dp, top = 150.dp)
@@ -2747,7 +3326,7 @@ fun CalculatorCityView(
         }
 
         // Reticle + FIRE only while the gun is actually drawn.
-        if (gunGrabbed && gunHeld && introDone && !overlayOpen && !forceAerial && doorOpeningDigit == null) {
+        if (gunGrabbed && gunHeld && introDone && !overlayOpen && !forceAerial && doorOpeningDigit == null && !confOver) {
             // Centre crosshair — you aim by turning with the joystick.
             Canvas(modifier = Modifier.align(Alignment.Center).size(48.dp)) {
                 val c = size.minDimension / 2f
@@ -2817,7 +3396,10 @@ fun CalculatorCityView(
                         showRedButtonPuzzle = false
                     }
                 },
-                onDismiss = { showRedButtonPuzzle = false }
+                onDismiss = {
+                    showRedButtonPuzzle = false
+                    redButtonArmedAt = nowMillis() + RED_BUTTON_COOLDOWN_MS
+                }
             )
         }
 
@@ -2900,7 +3482,7 @@ fun CalculatorCityView(
 
         // Currency HUD — non-zero balances, top-left. Hidden during buildings,
         // the aerial cut and door sequences (same gate as the joystick).
-        if (introDone && !overlayOpen && !forceAerial && doorOpeningDigit == null) {
+        if (introDone && !overlayOpen && !forceAerial && doorOpeningDigit == null && !confOver) {
             CityCurrencyHud(
                 refreshKey = currencyRefresh,
                 modifier = Modifier.align(Alignment.TopStart),
@@ -3260,8 +3842,69 @@ fun CalculatorCityView(
             CityLotteryPopup(onDismiss = { showCityLottery = false; currencyRefresh++ })
         }
 
+        // conf10's mosaic: their own picture from Building 5, edited in front of
+        // them. Drawn UNDER the black-out, so the closing fade takes it with
+        // everything else, and touch-transparent — the player is locked in a cell
+        // and there is nothing here to press.
+        confMosaic?.let { cap ->
+            confMosaicEdited?.let { ed ->
+                ConfMosaicOverlay(cap, ed, confMosaicFlip, confMosaicSaved)
+            }
+        }
+
         // ── The end of the city ───────────────────────────────────────────────
         // Black-out over the collapse, then the story leaves the city entirely.
+        if (confBlack > 0f) {
+            Box(
+                Modifier.fillMaxSize()
+                    .background(Color.Black.copy(alpha = confBlack.coerceIn(0f, 1f)))
+            )
+        }
+        // Two answers, neither of which does anything. That is the point.
+        if (confPopup) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(28.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    for (label in listOf("YES", "NO")) {
+                        Box(
+                            modifier = Modifier
+                                .background(Color(0xCC2A2320), RoundedCornerShape(12.dp))
+                                .border(1.5.dp, Color(0xFFE0A24E), RoundedCornerShape(12.dp))
+                                .clickable(
+                                    indication = null,
+                                    interactionSource = remember { MutableInteractionSource() }
+                                ) { /* deliberately inert */ }
+                                .padding(horizontal = 34.dp, vertical = 16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(label,
+                                color = Color(0xFFE0A24E), fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace, fontSize = 18.sp)
+                        }
+                    }
+                }
+            }
+        }
+        if (confCreditLine >= 0) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    modifier = Modifier.padding(horizontal = 32.dp),
+                ) {
+                    Text(
+                        text = com.fictioncutshort.justacalculator.logic.EndingStore
+                            .CREDITS.getOrElse(confCreditLine) { "" },
+                        color = Color.White.copy(alpha = 0.88f),
+                        fontSize = 16.sp,
+                        fontFamily = FontFamily.Monospace,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+        }
         if (endBlack > 0f) {
             Box(
                 Modifier

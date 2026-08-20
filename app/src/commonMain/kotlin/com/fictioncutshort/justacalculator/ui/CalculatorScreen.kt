@@ -1938,6 +1938,22 @@ fun CalculatorScreen() {
                     ) { "" },
                 )
             }
+            com.fictioncutshort.justacalculator.logic.EndingStore.Phase.OVER -> {
+                // The confrontation's ending. Same teardown as the others, but it
+                // lands on a plain calculator with nothing to say: the goodbye
+                // already happened, 350 units underground.
+                state.value = state.value.copy(
+                    showAdCards = false,
+                    showCityDirectly = false,
+                    showDormancy = false,
+                    showEndOfPart1 = false,
+                    showDebugMenu = false,
+                    inConversation = false,
+                    isTyping = false,
+                    message = "",
+                    fullMessage = "",
+                )
+            }
             else -> Unit
         }
     }
