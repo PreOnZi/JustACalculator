@@ -16,8 +16,8 @@ import kotlin.concurrent.Volatile
 /**
  * The maze's key inspector, drawn with the shared GL seam.
  *
- * Android has SceneView (Filament) for this and keeps using it; this exists so
- * iOS has the beat at all, and it deliberately copies SceneView's framing —
+ * This started as the iOS-only counterpart to Android's SceneView (Filament)
+ * viewer and now serves both platforms. It deliberately copies SceneView's framing —
  * camera 3.5 units back, the model scaled so its longest side is 2 units, and
  * an opening tilt of x=15 y=-25 — so a key looks the same on both platforms.
  *

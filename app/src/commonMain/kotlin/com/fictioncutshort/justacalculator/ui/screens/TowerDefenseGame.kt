@@ -427,14 +427,27 @@ private fun TDLevelScreen(
     LaunchedEffect(sellMsgOn) { if (sellMsgOn) { delay(1200); sellMsgOn = false } }
 
     // ── Game loop ─────────────────────────────────────────────────────────────
+    //
+    // Paced by the frame clock rather than delay(16). Two reasons: delay runs on
+    // its own timer and drifts against the display, and — the one that matters —
+    // it keeps firing while the app is backgrounded, so the game went on
+    // simulating in the player's pocket. withFrameNanos suspends when the
+    // composition stops drawing.
+    //
+    // Timing is deliberately unchanged. The simulation already advanced on a real
+    // dt, and `tick` still counts one unit per 16 ms of wall clock rather than one
+    // per frame, so the decorative pulse in tdDrawBackground keeps its old speed
+    // on a 120 Hz display instead of running twice as fast.
     LaunchedEffect(Unit) {
         var lastNs = nowMillis() * 1_000_000L
+        var tickAccMs = 0f
         while (phase != TDPhase.WON && phase != TDPhase.LOST) {
-            delay(16)
+            withFrameNanos { }
             val now = nowMillis() * 1_000_000L
             val dt  = ((now - lastNs) / 1_000_000_000f).coerceAtMost(0.05f)
             lastNs  = now
-            tick++
+            tickAccMs += dt * 1000f
+            while (tickAccMs >= 16f) { tickAccMs -= 16f; tick++ }
 
             // Fade range circles over time
             for (t in towers) if (t.rangeTimer > 0f) t.rangeTimer = (t.rangeTimer - dt).coerceAtLeast(0f)

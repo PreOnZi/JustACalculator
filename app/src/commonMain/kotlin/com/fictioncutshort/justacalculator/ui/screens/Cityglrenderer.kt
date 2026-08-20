@@ -974,8 +974,15 @@ class CityGLRenderer : GlRenderer {
             runCatching { ObjLoader.load("models/bridge/bridge${i + 1}.obj", "models/bridge/bridge${i + 1}.mtl") }
                 .getOrDefault(emptyList())
         }
-        try { muteButtonGroups = ObjLoader.load("models/mutebutton.obj", "models/mutebutton.mtl") } catch (_: Throwable) {}
-        try { muteButtonBounds = ObjLoader.loadBounds("models/mutebutton.obj") } catch (_: Throwable) {}
+        // One parse, both outputs. Loading geometry and bounds separately read,
+        // decoded and parsed all 8.6 MB of mutebutton.obj twice — the single most
+        // expensive thing on the path into the city, and on iOS it happens on the
+        // main thread.
+        try {
+            val (groups, bounds) = ObjLoader.loadWithBounds("models/mutebutton.obj", "models/mutebutton.mtl")
+            muteButtonGroups = groups
+            muteButtonBounds = bounds
+        } catch (_: Throwable) {}
         // The hold and its tunnel now live inside mutebutton.obj itself, authored
         // in place — there is no second model to load, scale, rotate or anchor.
         try { damagedGroupsA  = ObjLoader.load("models/builddamage/buildd1.obj",  "models/builddamage/buildd1.mtl") } catch (_: Throwable) {}

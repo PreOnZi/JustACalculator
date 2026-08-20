@@ -39,46 +39,70 @@ data class ObjBounds(
     val minZ: Float, val maxZ: Float,
 )
 
+/**
+ * Whitespace splitter, compiled once.
+ *
+ * This used to be written inline as `line.split(Regex("\\s+"))`, which builds and
+ * compiles a fresh pattern for every line read — 232,741 of them for
+ * mutebutton.obj alone. Hoisting it keeps the matching behaviour byte-for-byte
+ * identical (runs of spaces and tabs both still split) while compiling once.
+ */
+private val WS = Regex("\\s+")
+
+/**
+ * Growable primitive float buffer.
+ *
+ * `MutableList<Float>` boxes every coordinate into a heap object; a city load
+ * pushed roughly 1.1 million of them through the fan-triangulation path, all of
+ * it garbage the moment `toFloatArray()` copied it out. This holds the floats
+ * flat and grows by doubling.
+ */
+private class FloatList(initialCapacity: Int = 1024) {
+    private var buf = FloatArray(initialCapacity)
+    var size = 0
+        private set
+
+    fun add(v: Float) {
+        if (size == buf.size) buf = buf.copyOf(if (buf.size == 0) 16 else buf.size * 2)
+        buf[size++] = v
+    }
+
+    operator fun get(i: Int): Float = buf[i]
+    fun isEmpty(): Boolean = size == 0
+    fun isNotEmpty(): Boolean = size != 0
+    fun clear() { size = 0 }
+    fun toFloatArray(): FloatArray = buf.copyOf(size)
+}
+
 object ObjLoader {
 
     fun load(objPath: String, mtlPath: String? = null): List<ObjGroup> {
         val materials = if (mtlPath != null) parseMtl(mtlPath) else emptyMap()
-        return parseObj(objPath, materials)
+        return parseObj(objPath, materials, collectBounds = false).groups
     }
 
     // Per-object bounding boxes, keyed off the OBJ's `o` markers. [load] groups by
     // material and so loses object identity; this keeps it, which is what the
     // renderer needs to turn a scene model's props into collision footprints.
-    fun loadBounds(objPath: String): List<ObjBounds> {
-        val out = mutableListOf<ObjBounds>()
-        var name = ""
-        var mnX = Float.MAX_VALUE; var mxX = -Float.MAX_VALUE
-        var mnY = Float.MAX_VALUE; var mxY = -Float.MAX_VALUE
-        var mnZ = Float.MAX_VALUE; var mxZ = -Float.MAX_VALUE
-        fun flush() {
-            if (mnX <= mxX) out.add(ObjBounds(name, mnX, mxX, mnY, mxY, mnZ, mxZ))
-            mnX = Float.MAX_VALUE; mxX = -Float.MAX_VALUE
-            mnY = Float.MAX_VALUE; mxY = -Float.MAX_VALUE
-            mnZ = Float.MAX_VALUE; mxZ = -Float.MAX_VALUE
-        }
-        Assets.readLines(objPath).let { lines ->
-            for (raw in lines) {
-                val line = raw.trim()
-                if (line.startsWith("o ")) {
-                    flush()
-                    name = line.substring(2).trim()
-                } else if (line.startsWith("v ")) {
-                    val p = line.split(Regex("\\s+"))
-                    val x = p[1].toFloat(); val y = p[2].toFloat(); val z = p[3].toFloat()
-                    if (x < mnX) mnX = x; if (x > mxX) mxX = x
-                    if (y < mnY) mnY = y; if (y > mxY) mxY = y
-                    if (z < mnZ) mnZ = z; if (z > mxZ) mxZ = z
-                }
-            }
-        }
-        flush()
-        return out
+    fun loadBounds(objPath: String): List<ObjBounds> =
+        parseObj(objPath, emptyMap(), collectBounds = true).bounds
+
+    /**
+     * Geometry and per-object bounds from a **single** read and parse.
+     *
+     * Calling [load] and [loadBounds] separately re-reads, re-decodes and
+     * re-parses the whole file — 8.6 MB twice over for mutebutton.obj, on the
+     * city's critical path. The two want different groupings (material vs `o`
+     * marker), so neither output can be derived from the other after the fact;
+     * collecting both in one pass is what removes the duplicate work.
+     */
+    fun loadWithBounds(objPath: String, mtlPath: String? = null): Pair<List<ObjGroup>, List<ObjBounds>> {
+        val materials = if (mtlPath != null) parseMtl(mtlPath) else emptyMap()
+        val parsed = parseObj(objPath, materials, collectBounds = true)
+        return parsed.groups to parsed.bounds
     }
+
+    private class ParsedObj(val groups: List<ObjGroup>, val bounds: List<ObjBounds>)
 
     private data class Mtl(val r: Float, val g: Float, val b: Float, val texture: String? = null)
 
@@ -127,15 +151,32 @@ object ObjLoader {
         return out
     }
 
-    private fun parseObj(path: String, materials: Map<String, Mtl>): List<ObjGroup> {
-        val positions = mutableListOf<Float>()
-        val texCoords = mutableListOf<Float>()
+    private fun parseObj(
+        path: String,
+        materials: Map<String, Mtl>,
+        collectBounds: Boolean,
+    ): ParsedObj {
+        val positions = FloatList()
+        val texCoords = FloatList()
         val groups = mutableListOf<ObjGroup>()
-        var curVerts = mutableListOf<Float>()
-        var curUvs = mutableListOf<Float>()
+        val curVerts = FloatList()
+        val curUvs = FloatList()
         var curR = 0.5f; var curG = 0.5f; var curB = 0.5f
         var curName = ""
         var curTex: String? = null
+
+        // Per-`o` bounds, accumulated alongside the geometry when asked for.
+        val boundsOut = mutableListOf<ObjBounds>()
+        var bName = ""
+        var mnX = Float.MAX_VALUE; var mxX = -Float.MAX_VALUE
+        var mnY = Float.MAX_VALUE; var mxY = -Float.MAX_VALUE
+        var mnZ = Float.MAX_VALUE; var mxZ = -Float.MAX_VALUE
+        fun flushBounds() {
+            if (mnX <= mxX) boundsOut.add(ObjBounds(bName, mnX, mxX, mnY, mxY, mnZ, mxZ))
+            mnX = Float.MAX_VALUE; mxX = -Float.MAX_VALUE
+            mnY = Float.MAX_VALUE; mxY = -Float.MAX_VALUE
+            mnZ = Float.MAX_VALUE; mxZ = -Float.MAX_VALUE
+        }
 
         fun flush() {
             if (curVerts.isNotEmpty()) {
@@ -146,21 +187,33 @@ object ObjLoader {
                     curUvs.toFloatArray() else FloatArray(0)
                 groups.add(ObjGroup(curR, curG, curB, curName, curVerts.toFloatArray(),
                     uvs, if (uvs.isEmpty()) null else curTex))
-                curVerts = mutableListOf()
-                curUvs = mutableListOf()
+                curVerts.clear()
+                curUvs.clear()
             }
         }
 
-        Assets.readLines(path).let { lines ->
+        // lineSequence() rather than readLines(): the latter materialises every
+        // line of the file as a live String at once — 232,741 of them for
+        // mutebutton.obj, on top of the raw bytes and the decoded string. Streaming
+        // lets each line become garbage as soon as it has been parsed.
+        Assets.readText(path).lineSequence().let { lines ->
             for (raw in lines) {
                 val line = raw.trim()
                 if (line.isEmpty() || line.startsWith("#")) continue
-                val parts = line.split(Regex("\\s+"))
+                val parts = line.split(WS)
                 when (parts[0]) {
                     "v" -> {
-                        positions.add(parts[1].toFloat())
-                        positions.add(parts[2].toFloat())
-                        positions.add(parts[3].toFloat())
+                        val x = parts[1].toFloat()
+                        val y = parts[2].toFloat()
+                        val z = parts[3].toFloat()
+                        positions.add(x)
+                        positions.add(y)
+                        positions.add(z)
+                        if (collectBounds) {
+                            if (x < mnX) mnX = x; if (x > mxX) mxX = x
+                            if (y < mnY) mnY = y; if (y > mxY) mxY = y
+                            if (z < mnZ) mnZ = z; if (z > mxZ) mxZ = z
+                        }
                     }
                     "vt" -> {
                         texCoords.add(parts[1].toFloat())
@@ -173,6 +226,13 @@ object ObjLoader {
                     "o", "g" -> {
                         flush()
                         curName = parts.getOrNull(1) ?: curName
+                        // Bounds break on `o` only, never `g` — matching what the
+                        // separate loadBounds pass did. The name is taken from the
+                        // raw line so an object name containing spaces survives.
+                        if (collectBounds && parts[0] == "o") {
+                            flushBounds()
+                            bName = line.substring(2).trim()
+                        }
                     }
                     "usemtl" -> {
                         flush()
@@ -213,14 +273,15 @@ object ObjLoader {
             }
         }
         flush()
-        return groups
+        if (collectBounds) flushBounds()
+        return ParsedObj(groups, boundsOut)
     }
 
     // V is flipped on the way in. OBJ puts v=0 at the BOTTOM of the image; the
     // renderer uploads its textures with GLUtils.texImage2D, which hands the bitmap
     // over top row first, putting the image's TOP at v=0. Without the flip every
     // texture in the game renders upside down.
-    private fun pushUv(dst: MutableList<Float>, uvs: List<Float>, oneBasedIdx: Int) {
+    private fun pushUv(dst: FloatList, uvs: FloatList, oneBasedIdx: Int) {
         if (oneBasedIdx == 0 || uvs.isEmpty()) { dst.add(0f); dst.add(0f); return }
         val zeroIdx = if (oneBasedIdx > 0) oneBasedIdx - 1 else uvs.size / 2 + oneBasedIdx
         val base = zeroIdx * 2
@@ -229,7 +290,7 @@ object ObjLoader {
         dst.add(1f - uvs[base + 1])
     }
 
-    private fun pushVert(dst: MutableList<Float>, positions: List<Float>, oneBasedIdx: Int) {
+    private fun pushVert(dst: FloatList, positions: FloatList, oneBasedIdx: Int) {
         // Negative indices in OBJ are relative to the end of the position list.
         val zeroIdx = if (oneBasedIdx > 0) oneBasedIdx - 1 else positions.size / 3 + oneBasedIdx
         val base = zeroIdx * 3

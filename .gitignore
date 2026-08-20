@@ -26,3 +26,10 @@ DerivedData/
 # that tree ships verbatim into both the APK and the iOS .app bundle.
 *.afdesign
 *.bak-*
+
+# Blender autosave backups — regenerated on every save, never worth versioning.
+*.blend1
+
+# Release bundles are build output; app/release/app-release.aab was tracked at
+# 76 MB. Rebuild with `./gradlew :app:bundleRelease` instead.
+/app/release/

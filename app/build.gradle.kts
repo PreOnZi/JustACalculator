@@ -55,8 +55,10 @@ kotlin {
             implementation(libs.kotlinx.coroutines.android)
             implementation(libs.androidx.benchmark.traceprocessor)
 
-            // 3D model viewer for the key-examination overlay.
-            implementation("io.github.sceneview:sceneview:2.3.0")
+            // The key-examination overlay used to render here via
+            // io.github.sceneview:sceneview (Filament). It now uses the shared
+            // ModelViewerGl in commonMain, which is what iOS already used —
+            // removing ~10.5 MB of native libraries and IBL environment maps.
 
             // CameraX.
             val cameraxVersion = "1.5.1"

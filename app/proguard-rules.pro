@@ -8,13 +8,6 @@
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
 
-# --- SceneView + Filament (native OpenGL renderer, accessed via JNI) --------
-# Filament's Java classes are called from native code; do not touch them.
--keep class com.google.android.filament.** { *; }
--keep class io.github.sceneview.** { *; }
--dontwarn com.google.android.filament.**
--dontwarn io.github.sceneview.**
-
 # --- ML Kit face detection --------------------------------------------------
 -keep class com.google.mlkit.** { *; }
 -keep class com.google.android.gms.internal.mlkit_vision_face.** { *; }
