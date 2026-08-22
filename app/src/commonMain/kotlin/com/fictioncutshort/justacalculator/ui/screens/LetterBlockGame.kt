@@ -121,7 +121,17 @@ fun LetterBlockGame(
         // height). Landscape reserves 1.5 cells of vertical headroom for the
         // spelled-word chip so it never gets crammed against the screen edge;
         // portrait only needs the standard half-cell of breathing room.
-        val verticalHeadroom = if (isLandscape) 1.5f else 0.5f
+        // Portrait headroom was 0.5 cells, which is only ever enough on a tall
+        // phone. There, width is the binding constraint (1080/6.5 ≈ 166 beats
+        // 2400/11.5 ≈ 209), so the stack lands well clear of the prompt. On a
+        // shorter portrait tablet the two bounds converge — 1080×1920 gives
+        // ≈166 either way — and eleven rows then occupy 1826 of 1920 pixels,
+        // burying the question under the letters.
+        //
+        // 2.5 cells reserves the message area explicitly. It changes nothing on
+        // a phone (2400/13.5 ≈ 178 is still above the 166 width bound, so the
+        // same size wins) and only binds on the shorter screens that need it.
+        val verticalHeadroom = if (isLandscape) 1.5f else 2.5f
         val widthBoundedSize = playAreaWidthPx / (targetCols + 0.5f)
         val heightBoundedSize = playAreaHeightPx / (maxBlocksPerColumn + verticalHeadroom)
         val blockSize = kotlin.math.min(widthBoundedSize, heightBoundedSize)

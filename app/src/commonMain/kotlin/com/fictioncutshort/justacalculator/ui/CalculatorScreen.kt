@@ -1210,7 +1210,7 @@ fun CalculatorScreen() {
                                 text = "This is Just A Calculator. So you know what you're getting yourself into.\n\n" +
                                         "But just in case, we would like you to know, that we do not collect (and are not interested) in any of your data, be it from your math calculations or the depths of your device.\n\n" +
                                         "We don't want it, we do not look at it, we are certainly not collecting it and we could not be further from selling it.\n\n" +
-                                        "This app does not collect or store any personal data. It does borrow your location and sends it to Overpass - an open source mapping provider. It is strictly for the purposes of the story & game. \n\n" +
+                                        "This app does not collect or store any personal data. It does borrow your location and sends it to the mapping services that draw the map — Overpass and OpenStreetMap, plus Apple Maps on iPhone. It is strictly for the purposes of the story & game. \n\n" +
                                         "That is our promise.\n\n" +
                                         "Because to really take advantage of the calculator... Do what it tells you!\n\n" +
                                         "Generative AI: Generative AI, mainly Claude AI, has been used for development of the calculator. However, its use was strictly code-based. Claude was not used to consult art direction, the story or to build the majority of visual artifacts. 3D models have been built from scratch in Blender, the story has been developed based only on human ideas & discussions, and the same goes for art direction.\n\n" +

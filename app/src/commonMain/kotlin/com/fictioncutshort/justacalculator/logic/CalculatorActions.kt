@@ -3780,6 +3780,20 @@ object CalculatorActions {
 
     private fun handleDigitSimple(state: MutableState<CalculatorState>, digit: String) {
         val current = state.value
+        // Expression mode — entered by the bracket key — holds the whole sum in
+        // `expression`, and handleParentheses deliberately resets number1 to "0"
+        // and operation to null when it switches over. The display renders
+        // `expression` whenever it is non-empty, so a digit written to number1
+        // here lands in a field nothing is showing: the keypad went dead after
+        // the first "(" and "75*(35-8)" could not be typed at all.
+        //
+        // handleDecimal, handlePercentSymbol and handleParentheses on this same
+        // dispatch were already expression-aware; digits and operators were the
+        // two that were missed.
+        if (current.expression.isNotEmpty()) {
+            state.value = current.copy(expression = current.expression + digit)
+            return
+        }
         if (current.operation == null) {
             if (current.number1.length >= MAX_DIGITS) return
             state.value = current.copy(
@@ -3794,6 +3808,12 @@ object CalculatorActions {
 
     private fun handleOperatorSimple(state: MutableState<CalculatorState>, operator: String) {
         val current = state.value
+        // Same reason as handleDigitSimple: in expression mode the operator has
+        // to join the expression, or "75*(35-8" could never get its minus.
+        if (current.expression.isNotEmpty()) {
+            state.value = current.copy(expression = current.expression + operator)
+            return
+        }
         if (current.operation == null || (current.number2.isEmpty() && !current.isReadyForNewOperation)) {
             state.value = current.copy(operation = operator, isReadyForNewOperation = false)
         } else if (current.number2.isNotEmpty()) {
