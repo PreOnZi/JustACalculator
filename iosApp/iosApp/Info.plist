@@ -17,9 +17,14 @@
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.14</string>
+	<string>1.16</string>
 	<key>CFBundleVersion</key>
-	<string>14</string>
+	<string>16</string>
+	<!-- Export compliance: the app uses only standard HTTPS (URLSession TLS) and
+	     no custom or non-exempt cryptography, so it qualifies for the exemption.
+	     Declaring it here stops App Store Connect asking on every single upload. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>

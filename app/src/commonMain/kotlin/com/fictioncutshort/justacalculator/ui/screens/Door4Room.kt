@@ -156,26 +156,26 @@ private data class NewsItem(
 
 private val DOOR4_NEWS = listOf(
     NewsItem(
-        asset = "articles/news1.mp4", isVideo = true,
+        asset = "articles/news1.png", isVideo = false,
         title = "Public facial recognition works", subtitle = null,
         year = "2026", source = "Met Police London",
         url = "https://x.com/metpoliceuk/status/2057818316085891260",
     ),
     NewsItem(
         asset = "articles/news2.png", isVideo = false,
-        title = "Phone tracking golore", subtitle = null,
+        title = "Phone tracking galore", subtitle = null,
         year = "2025", source = "Lighthouse Reports",
         url = "https://www.lighthousereports.com/methodology/surveillance-secrets-explainer/",
     ),
     NewsItem(
-        asset = "articles/news3.mp4", isVideo = true,
+        asset = "articles/news3.png", isVideo = false,
         title = "Public facial recognition does not work",
         subtitle = "The Angela Lipps Case",
         year = "2026", source = "WBIR Channel 10",
         url = "https://www.youtube.com/watch?v=XI6DvJOXHtw",
     ),
     NewsItem(
-        asset = "articles/news4.mp4", isVideo = true,
+        asset = "articles/news4.png", isVideo = false,
         title = "Can you hear me?", subtitle = null,
         year = "2023", source = "abc 2 WBAY",
         url = "https://www.wbay.com/video/2023/03/02/green-bay-mayor-city-clerk-had-access-audio-surveillance/",
@@ -187,7 +187,7 @@ private val DOOR4_NEWS = listOf(
         url = "https://libertyinvestigates.org.uk/articles/police-ai-anpr-track-drivers/",
     ),
     NewsItem(
-        asset = "articles/news6.mp4", isVideo = true,
+        asset = "articles/news6.png", isVideo = false,
         title = "Who you textin'?", subtitle = null,
         year = "2026", source = "WION",
         url = "https://www.youtube.com/watch?v=us69h0Wda8M",
