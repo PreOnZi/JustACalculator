@@ -285,14 +285,29 @@ fun TowerDefenseGame(onComplete: () -> Unit) {
             context, com.fictioncutshort.justacalculator.logic.Currency.COINS, finalGold, "b1")
         onComplete()
     }
-    // Moving to a new level (or retrying one) starts its lives/gold from the level
-    // definition again, so the mid-level snapshot has to go with it.
-    fun startLevel(level: Int, reached: Int) {
+    // Moving to a new level (or retrying one) clears the mid-level snapshot so the
+    // next level starts clean.
+    //
+    // [carryLives] is the exception, and it is what makes damage to the tower
+    // persist across the run rather than healing between levels. Advancing after a
+    // win carries the surviving lives forward; retrying after a loss does not,
+    // because lives are zero at that point and carrying them would hand the player
+    // an unwinnable board.
+    //
+    // The carried count is capped at the incoming level's own budget, so finishing
+    // a level untouched means starting the next one untouched rather than with a
+    // surplus — the thing that persists is the damage, not a stockpile.
+    fun startLevel(level: Int, reached: Int, carryLives: Boolean = false) {
+        val carried = if (!carryLives) -1 else {
+            val remaining = com.fictioncutshort.justacalculator.logic.BuildingProgress
+                .getInt(context, 1, "lives", -1)
+            if (remaining >= 0) remaining.coerceAtMost(TD_LEVELS[level].lives) else -1
+        }
         levelIdx = level
         totalReached = reached
         com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 1, "level", level)
         com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 1, "reached", reached)
-        com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 1, "lives", -1)
+        com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 1, "lives", carried)
         com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 1, "gold", -1)
         com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 1, "wave", -1)
     }
@@ -311,7 +326,7 @@ fun TowerDefenseGame(onComplete: () -> Unit) {
                 com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 1, "reached", totalReached)
             },
             onWin          = { reached, gold ->
-                if (levelIdx < TD_LEVELS.lastIndex) startLevel(levelIdx + 1, reached)
+                if (levelIdx < TD_LEVELS.lastIndex) startLevel(levelIdx + 1, reached, carryLives = true)
                 else { totalReached = reached; finish(gold) }
             },
             onLose         = { reached, gold ->

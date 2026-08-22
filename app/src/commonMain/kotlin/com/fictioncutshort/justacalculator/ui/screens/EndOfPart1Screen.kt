@@ -1,5 +1,6 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.platform.appStoreName
 import com.fictioncutshort.justacalculator.platform.openAppStoreListing
 import com.fictioncutshort.justacalculator.platform.AppContext
 import com.fictioncutshort.justacalculator.platform.currentAppContext
@@ -36,7 +37,7 @@ import com.fictioncutshort.justacalculator.util.RetroCream
 
 /**
  * Reusable "Part 1 complete" card. Just the LCD-styled panel with the
- * sign-off text and the Play Store button — no full-screen background.
+ * sign-off text and the store-rating button — no full-screen background.
  *
  * Embedded inside [DormancyScreen] (so it floats above the static / RAD
  * grid during dormancy) and inside [EndOfPart1Screen] (full-screen mode
@@ -85,7 +86,7 @@ fun Part1CompletePanel(modifier: Modifier = Modifier) {
         Spacer(modifier = Modifier.height(20.dp))
 
         Button(
-            onClick = { openPlayStore(context) },
+            onClick = { openAppStoreListing(context) },
             colors = ButtonDefaults.buttonColors(
                 containerColor = AccentOrange,
                 contentColor = RetroCream
@@ -98,7 +99,7 @@ fun Part1CompletePanel(modifier: Modifier = Modifier) {
             )
         ) {
             Text(
-                text = "Rate on Google Play",
+                text = "Rate on the $appStoreName",
                 fontSize = 15.sp,
                 fontFamily = CalculatorDisplayFont
             )
@@ -123,8 +124,4 @@ fun EndOfPart1Screen(modifier: Modifier = Modifier) {
     ) {
         Part1CompletePanel()
     }
-}
-
-private fun openPlayStore(context: AppContext) {
-    openAppStoreListing(context)
 }

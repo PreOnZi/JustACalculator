@@ -37,3 +37,6 @@ actual fun openMapsAt(context: AppContext, lat: Double, lon: Double, label: Stri
         )
     }
 }
+
+/** Google's own shorthand for the store, as players see it on the device. */
+actual val appStoreName: String = "Play Store"

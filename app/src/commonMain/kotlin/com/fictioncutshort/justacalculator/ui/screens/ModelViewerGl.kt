@@ -2,6 +2,7 @@ package com.fictioncutshort.justacalculator.ui.screens
 
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
@@ -47,28 +48,39 @@ private const val BG_B = 0.027f
 
 @Composable
 fun ModelViewerGl(modelFile: String, modifier: Modifier = Modifier) {
-    // Keyed on the file: selecting a different key must rebuild the renderer,
-    // not quietly keep showing the previous model.
-    val renderer = remember(modelFile) { ModelViewerRenderer(modelFile) }
-    val density = LocalDensity.current
+    // `key` is load-bearing, not decoration.
+    //
+    // A new renderer alone is not enough: the surface underneath is a real
+    // platform view whose renderer can only be attached once (GLSurfaceView's
+    // setRenderer, and the GLKView delegate on iOS), and it is created in an
+    // AndroidView/UIKitView factory that does NOT re-run when a parameter
+    // changes. Without this key, selecting a second key built a fresh
+    // ModelViewerRenderer that nothing ever drew: the first key stayed frozen on
+    // screen and drags rotated an invisible model.
+    //
+    // Keying here disposes the whole surface and builds a new one per model.
+    key(modelFile) {
+        val renderer = remember(modelFile) { ModelViewerRenderer(modelFile) }
+        val density = LocalDensity.current
 
-    PlatformGlSurface(
-        renderer = renderer,
-        contextVersion = 2,
-        targetFps = 30,
-        modifier = modifier.pointerInput(modelFile) {
-            detectDragGestures { change, drag ->
-                change.consume()
-                // In dp, so the same swipe turns the key by the same amount on
-                // a phone and on an iPad.
-                val dx = with(density) { drag.x.toDp().value }
-                val dy = with(density) { drag.y.toDp().value }
-                renderer.yaw += dx * DRAG_SENSITIVITY
-                renderer.pitch = (renderer.pitch + dy * DRAG_SENSITIVITY)
-                    .coerceIn(-VIEWER_PITCH_LIMIT, VIEWER_PITCH_LIMIT)
-            }
-        },
-    )
+        PlatformGlSurface(
+            renderer = renderer,
+            contextVersion = 2,
+            targetFps = 30,
+            modifier = modifier.pointerInput(modelFile) {
+                detectDragGestures { change, drag ->
+                    change.consume()
+                    // In dp, so the same swipe turns the key by the same amount on
+                    // a phone and on an iPad.
+                    val dx = with(density) { drag.x.toDp().value }
+                    val dy = with(density) { drag.y.toDp().value }
+                    renderer.yaw += dx * DRAG_SENSITIVITY
+                    renderer.pitch = (renderer.pitch + dy * DRAG_SENSITIVITY)
+                        .coerceIn(-VIEWER_PITCH_LIMIT, VIEWER_PITCH_LIMIT)
+                }
+            },
+        )
+    }
 }
 
 private class ModelViewerRenderer(private val modelFile: String) : GlRenderer {
@@ -228,10 +240,19 @@ private class ModelViewerRenderer(private val modelFile: String) : GlRenderer {
                 vec3 key = normalize(vec3(-0.4, 0.8, 0.6));
                 vec3 fill = normalize(vec3(0.5, -0.2, -0.7));
                 float d = max(dot(n, key), 0.0);
-                float f = max(dot(n, fill), 0.0) * 0.25;
+                float f = max(dot(n, fill), 0.0) * 0.40;
                 // A touch of specular sells these as metal rather than plastic.
-                float spec = pow(max(dot(reflect(-key, n), vec3(0.0, 0.0, 1.0)), 0.0), 24.0) * 0.35;
-                vec3 c = uColor.rgb * (0.22 + 0.85 * d + f) + spec;
+                float spec = pow(max(dot(reflect(-key, n), vec3(0.0, 0.0, 1.0)), 0.0), 24.0) * 0.40;
+                // Most of the darkness was never the lighting: GltfStaticModel was
+                // handing GL linear baseColorFactors as if they were sRGB, so a
+                // key authored at 0.055 arrived at 0.055 instead of 0.26. That is
+                // fixed at the source now.
+                //
+                // The ambient floor still sits above a classic key/fill rig,
+                // because Filament lit unlit faces from an environment map and
+                // nothing here replaces that — but it no longer has to compensate
+                // for near-black albedo, so it comes back down from 0.55 to 0.40.
+                vec3 c = uColor.rgb * (0.40 + 0.70 * d + f) + spec;
                 gl_FragColor = vec4(clamp(c, 0.0, 1.0), uColor.a);
             }
         """

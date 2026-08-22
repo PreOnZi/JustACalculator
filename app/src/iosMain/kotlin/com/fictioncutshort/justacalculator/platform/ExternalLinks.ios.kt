@@ -36,3 +36,6 @@ actual fun openMapsAt(context: AppContext, lat: Double, lon: Double, label: Stri
         "https://maps.apple.com/?ll=$lat,$lon&q=${urlEncode(label)}",
     )
 }
+
+/** Apple's own name for the store, as players see it on the device. */
+actual val appStoreName: String = "App Store"

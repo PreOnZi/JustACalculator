@@ -63,6 +63,20 @@ class CityGLRenderer : GlRenderer {
     private val FLASH_COL   = floatArrayOf(0.60f, 0.73f, 1.00f)
     private val FLASH_RANGE = 340f
 
+    /**
+     * How far the beam is tilted below the camera's forward axis.
+     *
+     * Aimed exactly along the view direction, the torch lit the wall ahead and
+     * left the ground the player is walking on dark. 0.28 works out at roughly
+     * 15° of droop when looking level, which reaches the floor a few paces ahead
+     * without pulling the hot centre off whatever is being looked at.
+     *
+     * Applied in world space, so looking up or down changes the beam less than
+     * the number suggests — that is deliberate, a torch held at the hip does not
+     * swing to vertical when you glance at the ceiling.
+     */
+    private val FLASH_DOWN_TILT = 0.28f
+
     // The hold's cell cameras: how far out into the room they hang, and how high
     // above the cell floor. 55 is the player's own eye height, so each one meets
     // whoever is behind the bars at their level.
@@ -230,6 +244,7 @@ class CityGLRenderer : GlRenderer {
     }
 
     private val meshes = mutableListOf<Mesh>()
+
 
     /**
      * Reusable upload buffer for geometry that changes every frame — the wall
@@ -750,14 +765,18 @@ class CityGLRenderer : GlRenderer {
                     // the beam reads unmistakably as pointing where you're facing
                     // instead of as a general brightening around the player.
                     float axis  = dot(fdir, uFlashDir);
-                    float spill = smoothstep(0.62, 0.88, axis);
+                    // Spill widened from 0.62 so the pool reaches the floor either
+                    // side of the player rather than ending in a narrow stripe.
+                    float spill = smoothstep(0.55, 0.86, axis);
                     float hot   = smoothstep(0.90, 0.985, axis);
-                    float cone  = spill * 0.55 + hot * 0.85;
+                    float cone  = spill * 0.60 + hot * 0.85;
                     float fatt  = clamp(1.0 - fdist / ${FLASH_RANGE}, 0.0, 1.0);
                     fatt = fatt * fatt;
                     float fnl = max(dot(N, -fdir), 0.0);
+                    // The floor is lit at a grazing angle, so fnl is small there —
+                    // the constant term is what actually makes the ground read.
                     flash = vec3(${FLASH_COL[0]}, ${FLASH_COL[1]}, ${FLASH_COL[2]})
-                            * cone * fatt * (0.25 + 0.75 * fnl) * uFlash * 1.9;
+                            * cone * fatt * (0.38 + 0.72 * fnl) * uFlash * 2.3;
                 }
 
                 // Night pulls the colour out of whatever is lit only by the sky and
@@ -912,6 +931,17 @@ class CityGLRenderer : GlRenderer {
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onSurfaceCreated() {
+        // Learn the host's framebuffer FIRST, while the binding is still the one
+        // the surface was created with and nothing else has bound anything.
+        //
+        // This has to happen before cctv.init(): that call binds its own offscreen
+        // framebuffer to clear it, and its restore path falls back to reading the
+        // live binding whenever defaultFbo is still unset. Called in the other
+        // order, the CCTV restored *itself* as the render target and the capture
+        // below then recorded the offscreen buffer as "the screen" — so every
+        // frame of the city was drawn into a texture nobody displays, and the
+        // whole scene rendered black.
+        captureDefaultFbo()
         Gl.glClearColor(0.96f, 0.94f, 0.88f, 1f)
         Gl.glEnable(Gl.GL_DEPTH_TEST)
         Gl.glDepthFunc(Gl.GL_LESS)
@@ -5573,6 +5603,12 @@ class CityGLRenderer : GlRenderer {
         var fx = -view[2]; var fy = -view[6]; var fz = -view[10]
         val fl = sqrt(fx*fx + fy*fy + fz*fz)
         if (fl > 1e-4f) { fx /= fl; fy /= fl; fz /= fl } else { fx = 0f; fy = 0f; fz = -1f }
+        // Droop the beam so it takes in the ground ahead, not just the wall the
+        // player is facing. Re-normalised, or the shader's dot(fdir, uFlashDir)
+        // cone test would widen along with the vector's length.
+        fy -= FLASH_DOWN_TILT
+        val dl = sqrt(fx*fx + fy*fy + fz*fz)
+        if (dl > 1e-4f) { fx /= dl; fy /= dl; fz /= dl }
 
         val target = if (aerialMode || flashOff) 0f else {
             var lit = 0f

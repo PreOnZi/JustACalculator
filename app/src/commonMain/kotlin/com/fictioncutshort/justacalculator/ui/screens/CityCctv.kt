@@ -243,6 +243,12 @@ class CityCctv {
     /** (Re)creates the GL objects. Safe to call on every context loss. */
     fun init() {
         release()
+        // Whatever is bound right now is the caller's real target — read it before
+        // this function binds anything of its own. restoreTarget()'s live-binding
+        // fallback cannot be used at the end of init, because by then the thing
+        // bound IS our own framebuffer, and restoring to it leaves the offscreen
+        // buffer current for every subsequent draw.
+        val callerFbo = currentFbo()
         prog = buildProg()
         if (prog == 0) return
         aPos    = Gl.glGetAttribLocation(prog, "aPosition")
@@ -281,7 +287,7 @@ class CityCctv {
             Gl.glClearColor(0.01f, 0.02f, 0.02f, 1f)
             Gl.glClear(Gl.GL_COLOR_BUFFER_BIT or Gl.GL_DEPTH_BUFFER_BIT)
         }
-        Gl.glBindFramebuffer(Gl.GL_FRAMEBUFFER, restoreTarget())
+        Gl.glBindFramebuffer(Gl.GL_FRAMEBUFFER, if (defaultFbo >= 0) defaultFbo else callerFbo)
         if (!ok) { release(); logWarn("CityGL", "CCTV framebuffer incomplete") }
     }
 

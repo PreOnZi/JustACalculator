@@ -1,5 +1,6 @@
 package com.fictioncutshort.justacalculator.ui.screens
 
+import com.fictioncutshort.justacalculator.platform.appStoreName
 import com.fictioncutshort.justacalculator.platform.currentTimeOfDay
 import com.fictioncutshort.justacalculator.platform.Prefs
 import com.fictioncutshort.justacalculator.platform.AppContext
@@ -177,6 +178,16 @@ private const val PROJ_R           = 6f    // gun projectile radius (world units
 // must rise more than WALL_STEP_OVER above the floor (so low steps are walked
 // over) AND its base must sit below floor + WALL_DUCK_FRAC×height (so you pass
 // UNDER any overhead lintel/arch even when headroom is tight).
+/**
+ * Shows the live collision-probe readout underground (position, interior in
+ * force, the rule that refused a move, hold-region state).
+ *
+ * A development tool, not a player-facing feature — it was appearing over the
+ * underground section on shipping builds. Flip to true when diagnosing an
+ * invisible wall or a stuck player; keep it false for releases.
+ */
+private const val SHOW_COLLISION_PROBE = false
+
 // Slack added around Building 10's underground region when the city's walk
 // bounds are relaxed down there. holdRegion is measured from the triangles
 // themselves, so its edge IS the outer face of a wall; without a little padding
@@ -528,10 +539,10 @@ private data class Hints(val basic: String, val advanced: String)
 
 private val DOOR_HINTS: Map<Int, Hints> = mapOf(
     1         to Hints("You should know this already.", "Well, you'll have to google it.\nI doubt, that '17th-century Lebanon' will help."),
-    2         to Hints("It's in the long version.\nYou are not expected to remember it.", "As per Google Play policy, every app has to have a detailed privacy policy available to the users without having to download the app.\nThat's the document you are after."),
+    2         to Hints("It's in the long version.\nYou are not expected to remember it.", "As per $appStoreName policy, every app has to have a detailed privacy policy available to the users without having to download the app.\nThat's the document you are after."),
     3         to Hints("It probably looks just like another screenshot.", "Honestly, besides giving you the answers, I cannot be more detailed than this."),
     4         to Hints("Well. I don't know what to tell you.", "Still don't know what to tell you.\nYou'll have to figure this one out."),
-    5         to Hints("Translation of the app icon text to binary.", "Ok. The numbers are in the Google Play Store description."),
+    5         to Hints("Translation of the app icon text to binary.", "Ok. The numbers are in the $appStoreName description."),
     6         to Hints("This is up to you.", "Your life, his life, her life, whose life?"),
     7         to Hints("I don't judge.", "Maybe I'd look twice. But hey. I'm sure you are unique regardless."),
     8         to Hints("Don't take it too personally.", "or take it as personally as you'd like. Your royal 'we'."),
@@ -2096,7 +2107,7 @@ fun CalculatorCityView(
                 // that rejected the move, the interior actually in force, and the
                 // wall band the test compared against — everything needed to tell
                 // "the wall is real" from "the floor height is stale" apart.
-                if (eyeY < -20f || showUnstuck) {
+                if (SHOW_COLLISION_PROBE && (eyeY < -20f || showUnstuck)) {
                     val dl = renderer.damagedInteriors
                     var idx = -1
                     for (ri in dl.indices) {

@@ -1045,8 +1045,20 @@ fun MazeGame(onComplete: () -> Unit, onExit: () -> Unit) {
     // Tilt, behind a seam: rotation-vector sensor on Android, CoreMotion on iOS.
     val hasGyro = remember { isTiltAvailable() }
     val tilt = rememberDeviceTilt()
+    // Camera focus lead — a fraction of the tilt, so the view drifts the way the
+    // board is leaning without swinging about.
     gyroTiltX = tilt.x * 0.30f
     gyroTiltY = tilt.y * 0.30f
+    // Ball control. These drive the physics via tiltC/tiltR below, and were never
+    // being written — the ball read a permanent zero, and because hasGyro is true
+    // the on-screen arrows stay hidden, so there was no control at all on a device
+    // with a rotation sensor.
+    //
+    // Assigned at the arrows' own scale: rememberDeviceTilt already clamps to
+    // -1..1, so a full lean equals a held arrow press. Axis conventions match the
+    // arrows — C grows right (▶ = +1), R grows down (▼ = +1).
+    gyroC = tilt.x
+    gyroR = tilt.y
 
     LockOrientationWhileVisible()
 

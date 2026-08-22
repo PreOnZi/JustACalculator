@@ -1,5 +1,6 @@
 package com.fictioncutshort.justacalculator.ui.components
 
+import com.fictioncutshort.justacalculator.platform.appStoreName
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -75,7 +76,7 @@ fun DonationLandingPage(
                 elevation = ButtonDefaults.buttonElevation(defaultElevation = 6.dp)
             ) {
                 Text(
-                    text = "5* on the Play Store sounds\nreally nice. Would you do that for me?",
+                    text = "5* on the $appStoreName sounds\nreally nice. Would you do that for me?",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,

@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint as OsmGeoPoint
 import org.osmdroid.views.MapView
@@ -30,6 +31,8 @@ actual fun PlatformBuildingMapView(
     destPoints: List<GeoPoint>,
     activeDest: GeoPoint?,
     route: List<GeoPoint>,
+    routeIsGuess: Boolean,
+    routeArrow: List<GeoPoint>,
     fitTrigger: Int,
     initialZoom: Double,
     onDestTap: (GeoPoint) -> Unit,
@@ -38,6 +41,26 @@ actual fun PlatformBuildingMapView(
 
     AndroidView(
         factory = { ctx ->
+            // osmdroid needs configuring before a MapView is built, and nothing
+            // in the app was doing it. Two consequences, both of which look
+            // exactly like what was on screen — overlays drawing fine over an
+            // empty background:
+            //
+            //  - No user agent. osmdroid defaults to its own library name, and
+            //    tile.openstreetmap.org rejects that outright under its usage
+            //    policy, so every tile request comes back refused.
+            //  - No osmdroid base path, so the tile cache has nowhere to live
+            //    and nothing can be stored or re-read.
+            //
+            // The identifier must be something attributable; the application id
+            // is the conventional choice.
+            Configuration.getInstance().apply {
+                if (userAgentValue.isNullOrBlank() || userAgentValue == "osmdroid") {
+                    userAgentValue = ctx.packageName
+                }
+                osmdroidBasePath = ctx.filesDir.resolve("osmdroid").apply { mkdirs() }
+                osmdroidTileCache = osmdroidBasePath.resolve("tiles").apply { mkdirs() }
+            }
             MapView(ctx).apply {
                 setTileSource(TileSourceFactory.MAPNIK)
                 overlayManager.tilesOverlay.setColorFilter(TilesOverlay.INVERT_COLORS)
@@ -100,8 +123,10 @@ actual fun PlatformBuildingMapView(
             }
 
             // Route polyline — only drawn after the player has picked a dest.
-            // Solid orange when OSRM returned a route, dashed straight line
-            // while the route is in flight or after a fetch failure.
+            // Solid when the platform supplied a real walking route; dotted and
+            // arrow-capped when it is the bowed guess, which on Android is always.
+            // The dotting is the honest signal: a solid line would imply a
+            // pavement someone actually looked up.
             val active = activeDest
             if (u != null && active != null) {
                 val pts = if (route.isNotEmpty()) route.map { it.osm() } else listOf(u.osm(), active.osm())
@@ -113,12 +138,37 @@ actual fun PlatformBuildingMapView(
                     mapView.overlays.add(it)
                     refs.route = it
                 }
+                // Round caps on a short on/off cycle read as dots rather than
+                // dashes; the gap has to clear the cap or they run together.
                 pl.outlinePaint.pathEffect =
-                    if (route.isEmpty()) DashPathEffect(floatArrayOf(22f, 14f), 0f) else null
+                    if (routeIsGuess || route.isEmpty()) DashPathEffect(floatArrayOf(2f, 20f), 0f) else null
                 pl.setPoints(pts)
-            } else if (refs.route != null) {
-                mapView.overlays.remove(refs.route)
-                refs.route = null
+
+                // Arrowhead, drawn as its own solid polyline so the dotting does
+                // not eat the barbs.
+                if (routeArrow.size >= 2) {
+                    val arrow = refs.routeArrow ?: Polyline().also {
+                        it.outlinePaint.strokeWidth = 9f
+                        it.outlinePaint.color = AndroidColor.argb(220, 255, 102, 0)
+                        it.outlinePaint.strokeCap = Paint.Cap.ROUND
+                        it.outlinePaint.strokeJoin = Paint.Join.ROUND
+                        mapView.overlays.add(it)
+                        refs.routeArrow = it
+                    }
+                    arrow.setPoints(routeArrow.map { it.osm() })
+                } else if (refs.routeArrow != null) {
+                    mapView.overlays.remove(refs.routeArrow)
+                    refs.routeArrow = null
+                }
+            } else {
+                if (refs.route != null) {
+                    mapView.overlays.remove(refs.route)
+                    refs.route = null
+                }
+                if (refs.routeArrow != null) {
+                    mapView.overlays.remove(refs.routeArrow)
+                    refs.routeArrow = null
+                }
             }
 
             // Re-frame when the destination set changes. We use setZoom +
@@ -145,6 +195,7 @@ private class MapRefs {
     var user: PulsingDotOverlay? = null
     val dests = mutableMapOf<String, Marker>()
     var route: Polyline? = null
+    var routeArrow: Polyline? = null
     var lastFit: Int = -1
     var brightBitmap: Bitmap? = null
     var dimBitmap: Bitmap? = null

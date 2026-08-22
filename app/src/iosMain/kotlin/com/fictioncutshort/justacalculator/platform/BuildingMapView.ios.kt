@@ -127,6 +127,10 @@ private class MapState {
     var accuracyRadius: Double = -1.0
     var route: MKPolyline? = null
     var routeKey: String = ""
+    var routeArrow: MKPolyline? = null
+    var routeArrowKey: String = ""
+    /** Overlays that must render solid even while the route itself is dotted. */
+    val solidOverlays = mutableSetOf<MKPolyline>()
     var activeKey: String? = null
     var lastFit: Int = -1
     val bright by lazy { crosshairImage(54.0, dim = false) }
@@ -186,8 +190,13 @@ private class MapDelegate(
                 lineWidth = 5.0
                 lineCap = CGLineCap.kCGLineCapRound
                 lineJoin = platform.CoreGraphics.CGLineJoin.kCGLineJoinRound
-                // Dashed while the route is a straight-line stand-in.
-                if (state.routeKey.startsWith("direct")) lineDashPattern = listOf(11, 7)
+                // Dotted while the line is the bowed guess rather than a real
+                // MapKit route — round caps on a short cycle read as dots. The
+                // arrowhead capping it is exempt, or the barbs would vanish.
+                val isArrow = rendererForOverlay in state.solidOverlays
+                if (!isArrow && state.routeKey.startsWith("guess")) {
+                    lineDashPattern = listOf(0.1, 9)
+                }
             }
             is MKCircle -> MKCircleRenderer(circle = rendererForOverlay).apply {
                 fillColor = UIColor.colorWithRed(GREEN_R, GREEN_G, GREEN_B, 0.15)
@@ -207,6 +216,8 @@ actual fun PlatformBuildingMapView(
     destPoints: List<GeoPoint>,
     activeDest: GeoPoint?,
     route: List<GeoPoint>,
+    routeIsGuess: Boolean,
+    routeArrow: List<GeoPoint>,
     fitTrigger: Int,
     initialZoom: Double,
     onDestTap: (GeoPoint) -> Unit,
@@ -284,7 +295,7 @@ actual fun PlatformBuildingMapView(
             val active = activeDest
             if (u != null && active != null) {
                 val points = if (route.isNotEmpty()) route else listOf(u, active)
-                val key = (if (route.isNotEmpty()) "route" else "direct") +
+                val key = (if (routeIsGuess || route.isEmpty()) "guess" else "route") +
                     ":${points.size}:${geoKey(points.first())}:${geoKey(points.last())}"
                 if (key != state.routeKey) {
                     state.route?.let { map.removeOverlay(it) }
@@ -302,10 +313,41 @@ actual fun PlatformBuildingMapView(
                     map.addOverlay(line)
                     state.route = line
                 }
-            } else if (state.route != null) {
-                map.removeOverlay(state.route!!)
+
+                // Arrowhead — its own overlay so the route's dotting does not
+                // eat the barbs. Registered as solid in the renderer above.
+                val arrowKey = routeArrow.joinToString(",") { geoKey(it) }
+                if (arrowKey != state.routeArrowKey) {
+                    state.routeArrow?.let {
+                        map.removeOverlay(it)
+                        state.solidOverlays.remove(it)
+                    }
+                    state.routeArrow = null
+                    state.routeArrowKey = arrowKey
+                    if (routeArrow.size >= 2) {
+                        val head = memScoped {
+                            val buffer = allocArray<CLLocationCoordinate2D>(routeArrow.size)
+                            routeArrow.forEachIndexed { i, point ->
+                                buffer[i].latitude = point.latitude
+                                buffer[i].longitude = point.longitude
+                            }
+                            MKPolyline.polylineWithCoordinates(buffer, routeArrow.size.toULong())
+                        }
+                        state.solidOverlays.add(head)
+                        map.addOverlay(head)
+                        state.routeArrow = head
+                    }
+                }
+            } else {
+                state.route?.let { map.removeOverlay(it) }
                 state.route = null
                 state.routeKey = ""
+                state.routeArrow?.let {
+                    map.removeOverlay(it)
+                    state.solidOverlays.remove(it)
+                }
+                state.routeArrow = null
+                state.routeArrowKey = ""
             }
 
             // ── re-frame ──

@@ -27,6 +27,7 @@ import com.fictioncutshort.justacalculator.platform.nowMillis
 import com.fictioncutshort.justacalculator.platform.AppContext
 import com.fictioncutshort.justacalculator.platform.AppPermission
 import com.fictioncutshort.justacalculator.platform.GeoPoint
+import com.fictioncutshort.justacalculator.platform.platformWalkingRoute
 import com.fictioncutshort.justacalculator.platform.LocationFix
 import com.fictioncutshort.justacalculator.platform.currentAppContext
 import com.fictioncutshort.justacalculator.platform.hasPermission
@@ -66,8 +67,9 @@ import kotlin.random.Random
 // Stylistically the tiles are inverted to a dark theme to match the calculator
 // console; the user is a pulsing green dot, destinations are orange crosshairs.
 // At round start all crosshairs read identical; tapping one promotes it to the
-// "active" pick — its siblings fade, the OSRM walking route is fetched only
-// for it, and "OPEN IN MAPS" appears targeting that exact dest. Arrival
+// "active" pick — its siblings fade, a route to it is drawn (a real walking
+// route on iOS, a bowed dashed guess elsewhere), and "OPEN IN MAPS" appears
+// targeting that exact dest. Arrival
 // detection still triggers on ANY dest the player walks into.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -176,6 +178,9 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
     }
     LaunchedEffect(checkpointIdx) { com.fictioncutshort.justacalculator.logic.BuildingProgress.putInt(context, 5, "checkpoint", checkpointIdx) }
     var route by remember { mutableStateOf<List<GeoPoint>>(emptyList()) }
+    // True while `route` is the bowed dashed guess rather than a real walking
+    // route, so the map knows to dash it and cap it with an arrow.
+    var routeIsGuess by remember { mutableStateOf(false) }
     // True when this round's points are blind compass projections rather than real
     // OSM road vertices — nothing checked what's under them, so say so.
     var blindRound by remember { mutableStateOf(false) }
@@ -283,12 +288,23 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
     // nearest-tracking (which would jitter between roughly-equidistant points).
     // resolveRound() clears it back to null when a round ends.
 
-    // ── Fetch walking route to the active dest ──────────────────────────────
+    // ── Route to the active dest ────────────────────────────────────────────
+    // iOS gets a real walking route from MapKit; Android has no free equivalent
+    // and returns null, as does iOS when MapKit cannot route. Either way the
+    // player sees a line — the bowed dashed guess stands in, so the chapter looks
+    // the same on both platforms and works with no network at all.
     LaunchedEffect(activeDest) {
         val d = activeDest ?: return@LaunchedEffect
         val u = userLoc ?: return@LaunchedEffect
-        val pts = withContext(Dispatchers.Default) { fetchWalkingRoute(u, d) }
-        route = pts ?: emptyList()
+        // Draw the guess immediately rather than leaving the map bare while the
+        // request is in flight; a real route replaces it if one arrives.
+        route = guessPath(u, d)
+        routeIsGuess = true
+        val real = platformWalkingRoute(u, d)
+        if (real != null && real.size >= 2) {
+            route = real
+            routeIsGuess = false
+        }
     }
 
     fun closeHelp() { showHelp = false; showHelpReasons = false; showHelpActions = false }
@@ -357,6 +373,8 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
                     destPoints = currentDests,
                     activeDest = activeDest,
                     route = route,
+                    routeIsGuess = routeIsGuess,
+                    routeArrow = if (routeIsGuess) arrowHead(route) else emptyList(),
                     fitTrigger = fitTrigger,
                     initialZoom = INITIAL_ZOOM,
                     onDestTap = { tapped -> activeDest = tapped }
@@ -795,36 +813,69 @@ private fun bearingDeg(from: GeoPoint, to: GeoPoint): Double {
 }
 
 /**
- * Walking-route polyline from the public OSRM demo (foot profile). NOTE:
- * router.project-osrm.org is rate-limited and "not for production" — swap the
- * URL for a self-hosted OSRM or paid GraphHopper before shipping.
+ * Identifies the app to the OpenStreetMap services it queries.
+ *
+ * This used to read "JustACalculator/1.x (osmdroid)", which was both untrue —
+ * these calls are ours, not osmdroid's — and unreachable. OSM's usage policy
+ * asks for an agent that names the application and offers a way to make contact,
+ * so a service that thinks we are misbehaving can send an email instead of
+ * silently blocking the app for every player at once.
  */
-private const val MAP_USER_AGENT = "JustACalculator/1.x (osmdroid)"
+private const val MAP_USER_AGENT = "JustACalculator/1.14 (+fictioncutshort@gmail.com)"
 
-private fun fetchWalkingRoute(from: GeoPoint, to: GeoPoint): List<GeoPoint>? {
-    return try {
-        val body = httpGetText(
-            url = "https://router.project-osrm.org/route/v1/foot/" +
-                "${from.longitude},${from.latitude};${to.longitude},${to.latitude}" +
-                "?overview=full&geometries=geojson",
-            connectTimeoutMs = 8_000,
-            readTimeoutMs = 15_000,
-            userAgent = MAP_USER_AGENT,
-        )?.takeIf { it.status in 200..299 }?.body ?: return null
+/**
+ * The dashed line drawn to a destination when no real route is available —
+ * always on Android, and on iOS whenever MapKit declines to route.
+ *
+ * Bowed rather than straight, by an offset proportional to the distance, so it
+ * reads as "roughly this way" instead of as a claim about the pavement. The
+ * player is meant to find their own way; the line only says which way to set off.
+ *
+ * A quadratic Bézier, sampled evenly. The control point sits at the midpoint
+ * pushed sideways, so the curve always bends the same way relative to the walk.
+ */
+private fun guessPath(from: GeoPoint, to: GeoPoint, samples: Int = 28): List<GeoPoint> {
+    val metres = from.distanceToAsDouble(to)
+    if (metres < 1.0) return listOf(from, to)
 
-        val routes = JsonObj.parse(body).optJSONArray("routes") ?: return null
-        if (routes.length() == 0) return null
-        val coords = routes.getJSONObject(0)
-            .getJSONObject("geometry").getJSONArray("coordinates")
-        val pts = ArrayList<GeoPoint>(coords.length())
-        for (i in 0 until coords.length()) {
-            val c = coords.getJSONArray(i)
-            pts.add(GeoPoint(c.getDouble(1), c.getDouble(0)))  // GeoJSON = [lon, lat]
-        }
-        pts
-    } catch (_: Exception) {
-        null
+    // A gentle bow: 12% of the crossing, capped so a long walk does not arc
+    // absurdly and a short one still visibly curves.
+    val bow = (metres * 0.12).coerceIn(6.0, 60.0)
+    val heading = bearingDeg(from, to)
+    val mid = from.destinationPoint(metres / 2.0, heading)
+    val control = mid.destinationPoint(bow, (heading + 90.0) % 360.0)
+
+    return List(samples + 1) { i ->
+        val t = i.toDouble() / samples
+        val inv = 1.0 - t
+        val a = inv * inv
+        val b = 2.0 * inv * t
+        val c = t * t
+        GeoPoint(
+            latitude = a * from.latitude + b * control.latitude + c * to.latitude,
+            longitude = a * from.longitude + b * control.longitude + c * to.longitude,
+        )
     }
+}
+
+/**
+ * An arrowhead at the end of [path]: two barbs meeting at the destination,
+ * returned as a single barb→tip→barb polyline so it draws in one stroke.
+ *
+ * Angled off the path's own final heading rather than the straight-line bearing,
+ * so it stays aligned with the curve it caps.
+ */
+private fun arrowHead(path: List<GeoPoint>, lengthM: Double = 16.0, spreadDeg: Double = 30.0): List<GeoPoint> {
+    if (path.size < 2) return emptyList()
+    val tip = path.last()
+    val approach = bearingDeg(path[path.size - 2], tip)
+    // Barbs point back down the path, splayed either side of it.
+    val back = (approach + 180.0) % 360.0
+    return listOf(
+        tip.destinationPoint(lengthM, (back - spreadDeg + 360.0) % 360.0),
+        tip,
+        tip.destinationPoint(lengthM, (back + spreadDeg) % 360.0),
+    )
 }
 
 /**
@@ -844,7 +895,29 @@ private val OVERPASS_ENDPOINTS = listOf(
     "https://overpass.osm.jp/api/interpreter",
 )
 
+/**
+ * Last Overpass answer, keyed by the query that produced it.
+ *
+ * Every round asks about a circle around the player, and a player who has not
+ * moved far asks the same question again — on a re-roll, on returning to the
+ * chapter, after a skip. Those repeats were all going out to a free community
+ * service that rate-limits by volume.
+ *
+ * Deliberately a single entry keyed on the exact query text, not a real cache:
+ * a hit is only possible when the question is character-for-character identical,
+ * which means the same rounded position and radius. That cannot change which
+ * points come back — it can only avoid asking twice for the same answer. A miss
+ * behaves exactly as before.
+ *
+ * Not persisted. Streets change rarely, but a stale answer surviving a restart
+ * would be a behaviour change, and the win here is in the repeats within one
+ * sitting.
+ */
+private var overpassCacheKey: String? = null
+private var overpassCacheBody: String? = null
+
 private fun fetchOverpass(query: String): String? {
+    overpassCacheBody?.let { if (overpassCacheKey == query) return it }
     val encoded = urlEncode(query)
     for (endpoint in OVERPASS_ENDPOINTS) {
         // 429 (rate limited) and 504 (gateway timeout) are the usual answers
@@ -857,7 +930,13 @@ private fun fetchOverpass(query: String): String? {
             userAgent = MAP_USER_AGENT,
         ) ?: continue
         if (response.status !in 200..299) continue
-        if (response.body.isNotBlank()) return response.body
+        if (response.body.isNotBlank()) {
+            // Only a genuine answer is cached. A failure falls through to the
+            // next mirror and is never remembered, so reliability is unchanged.
+            overpassCacheKey = query
+            overpassCacheBody = response.body
+            return response.body
+        }
     }
     return null
 }

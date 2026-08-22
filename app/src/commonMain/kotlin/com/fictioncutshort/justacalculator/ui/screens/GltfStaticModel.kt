@@ -5,6 +5,7 @@ import com.fictioncutshort.justacalculator.gl.LittleEndian
 import com.fictioncutshort.justacalculator.gl.Matrix
 import com.fictioncutshort.justacalculator.platform.Assets
 import kotlin.math.max
+import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
@@ -209,7 +210,23 @@ class GltfStaticModel private constructor(
                         materials.getJSONObject(prim.getInt("material"))
                             .optJSONObject("pbrMetallicRoughness")
                             ?.optJSONArray("baseColorFactor")
-                            ?.let { bc -> for (k in 0 until minOf(4, bc.length())) color[k] = bc.getDouble(k).toFloat() }
+                            ?.let { bc ->
+                                // baseColorFactor is LINEAR, exactly like an MTL's
+                                // Kd — see ObjLoader.parseMtl, which has converted
+                                // for the same reason since the OBJ path was
+                                // written. Passing these straight to GL treats
+                                // them as sRGB and crushes them: the maze keys
+                                // author at 0.004-0.055 linear, which lands at
+                                // near-black on screen while Filament (which does
+                                // the conversion itself) showed them correctly.
+                                //
+                                // Alpha at index 3 is NOT a colour and must not be
+                                // converted.
+                                for (k in 0 until minOf(4, bc.length())) {
+                                    val v = bc.getDouble(k).toFloat()
+                                    color[k] = if (k < 3) linearToSrgb(v) else v
+                                }
+                            }
                     }
 
                     prims.add(StaticPrimitive(inter, indices, color))
@@ -227,6 +244,17 @@ class GltfStaticModel private constructor(
         }
 
         /** Column-major rotation matrix from a glTF (x, y, z, w) quaternion. */
+        /**
+         * Linear → sRGB, the same transfer ObjLoader applies to an MTL's Kd.
+         * Kept as its own copy rather than shared: the two loaders are otherwise
+         * independent, and a glTF's colour space is a property of glTF.
+         */
+        private fun linearToSrgb(c: Float): Float {
+            val x = c.coerceIn(0f, 1f)
+            return if (x <= 0.0031308f) x * 12.92f
+                   else 1.055f * x.toDouble().pow(1.0 / 2.4).toFloat() - 0.055f
+        }
+
         private fun quatToMatrix(q: FloatArray, m: FloatArray) {
             val x = q[0]; val y = q[1]; val z = q[2]; val w = q[3]
             m[0] = 1f - 2f * (y * y + z * z); m[4] = 2f * (x * y - z * w);       m[8] = 2f * (x * z + y * w);        m[12] = 0f

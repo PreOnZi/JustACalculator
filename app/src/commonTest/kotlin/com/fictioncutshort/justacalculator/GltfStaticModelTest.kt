@@ -18,7 +18,7 @@ import kotlin.test.assertTrue
 class GltfStaticModelTest {
 
     /** One triangle under a node that translates by (1,0,0) and scales by 2. */
-    private fun buildGlb(): ByteArray {
+    private fun buildGlb(baseColour: String = "[0.25,0.5,0.75,1]"): ByteArray {
         val positions = floatArrayOf(
             0f, 0f, 0f,
             1f, 0f, 0f,
@@ -51,7 +51,7 @@ class GltfStaticModelTest {
              "scenes":[{"nodes":[0]}],
              "nodes":[{"mesh":0,"translation":[1,0,0],"scale":[2,2,2]}],
              "meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1},"indices":2,"material":0}]}],
-             "materials":[{"pbrMetallicRoughness":{"baseColorFactor":[0.25,0.5,0.75,1]}}],
+             "materials":[{"pbrMetallicRoughness":{"baseColorFactor":$baseColour}}],
              "accessors":[
                {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
                {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},
@@ -130,8 +130,30 @@ class GltfStaticModelTest {
 
     @Test
     fun readsBaseColour() {
+        // glTF stores baseColorFactor in LINEAR space, and the renderer writes
+        // straight to a non-sRGB framebuffer, so the loader converts on the way
+        // out — the same thing ObjLoader does to an MTL's Kd.
+        //
+        // This test previously asserted the raw 0.25/0.5/0.75 passed through
+        // untouched, which is what left the maze keys near-black: their darkest
+        // materials are authored around 0.004-0.055 linear, and unconverted they
+        // arrive on screen at that value instead of roughly four times it.
+        //
+        // Expected values are srgb(x) = 1.055·x^(1/2.4) − 0.055.
         val c = GltfStaticModel.parse(buildGlb()).primitives[0].baseColor
-        assertNear(0.25f, c[0], "r"); assertNear(0.5f, c[1], "g")
-        assertNear(0.75f, c[2], "b"); assertNear(1f, c[3], "a")
+        assertNear(0.537099f, c[0], "r"); assertNear(0.735357f, c[1], "g")
+        assertNear(0.880825f, c[2], "b")
+        // Alpha is not a colour and must survive unconverted.
+        assertNear(1f, c[3], "a")
+    }
+
+    @Test
+    fun baseColourConversionIsMonotonicAndClamped() {
+        // Guards the two ends: black stays black, white stays white. A conversion
+        // that shifted either would wash out every model in the game.
+        val black = GltfStaticModel.parse(buildGlb(baseColour = "[0,0,0,1]")).primitives[0].baseColor
+        assertNear(0f, black[0], "black r")
+        val white = GltfStaticModel.parse(buildGlb(baseColour = "[1,1,1,1]")).primitives[0].baseColor
+        assertNear(1f, white[0], "white r")
     }
 }
