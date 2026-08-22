@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -191,6 +193,12 @@ fun KeyboardChaos3DView(
             lineHeight = 22.sp,
             modifier = Modifier
                 .fillMaxWidth()
+                // 40.dp was doing two jobs: clearing the status bar AND leaving
+                // room for the "Letters: N" counter pinned top-right. The inset
+                // now handles the bar, and the 40 stays because the counter is
+                // still there — dropping it to 16 put the message straight
+                // through the counter text.
+                .statusBarsPadding()
                 .padding(horizontal = 16.dp)
                 .padding(top = 40.dp)
                 .align(Alignment.TopCenter)
@@ -205,6 +213,10 @@ fun KeyboardChaos3DView(
                 fontFamily = CalculatorDisplayFont,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
+                    // Was rendering level with the clock and battery icon on the
+                    // 7-inch tablet. No existing top offset here, so the inset is
+                    // added rather than traded against one.
+                    .statusBarsPadding()
                     .padding(12.dp)
                     .align(Alignment.TopEnd)
             )
@@ -214,6 +226,13 @@ fun KeyboardChaos3DView(
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                // The app renders edge-to-edge (targetSdk 36), so a bottom-anchored
+                // control sits over the gesture-navigation strip unless the inset is
+                // reserved. Without this the 40.dp offset was not enough to clear it:
+                // dragging the zoom slider was swallowed by the system home gesture
+                // and dumped the player out of the app mid-chapter. Tapping the track
+                // still worked, which is why it reads as intermittent rather than broken.
+                .navigationBarsPadding()
                 .fillMaxWidth()
                 .padding(horizontal = 24.dp, vertical = 40.dp),
             verticalAlignment = Alignment.CenterVertically,
