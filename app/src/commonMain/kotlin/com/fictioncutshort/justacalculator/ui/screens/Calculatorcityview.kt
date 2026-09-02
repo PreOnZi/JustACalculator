@@ -91,6 +91,26 @@ internal const val PITCH_LIMIT = 70f
 internal const val PITCH_EASE_RETAIN = 0.92f
 
 /**
+ * Unit forward vector for a yaw/pitch pair, as `[x, y, z]` in world axes.
+ *
+ * The camera and the gun have to agree on this. The reticle is pinned to the
+ * centre of the screen, so a round leaves along whatever vector the view was
+ * built from — and the two used to derive that vector separately, with the
+ * gun's copy using yaw only. Rounds left the muzzle dead level and landed at
+ * eye height however far up or down the player was aiming.
+ */
+internal fun aimForward(yawDeg: Float, pitchDeg: Float): FloatArray {
+    val yr = yawDeg.toDouble() * kotlin.math.PI / 180.0
+    val pr = pitchDeg.toDouble() * kotlin.math.PI / 180.0
+    val horiz = cos(pr)
+    return floatArrayOf(
+        (sin(yr) * horiz).toFloat(),
+        sin(pr).toFloat(),
+        (-cos(yr) * horiz).toFloat(),
+    )
+}
+
+/**
  * Degrees of camera rotation per **dp** dragged.
  *
  * Per dp, not per pixel: the raw drag deltas are in pixels, so tying
@@ -2645,14 +2665,20 @@ fun CalculatorCityView(
                     if (gunGrabbed && gunHeld && !overlayOpen) {
                         val shots = pendingShots.getAndSet(0)
                         if (shots > 0) {
-                            val cr = ((camYaw.toDouble()) * kotlin.math.PI / 180.0)
-                            val fx = sin(cr).toFloat(); val fz = -cos(cr).toFloat()
+                            // Pitch belongs in the launch vector, not just the yaw —
+                            // the same vector the first-person view is built from, so
+                            // the round goes exactly where the crosshair sits.
+                            val aim = aimForward(camYaw, camPitch)
+                            val fx = aim[0]; val fy = aim[1]; val fz = aim[2]
                             repeat(shots.coerceAtMost(MAX_BULLETS)) {
                                 // [x,y,z, vx,vy,vz, unused, spinDeg] — spawn well ahead
                                 // of the muzzle so the round doesn't fill the view at birth.
+                                // The 5f is the arc that makes rounds fall, bounce and
+                                // roll; it rides on top of the aim rather than replacing
+                                // it, so level fire is unchanged from before.
                                 gunProjectiles.add(floatArrayOf(
-                                    pX + fx * 42f, eyeY - 6f, pZ + fz * 42f,
-                                    fx * 22f, 5f, fz * 22f, 0f, 0f))
+                                    pX + fx * 42f, eyeY - 6f + fy * 42f, pZ + fz * 42f,
+                                    fx * 22f, fy * 22f + 5f, fz * 22f, 0f, 0f))
                             }
                             // Count-based lifetime: only the newest MAX_BULLETS survive,
                             // so rounds rest on the ground until pushed out by later shots.
@@ -3038,12 +3064,11 @@ fun CalculatorCityView(
                         // to eye height the camera stayed dead level no matter
                         // what the player did, while yaw worked because it was
                         // baked into the target's XZ.
-                        val pr = (camPitch.toDouble()) * kotlin.math.PI / 180.0
-                        val horiz = cos(pr).toFloat()
+                        val aim = aimForward(camYaw, camPitch)
                         renderer.useLookAt = true
-                        renderer.lookAtX   = pX + (sin(cr) * horiz).toFloat()
-                        renderer.lookAtY   = eyeY + sin(pr).toFloat()
-                        renderer.lookAtZ   = pZ - (cos(cr) * horiz).toFloat()
+                        renderer.lookAtX   = pX + aim[0]
+                        renderer.lookAtY   = eyeY + aim[1]
+                        renderer.lookAtZ   = pZ + aim[2]
                     }
                 }
 

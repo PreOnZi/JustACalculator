@@ -38,6 +38,9 @@ actual object LocalNotifications {
                 context, android.Manifest.permission.POST_NOTIFICATIONS,
             ) == PackageManager.PERMISSION_GRANTED
 
+    // Inexact alarms plus Doze batching; the in-app tick loop is the backstop.
+    actual val deliversScheduledReliably: Boolean = false
+
     actual fun postNow(context: AppContext, id: Int, message: String) {
         prepare(context)
         val intent = Intent(context, MainActivity::class.java).apply {

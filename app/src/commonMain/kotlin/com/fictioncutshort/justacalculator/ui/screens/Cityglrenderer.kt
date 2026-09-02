@@ -4898,6 +4898,11 @@ class CityGLRenderer : GlRenderer {
         val mvp = FloatArray(16); Matrix.multiplyMM(mvp, 0, proj, 0, model, 0)
         Gl.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
         val norm = gunFit / GUN_SPAN                     // → unit-sized model, centred
+        // The viewmodel is drawn after the night scrim, so the darkness the rest
+        // of the city gets never reaches it — the gun stayed at noon brightness
+        // against a black street. Not taken all the way down: the player carries
+        // a torch, and the thing in your hands is what it lights best.
+        val nightDim = 1f - darknessLevel.coerceIn(0f, 1f) * 0.55f
         for (g in gunGroups) {
             val src = g.verts; if (src.isEmpty()) continue
             val arr = FloatArray(src.size)
@@ -4912,9 +4917,9 @@ class CityGLRenderer : GlRenderer {
             val er = g.r == 0f && g.g == 0f && g.b == 0f
             val mr = if (er) 0.5f else g.r; val mg = if (er) 0.5f else g.g; val mb = if (er) 0.55f else g.b
             Gl.glUniform4f(uCol,
-                (0.34f + mr * 0.6f).coerceAtMost(1f),
-                (0.34f + mg * 0.6f).coerceAtMost(1f),
-                (0.36f + mb * 0.6f).coerceAtMost(1f), 1f)
+                (0.34f + mr * 0.6f).coerceAtMost(1f) * nightDim,
+                (0.34f + mg * 0.6f).coerceAtMost(1f) * nightDim,
+                (0.36f + mb * 0.6f).coerceAtMost(1f) * nightDim, 1f)
             val fb = scratch(arr)
             Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
             Gl.glEnableVertexAttribArray(aPos)

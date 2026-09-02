@@ -15,10 +15,12 @@ actual fun openExternalUrl(context: AppContext, url: String): Boolean {
 }
 
 /**
- * TODO: replace APP_STORE_ID once the app has a listing. Until then this is a
- * no-op rather than a broken link.
+ * The App Store "Apple ID" for this app, assigned by App Store Connect when the
+ * record was created. The empty-string guard below is kept deliberately: it is
+ * what makes a build with no id yet degrade to a no-op instead of opening a
+ * broken itms-apps:// link.
  */
-private const val APP_STORE_ID = ""
+private const val APP_STORE_ID = "6804248023"
 
 actual fun openAppStoreListing(context: AppContext) {
     if (APP_STORE_ID.isEmpty()) {

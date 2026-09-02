@@ -63,6 +63,44 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.DisposableEffect
 
+/**
+ * Hands out contact names without repeating one until the pool is spent.
+ *
+ * Building 6's cast is the player's own phonebook, and drawing it at random
+ * meant the same two people turned up over and over — which reads as a broken
+ * game rather than a small circle of friends.
+ *
+ * One pool per *role*, not one overall: somebody who came out to shove the
+ * boulder is still free to ring you later, and that crossover is the point. It
+ * is repeating within a role that is wrong.
+ */
+internal class NamePool {
+    private val used = LinkedHashSet<String>()
+
+    /** The names handed out so far, in the order they were issued. */
+    val issued: Set<String> get() = used
+
+    /**
+     * Picks from whichever of [candidates] this pool has not issued yet, using
+     * [pick] to choose among them — helpers walk the phonebook in order, callers
+     * pick at random, and both go through here so neither repeats.
+     *
+     * Once every candidate has had a turn the pool starts over: the alternative
+     * is an unnamed contact, which is worse than a repeat this late on.
+     */
+    fun next(candidates: List<String>, pick: (List<String>) -> String): String? {
+        if (candidates.isEmpty()) return null
+        var fresh = candidates.filter { it !in used }
+        if (fresh.isEmpty()) {
+            used.clear()
+            fresh = candidates
+        }
+        val chosen = pick(fresh)
+        used.add(chosen)
+        return chosen
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //  BUILDING 6 — minimal runner sandbox.
 //
@@ -982,6 +1020,10 @@ private class RunnerRenderer(private val context: AppContext) : GlRenderer {
     private val choiceForks = ArrayList<ChoiceFork>()
     private var choiceIdx = 0
     private val seenNames = LinkedHashSet<String>()   // contacts who've already appeared to help
+    // One pool per role. Helping and being asked are separate rotations on
+    // purpose — a friend who pushed the boulder may still call you later.
+    private val helperPool = NamePool()
+    private val askerPool = NamePool()
     private var choiceAcceptTimer = 0f                // >0 while playing the accept animation
     private var choiceAcceptType = ChoiceType.CALL
     private var speedBoostTimer = 0f                  // >0 during a decline speed boost
@@ -1136,7 +1178,6 @@ private class RunnerRenderer(private val context: AppContext) : GlRenderer {
     private var boothNpc: Helper? = null    // idle attendant standing in the toll booth
     private val COIN_ZIP_TIME = 0.45f       // seconds for the coin to fly to the player
     @Volatile var helperNames: List<String> = RUNNER_FALLBACK_NAMES
-    private var helperNameIdx = 0
     private var helperColorIdx = 0
     private val HELPER_SPEED = 12f
     private val HELPER_COLORS = arrayOf(
@@ -1226,9 +1267,22 @@ private class RunnerRenderer(private val context: AppContext) : GlRenderer {
 
     /** Pick the next contact name for a summoned helper and remember it (choices later name a
      *  caller from the people who've already appeared to help). */
+    /** The next contact to come out and help — never one who has helped already. */
     private fun nextHelperName(): String {
-        val n = if (helperNames.isNotEmpty()) helperNames[helperNameIdx % helperNames.size] else "Friend"
-        helperNameIdx++; seenNames.add(n); return n
+        val n = helperPool.next(helperNames) { it.first() } ?: "Friend"
+        seenNames.add(n)
+        return n
+    }
+
+    /**
+     * The next contact to want something from the player — a call, a message, a
+     * hand ahead. Drawn from the people already met where there are any, so the
+     * asks come from familiar faces, and never from someone who has asked before.
+     */
+    private fun nextAskingName(): String {
+        val met = seenNames.toList()
+        val source = if (met.isNotEmpty()) met else helperNames
+        return askerPool.next(source) { it.random() } ?: "A friend"
     }
 
     private fun arrivedFighters(): Int = helpers.count { it.fighter && it.arrived }
@@ -1788,7 +1842,10 @@ private class RunnerRenderer(private val context: AppContext) : GlRenderer {
         updateCompetitors(dt)
         runningSfx = runState == RunState.RUNNING && countdown <= COUNTDOWN_GO && onGround &&
             !onPhone   // no run sound in the air, and silenced during the on-the-phone animation
-        boulderPushing = runState == RunState.HILL_PUSH   // continuous rumble while shoving uphill
+        // Both shoving states: the player leans on the boulder alone across the flat
+        // (HILL_SOLO) well before anyone is called, and that stretch used to play
+        // silent under the push animation.
+        boulderPushing = runState == RunState.HILL_SOLO || runState == RunState.HILL_PUSH
         fightingSfxActive = runState == RunState.FIGHTING // fight sound repeats through the scrap
         atFinish = runState == RunState.FINISH
         publishLabels()
@@ -2298,7 +2355,7 @@ private class RunnerRenderer(private val context: AppContext) : GlRenderer {
         val decisionZ = (cf.tile.zNear + cf.tile.zFar) * 0.5f
         // Approach popup — appears WELL before the fork (≈3s of run-up) so there's time to react.
         if (charZ <= cf.tile.zNear + 32f) {
-            if (cf.name.isEmpty()) cf.name = seenNames.randomOrNull() ?: helperNames.firstOrNull() ?: "A friend"
+            if (cf.name.isEmpty()) cf.name = nextAskingName()
             choiceIcon = when (cf.type) { ChoiceType.MESSAGE -> "message"; ChoiceType.HELP, ChoiceType.NEED -> "phonebook"; else -> "phone" }
             choiceText = when (cf.type) {
                 ChoiceType.CALL -> "${cf.name} is calling"
@@ -2954,7 +3011,7 @@ private class RunnerRenderer(private val context: AppContext) : GlRenderer {
         // Helper waving for help from the basehelp column.
         basehelpTile?.let { bt ->
             val cz = bt.zRef + COL_REL_Z
-            val name = seenNames.randomOrNull() ?: helperNames.firstOrNull() ?: "Friend"
+            val name = nextAskingName()
             val color = HELPER_COLORS[helperColorIdx % HELPER_COLORS.size]; helperColorIdx++
             columnHelper = Helper(COL_X, cz, COL_TOP_Y, COL_X, cz, color, name,
                 arrived = true, facing = (-kotlin.math.PI * 0.5).toFloat(), greeter = true)

@@ -21,6 +21,19 @@ expect object LocalNotifications {
     /** Whether the user has allowed notifications. */
     fun isPermitted(context: AppContext): Boolean
 
+    /**
+     * Whether something armed with [scheduleAt] can be trusted to arrive near
+     * its time on its own.
+     *
+     * iOS: yes — UNUserNotificationCenter holds the trigger and delivers it.
+     * Android: no — AlarmManager without SCHEDULE_EXACT_ALARM is inexact, and
+     * Doze holds beats back and then releases them together, so the dormancy
+     * sequence needs the in-app loop as a second source. That second source is
+     * exactly what must not run on iOS, where it would post a duplicate of every
+     * beat the system has already delivered.
+     */
+    val deliversScheduledReliably: Boolean
+
     /** Post [message] immediately under [id]. */
     fun postNow(context: AppContext, id: Int, message: String)
 

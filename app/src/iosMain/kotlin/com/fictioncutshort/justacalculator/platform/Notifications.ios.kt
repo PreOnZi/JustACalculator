@@ -37,6 +37,9 @@ actual object LocalNotifications {
 
     actual fun isPermitted(context: AppContext): Boolean = authorized
 
+    // The trigger lives in UNUserNotificationCenter and fires on its own.
+    actual val deliversScheduledReliably: Boolean = true
+
     actual fun postNow(context: AppContext, id: Int, message: String) {
         // A zero interval is rejected, so "now" is the smallest allowed delay.
         submit(id, message, delaySeconds = 0.1)

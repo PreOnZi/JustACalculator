@@ -5,6 +5,7 @@ import com.fictioncutshort.justacalculator.util.vibrate
 import com.fictioncutshort.justacalculator.platform.Prefs
 import com.fictioncutshort.justacalculator.platform.openPrefs
 import org.jetbrains.compose.resources.DrawableResource
+import org.jetbrains.compose.resources.painterResource
 import com.fictioncutshort.justacalculator.platform.openAppStoreListing
 import com.fictioncutshort.justacalculator.platform.AppContext
 import com.fictioncutshort.justacalculator.resources.social04
@@ -451,9 +452,37 @@ private fun AppShell(
 // ── Per-app stubs — content built out incrementally below ────────────────────
 
 // ── Innergram feed ────────────────────────────────────────────────────────────
-// `image` is a drawable res Int, or a java.io.File for a Building-7 selfie, or
-// null for a blank placeholder. AsyncImage accepts any of these.
+// `image` is a bundled DrawableResource, or a path string for a Building-7
+// selfie, or null for a blank placeholder — see [PostImage], which is what
+// keeps those apart.
 private data class InstaPostData(val name: String, val image: Any?, val caption: String)
+
+/**
+ * Draws a feed image from either source.
+ *
+ * Coil resolves paths and URIs, but a Compose-resources [DrawableResource] is
+ * not a model it knows — handed one it silently loads nothing, which is why the
+ * bundled social posts came up blank while the selfie post (a plain path) drew
+ * fine. Bundled art goes through painterResource instead.
+ */
+@Composable
+private fun PostImage(image: Any?, modifier: Modifier = Modifier) {
+    when (image) {
+        null -> Unit
+        is DrawableResource -> Image(
+            painter = painterResource(image),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = modifier,
+        )
+        else -> AsyncImage(
+            model = image,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = modifier,
+        )
+    }
+}
 
 @Composable
 private fun AppSocialInstagram() {
@@ -499,14 +528,7 @@ private fun InstaPost(name: String, image: Any?, caption: String) {
             Text(name, color = Color.Black, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
         Box(modifier = Modifier.fillMaxWidth().aspectRatio(1f).background(Color(0xFFE3E0DA))) {
-            if (image != null) {
-                AsyncImage(
-                    model = image,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
+            PostImage(image, Modifier.fillMaxSize())
         }
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -568,12 +590,7 @@ private fun AppSocialTikTok() {
                         onTap = { unmutedIndex = if (unmutedIndex == idx) null else idx },
                         modifier = Modifier.fillMaxSize(),
                     )
-                    p.imageRes != null -> AsyncImage(
-                        model = p.imageRes,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    p.imageRes != null -> PostImage(p.imageRes, Modifier.fillMaxSize())
                 }
                 Column(
                     modifier = Modifier

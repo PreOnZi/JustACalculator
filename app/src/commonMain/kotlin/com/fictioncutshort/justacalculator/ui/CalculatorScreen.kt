@@ -70,6 +70,7 @@ import com.fictioncutshort.justacalculator.platform.currentAppContext
 import com.fictioncutshort.justacalculator.platform.hasPermission
 import com.fictioncutshort.justacalculator.platform.logDebug
 import com.fictioncutshort.justacalculator.platform.nowMillis
+import com.fictioncutshort.justacalculator.platform.openAppStoreListing
 import com.fictioncutshort.justacalculator.platform.openExternalUrl
 import com.fictioncutshort.justacalculator.platform.rememberNotificationPermissionRequest
 import com.fictioncutshort.justacalculator.platform.rememberPermissionRequest
@@ -480,16 +481,16 @@ fun CalculatorScreen() {
                 }
                 is DormancyPhase.RadButtons -> {
                     if (phase.count > state.value.dormancyRadVisible) {
-                        // Each RAD button arrives with its own notification. Firing
-                        // them here as well as from AlarmManager is what keeps the
-                        // escalation on its 30s beat while the app is actually open
-                        // — the alarms are inexact and can run minutes late.
-                        // DormancyManager skips any beat that already went out.
-                        for (n in state.value.dormancyRadVisible + 1..phase.count) {
-                            DormancyManager.fireInAppNotification(context, n)
-                        }
                         state.value = state.value.copy(dormancyRadVisible = phase.count)
                     }
+                    // Each RAD button arrives with its own notification. Firing
+                    // them here as well as from AlarmManager is what keeps the
+                    // escalation on its 30s beat while the app is actually open
+                    // — the alarms are inexact and can run minutes late.
+                    // One per tick at most: buttons can appear in a jump (the app
+                    // was closed for ten minutes), and their notifications must
+                    // still arrive spread out rather than in one buzz.
+                    DormancyManager.fireNextDueNotification(context, phase.count)
                 }
                 is DormancyPhase.None -> { /* nothing */ }
             }
@@ -2111,7 +2112,7 @@ fun CalculatorScreen() {
                 CalculatorActions.hideDonationPage(state)
             },
             onDonate = {
-                openExternalUrl(context, "https://play.google.com/store/apps/details?id=com.fictioncutshort.justacalculator")
+                openAppStoreListing(context)
             }
         )
     }

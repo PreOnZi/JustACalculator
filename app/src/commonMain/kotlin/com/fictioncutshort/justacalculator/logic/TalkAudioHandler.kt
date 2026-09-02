@@ -6,6 +6,9 @@ import com.fictioncutshort.justacalculator.platform.openPcmSink
 import com.fictioncutshort.justacalculator.platform.startMicEcho
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -193,23 +196,60 @@ class TalkAudioHandler : TypingClicker {
      * slow and audibly ragged.
      */
     private var clickSink: com.fictioncutshort.justacalculator.platform.PcmSink? = null
+
+    @Volatile
     private var clickSinkFailed = false
+
+    /**
+     * Clicks are played by one pump coroutine, never by the caller.
+     *
+     * The sink is a single stream track shared by every click, and writing to
+     * one from two threads at once is a native crash on Android — AudioTrack
+     * back-pressures once its buffer is full, so a click launched per character
+     * piled up coroutines across Dispatchers.Default workers and they collided
+     * inside releaseBuffer. Superfast typing (5ms/char, e.g. the calculator's
+     * history list at step 83) writes faster than ~60ms of buffer drains, which
+     * is exactly when it happened.
+     *
+     * DROP_OLDEST rather than a queue: a backlog would play the clicks behind
+     * the text that caused them. Dropping keeps them in time and just thins
+     * them out when the typing outruns the speaker.
+     */
+    private val clickScope = CoroutineScope(Dispatchers.Default.limitedParallelism(1))
+    private val clickRequests =
+        Channel<Unit>(capacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    private var clickPump: Job? = null
+
+    private fun startClickPump(): Job = clickScope.launch {
+        for (click in clickRequests) {
+            if (clickSinkFailed) continue
+            val sink = clickSink
+                ?: openPcmSink(sampleRate, clickSamples.size * 4)?.also { clickSink = it }
+                ?: run { clickSinkFailed = true; continue }
+            sink.write(clickSamples, clickSamples.size)
+        }
+    }
 
     /** Play a soft typing click sound. */
     override fun playTypingClick() {
         if (clickSinkFailed) return
-        CoroutineScope(Dispatchers.Default).launch {
-            val sink = clickSink ?: openPcmSink(sampleRate, clickSamples.size * 4)
-                ?.also { clickSink = it }
-                ?: run { clickSinkFailed = true; return@launch }
-            sink.write(clickSamples, clickSamples.size)
-        }
+        // Callers are all composition-side (the typing loop, the phone screens),
+        // so this stays on one thread and needs no guard of its own.
+        if (clickPump == null) clickPump = startClickPump()
+        clickRequests.trySend(Unit)
     }
 
     /** Frees the click output; the story calls this when the phone detour ends. */
     fun release() {
         stopRealtimeEcho()
-        clickSink?.close()
-        clickSink = null
+        clickPump?.cancel()
+        clickPump = null
+        // Closed on the pump's own thread, behind whatever write is in flight —
+        // closing it from here would race the very write this class exists to
+        // serialise. A later click just starts a fresh pump and sink.
+        clickScope.launch {
+            clickSink?.close()
+            clickSink = null
+        }
     }
 }
