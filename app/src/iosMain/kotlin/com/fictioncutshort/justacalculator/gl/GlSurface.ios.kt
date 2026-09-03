@@ -178,6 +178,14 @@ private class GlSurfaceHolder(
             renderer.onSurfaceChanged(w, h)
         }
 
+        // The post-Building-4 glitch asks for hitches by dropping frames — see
+        // hitchRenderThread. Skipping the draw leaves the last frame up, which
+        // reads as a stutter without blocking the main thread.
+        if (pendingFrameSkips > 0) {
+            pendingFrameSkips--
+            return
+        }
+
         renderer.onDrawFrame()
     }
 

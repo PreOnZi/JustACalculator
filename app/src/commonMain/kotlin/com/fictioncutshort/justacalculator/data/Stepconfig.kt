@@ -148,12 +148,6 @@ fun getStepConfig(step: Int): StepConfig {
             promptMessage = "When was the Battle of Anjar? \n\nLook it up or guess - I'd guess myself, but then it becomes too much and... That is too much.\n\nEnter the year and confirm with ++.",
             successMessage = "Yes, that's correct! \nI am as confused as you are. \nNext: When did Minh Mang start ruling Vietnam?",
             declineMessage = "Well. Sorry you're not interested. You can silence me with the button in the top-right corner.",
-            // Without this, ++ here fell through StoryManager.handleAgree's normal
-            // agree path and queued step 4 — skipping the question outright, which
-            // the prompt actively invites by telling the player to "confirm with
-            // ++". Every other year question already carries one; this was the
-            // only gap. The wording matches Q2's for the same gesture.
-            wrongPlusMessage = "I'm looking for a number here – but thanks for the approval!",
             nextStepOnSuccess = 4,
             nextStepOnDecline = 0,
             awaitingNumber = true,

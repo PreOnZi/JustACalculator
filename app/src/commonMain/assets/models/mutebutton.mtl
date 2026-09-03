@@ -819,7 +819,7 @@ Ke 0.000000 0.000000 0.000000
 Ni 1.500000
 d 1.000000
 illum 2
-map_Kd whiteboard1.png
+map_Kd /Users/ondrejzika/Desktop/CodeStory iOS/Calculator/app/src/main/res/drawable/whiteboard1.png
 
 newmtl Material.082
 Ns 250.000000
@@ -829,7 +829,7 @@ Ke 0.000000 0.000000 0.000000
 Ni 1.500000
 d 1.000000
 illum 2
-map_Kd whiteboard2.png
+map_Kd /Users/ondrejzika/Desktop/CodeStory iOS/Calculator/app/src/main/res/drawable/whiteboard2.png
 
 newmtl Material.083
 Ns 250.000000
@@ -839,7 +839,7 @@ Ke 0.000000 0.000000 0.000000
 Ni 1.500000
 d 1.000000
 illum 2
-map_Kd whiteboard3.png
+map_Kd /Users/ondrejzika/Desktop/CodeStory iOS/Calculator/app/src/main/res/drawable/whiteboard3.png
 
 newmtl Material.084
 Ns 250.000000
@@ -1249,7 +1249,7 @@ Ke 0.000000 0.000000 0.000000
 Ni 1.500000
 d 1.000000
 illum 2
-map_Kd whiteboard1.png
+map_Kd /Users/ondrejzika/Desktop/CodeStory iOS/Calculator/app/src/main/res/drawable/whiteboard1.png
 
 newmtl Material.125
 Ns 250.000000
@@ -1259,7 +1259,7 @@ Ke 0.000000 0.000000 0.000000
 Ni 1.500000
 d 1.000000
 illum 2
-map_Kd whiteboard2.png
+map_Kd /Users/ondrejzika/Desktop/CodeStory iOS/Calculator/app/src/main/res/drawable/whiteboard2.png
 
 newmtl Material.126
 Ns 250.000000
@@ -1269,7 +1269,7 @@ Ke 0.000000 0.000000 0.000000
 Ni 1.500000
 d 1.000000
 illum 2
-map_Kd whiteboard3.png
+map_Kd /Users/ondrejzika/Desktop/CodeStory iOS/Calculator/app/src/main/res/drawable/whiteboard3.png
 
 newmtl Material.127
 Ns 250.000000
@@ -1350,3 +1350,43 @@ Ke 0.000000 0.000000 0.000000
 Ni 1.500000
 d 0.207048
 illum 9
+
+newmtl Material.135
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Kd 0.065941 0.065941 0.065941
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.450000
+d 1.000000
+illum 2
+
+newmtl Material.136
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Kd 0.006500 0.566267 0.957333
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+
+newmtl Material.137
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Kd 0.800189 0.000000 0.008918
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+
+newmtl Material.138
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Kd 0.469912 0.469912 0.469912
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2

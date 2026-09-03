@@ -115,7 +115,7 @@ object StoryManager {
 
         // Show the prompt message if there is one
         if (config.promptMessage.isNotEmpty()) {
-            showMessage(resolveText(step, config.promptMessage), state)
+            showMessage(config.promptMessage, state)
         }
     }
 
@@ -261,31 +261,6 @@ object StoryManager {
     }
 
     /**
-     * Q2 asks itself differently depending on how Q1 went.
-     *
-     * A player who needed a second go at the Battle of Anjar has already found
-     * out that guessing is allowed, so Q2 just offers it again. A player who got
-     * it first time looked it up, and is told plainly that guessing is an option
-     * — otherwise nothing in the script ever says so.
-     *
-     * The text lives in two places for each question (a step's promptMessage and
-     * the previous step's successMessage, which trails it after "Next:"), so the
-     * swap happens on the way out rather than in the config.
-     */
-    private const val Q2_LOOKED_UP =
-        "When did Minh Mang start ruling Vietnam?\nLook it up again, or want to try guessing?"
-    private const val Q2_GUESSED =
-        "When did Minh Mang start ruling Vietnam? Want to guess again?"
-    private const val Q2_ORIGINAL = "When did Minh Mang start ruling Vietnam?"
-
-    private fun resolveText(step: Int, text: String): String {
-        if (step != 3 && step != 4) return text
-        if (!text.contains(Q2_ORIGINAL)) return text
-        val replacement = if (GuessCoach.guessedQ1()) Q2_GUESSED else Q2_LOOKED_UP
-        return text.replace(Q2_ORIGINAL, replacement)
-    }
-
-    /**
      * Handles submitting a number answer (for trivia questions).
      */
     fun handleNumberAnswer(state: MutableState<CalculatorState>): Boolean {
@@ -295,9 +270,8 @@ object StoryManager {
 
         if (answer == config.expectedNumber) {
             // Correct answer!
-            GuessCoach.onCorrect(currentStep)
             if (config.successMessage.isNotEmpty()) {
-                showMessage(resolveText(currentStep, config.successMessage), state)
+                showMessage(config.successMessage, state)
             }
             state.value = state.value.copy(
                 awaitingNumber = false,
@@ -306,17 +280,11 @@ object StoryManager {
                 waitingForAutoProgress = true
             )
         } else {
-            // Wrong answer. On the year questions this is a bearing on how far
-            // off they were, so guessing is playable; everywhere else the step's
-            // own line still stands.
-            val coached = if (GuessCoach.isYearQuestion(currentStep)) {
-                GuessCoach.reply(currentStep, config.expectedNumber, answer)
-            } else null
-            val prompt = resolveText(currentStep, config.promptMessage)
-            val wrongMsg = when {
-                coached != null -> "$coached\n\n$prompt"
-                config.wrongNumberPrefix.isNotEmpty() -> "${config.wrongNumberPrefix} $prompt"
-                else -> "Try again."
+            // Wrong answer
+            val wrongMsg = if (config.wrongNumberPrefix.isNotEmpty()) {
+                "${config.wrongNumberPrefix} ${config.promptMessage}"
+            } else {
+                "Try again."
             }
             showMessage(wrongMsg, state)
 

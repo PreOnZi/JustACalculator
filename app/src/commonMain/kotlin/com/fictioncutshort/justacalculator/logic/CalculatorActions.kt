@@ -1940,6 +1940,14 @@ object CalculatorActions {
 
         val stepConfig = getStepConfig(chapter.startStep)
 
+        // A Phase 1 chapter happens BEFORE any ending, so a recorded one must not
+        // survive the jump. The resistance ending removes the mute button for good
+        // (EndingStore.muteButtonRemoved), and that flag outlived a jump back to
+        // Phase 1 — so anyone who had reached the endgame once, or pressed FORCE
+        // REFUSED, landed in the history lesson with no mute button and no spinner
+        // at all. Same reasoning as RESET CITY, which already unfreezes here.
+        appContext?.let { EndingStore.unfreeze(it) }
+
         // Use the helper functions for consistent state
         val crisisSteps = listOf(89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 901, 911, 912, 913)
         val shouldInvert = chapter.startStep in crisisSteps
@@ -3857,14 +3865,32 @@ object CalculatorActions {
         }
     }
 
-    private fun showMessage(state: MutableState<CalculatorState>, message: String) {
+    private fun showMessage(
+        state: MutableState<CalculatorState>,
+        message: String,
+        resolveQuestion: Boolean = true,
+    ) {
+        // Q2 asks itself differently depending on how Q1 went, and its text is
+        // reached from several places (its own prompt, and the tail of Q1's
+        // success line). Resolving here catches all of them at once — except on
+        // a retry, which wants the bare question rather than the offer again.
+        val resolved = if (resolveQuestion) GuessCoach.resolveQuestionText(message) else message
         val current = state.value
+        if (resolved.isEmpty()) {
+            // Nothing to type. Leaving isTyping = true with an empty message is
+            // what wedged the story on a blank screen when a step lost its
+            // wrong-answer text — the typing effect had nothing to reveal and
+            // never cleared the flag, so no further input was accepted.
+            state.value = current.copy(message = "", fullMessage = "", isTyping = false)
+            persistMessage("")
+            return
+        }
         state.value = current.copy(
             message = "",
-            fullMessage = message,
+            fullMessage = resolved,
             isTyping = true
         )
-        persistMessage(message)
+        persistMessage(resolved)
     }
 
     fun updateTypingMessage(state: MutableState<CalculatorState>, displayedText: String, isComplete: Boolean) {
@@ -3958,6 +3984,7 @@ object CalculatorActions {
                 isEnteringAnswer = false
             )
 
+            GuessCoach.onCorrect(current.conversationStep)
             showMessage(state, stepConfig.successMessage)
             persistConversationStep(stepConfig.nextStepOnSuccess)
             persistInConversation(nextStepConfig.continueConversation)
@@ -3971,7 +3998,26 @@ object CalculatorActions {
                 operation = null,
                 isEnteringAnswer = false
             )
-            showMessage(state, stepConfig.wrongNumberMessage)
+            // Phase 1's "when was…" questions answer a wrong year with a bearing
+            // on how far off it was, so guessing is playable. Everything else
+            // keeps its own line. The last fallback is the prompt itself: an
+            // empty message here leaves the player on a blank screen with the
+            // story wedged, which is worse than repeating the question.
+            val coached = if (GuessCoach.isYearQuestion(current.conversationStep)) {
+                GuessCoach.reply(current.conversationStep, stepConfig.expectedNumber, enteredNumber)
+            } else null
+            // The repeat is the bare question — the framing and the "confirm with
+            // ++" only need saying once, and re-running them after every wrong
+            // year buries the hint.
+            val restated = GuessCoach.shortQuestion(current.conversationStep)
+                ?: stepConfig.promptMessage
+            val wrongMsg = when {
+                coached != null -> "$coached\n\n$restated"
+                stepConfig.wrongNumberMessage.isNotEmpty() -> stepConfig.wrongNumberMessage
+                else -> stepConfig.promptMessage
+            }
+            // Q2's guessing offer belongs to its first asking, not to every retry.
+            showMessage(state, wrongMsg, resolveQuestion = coached == null)
         }
     }
 

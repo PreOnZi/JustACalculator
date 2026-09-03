@@ -215,13 +215,6 @@ private const val SHOW_COLLISION_PROBE = false
 // units further out.
 private const val UG_BOUND_PAD     = 60f
 
-/**
- * Slack around the cut in the ground above Building 10's descent, so stepping
- * onto the lip reads as the ramp rather than the slab fighting it. About a
- * player's own radius — any more and it starts re-opening ground that is
- * supposed to be solid.
- */
-private const val UG_HOLE_PAD      = 24f
 private const val WALL_COLLIDE_R   = 10f   // world units from a wall segment
 private const val WALL_STEP_OVER   = 20f   // walls shorter than this (a step) don't block
 private const val WALL_DUCK_FRAC   = 0.26f // overhead clearance, × building height
@@ -1692,6 +1685,16 @@ fun CalculatorCityView(
     // game loop's landing→player lerp degenerates to the player pose (no
     // additional settle).
     LaunchedEffect(Unit) {
+        // Reopening straight into a building means the city is mounted underneath
+        // an overlay the player is already looking at. Running the arrival
+        // sequence there plays vo003 — the city's own establishing narration —
+        // over the top of a building they are mid-way through, with nothing on
+        // screen to explain it. They have plainly arrived already, so record that
+        // and skip it.
+        if (resumeBuilding != null && !introDone) {
+            introDone = true
+            cityPrefs.edit().putBoolean("intro_done", true).apply()
+        }
         if (!introDone) {
             // Hold the top-down AERIAL view for a clear beat before anything moves.
             // intro.value is 0 here, so the camera is pinned to the aerial pose; this
@@ -2930,33 +2933,11 @@ fun CalculatorCityView(
                 val ruinsF = renderer.damagedInteriors
                 var floors: List<FloatArray> = emptyList()
                 var stepDownLimit = 30f
-                // Building 10's underground shell is one flat XZ box around the
-                // whole run — measured at x -1160..744, z -2449..-1694 — but the
-                // ground is only actually cut open over `holdHole` (x -146..668,
-                // z -2428..-2200) and only inside the drum (r 264 about the
-                // centre) is there a room floor instead of city slab. The rest of
-                // that box is intact ground with the tunnel passing far beneath.
-                //
-                // Letting the shell answer for the floor across the whole box is
-                // what left no floor outside the button: a sweep of the box at
-                // surface level found 745 of 3648 points handing back a floor off
-                // the slab, as deep as -216 — so the player sank through solid
-                // ground and could walk the tunnel roof. Underground it must still
-                // own the floor, or there is nothing to stand on down there.
-                val ugDrum = renderer.radDrum
-                val ugHole = renderer.holdHole
-                val ugOwnsFloor = cRoomFloorY < -40f ||
-                    (ugDrum != null &&
-                        (pX - ugDrum[0]) * (pX - ugDrum[0]) +
-                        (pZ - ugDrum[1]) * (pZ - ugDrum[1]) <= ugDrum[2] * ugDrum[2]) ||
-                    (ugHole != null &&
-                        pX >= ugHole[0] - UG_HOLE_PAD && pX <= ugHole[1] + UG_HOLE_PAD &&
-                        pZ >= ugHole[2] - UG_HOLE_PAD && pZ <= ugHole[3] + UG_HOLE_PAD)
                 for (ri in ruinsF.indices) {
                     val d = ruinsF[ri]
-                    if (pX < d.minX || pX > d.maxX || pZ < d.minZ || pZ > d.maxZ) continue
-                    if (d.underground && !ugOwnsFloor) continue
-                    floors = d.floors; stepDownLimit = d.stepDown; break
+                    if (pX >= d.minX && pX <= d.maxX && pZ >= d.minZ && pZ <= d.maxZ) {
+                        floors = d.floors; stepDownLimit = d.stepDown; break
+                    }
                 }
                 val eyeTarget: Float
                 if (floors.isNotEmpty()) {

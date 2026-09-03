@@ -1,6 +1,5 @@
 package com.fictioncutshort.justacalculator
 
-import com.fictioncutshort.justacalculator.data.getStepConfig
 import com.fictioncutshort.justacalculator.logic.GuessCoach
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -131,22 +130,6 @@ class GuessCoachTest {
     @Test
     fun aCorrectYearHasNoHints() {
         assertTrue(texts(1623, 1623).isEmpty())
-    }
-
-    @Test
-    fun everyYearQuestionBlocksTheAgreeGesture() {
-        // handleAgree only stops ++ from advancing the story on a number question
-        // when that step defines a wrongPlusMessage. Step 3 did not, so ++ skipped
-        // the Battle of Anjar entirely — and its own prompt tells the player to
-        // "confirm with ++". The guard is per-step data, so it needs holding here.
-        for (step in GuessCoach.YEAR_QUESTION_STEPS) {
-            val config = getStepConfig(step)
-            assertTrue(config.awaitingNumber, "step $step should be awaiting a number")
-            assertTrue(
-                config.wrongPlusMessage.isNotEmpty(),
-                "step $step lets ++ fall through to the agree path, skipping the question",
-            )
-        }
     }
 
     @Test

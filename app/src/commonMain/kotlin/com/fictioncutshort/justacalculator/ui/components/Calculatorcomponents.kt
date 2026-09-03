@@ -212,7 +212,10 @@ fun MessageDisplay(
                         Text(
                             "4) The truth",
                             fontSize = choiceFontSize,
-                            color = textColor.copy(alpha = 0.5f),
+                            // Fainter than the three real options on purpose — it is
+                            // meant to read as something that shouldn't be on the
+                            // screen, not as a fourth choice.
+                            color = textColor.copy(alpha = 0.28f),
                             fontFamily = CalculatorDisplayFont
                         )
                     }

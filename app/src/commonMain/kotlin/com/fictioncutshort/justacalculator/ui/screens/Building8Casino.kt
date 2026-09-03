@@ -167,8 +167,13 @@ fun Building8Casino(
 
             // (Reaching the exit door leaves automatically — see the poll effect.)
 
+            // Same corner as the city's, for the same reason: the rest of the
+            // screen is the look area now, and a centred stick puts the walking
+            // thumb in the middle of it.
             CityJoystick(
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 24.dp, bottom = 36.dp),
                 onJoy = { x, y -> renderer.joyX = x; renderer.joyY = y }
             )
         }

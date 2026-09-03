@@ -106,6 +106,56 @@ object GuessCoach {
         return out
     }
 
+    /**
+     * The bare question, for when it is put to the player again.
+     *
+     * A question is asked once in full — with whatever framing, invitation to
+     * guess, and "confirm with ++" it carries. Repeating all of that after every
+     * wrong year buries the hint in guidance the player read the first time. So
+     * a repeat is just the question.
+     *
+     * Every entry is a verbatim slice of that step's own promptMessage, so this
+     * rewords nothing; [shortQuestionsAreVerbatim] holds them to it.
+     */
+    private val SHORT_QUESTIONS = mapOf(
+        3 to "When was the Battle of Anjar?",
+        4 to "When did Minh Mang start ruling Vietnam?",
+        6 to "When was the Basilosaurus first described?",
+        7 to "Another question & creature: when was the Abominable Snowman first named?",
+        8 to "When did fruit flies go to space?",
+        11 to "When did Albert I. go to space?",
+        12 to "Speaking of expired space explorers, what year did Sputnik I launch?",
+        22 to "When did the first woman go to space?",
+    )
+
+    /** The question alone, or null if this step has no short form. */
+    fun shortQuestion(step: Int): String? = SHORT_QUESTIONS[step]
+
+    // ── Q2's wording ──────────────────────────────────────────────────────────
+
+    private const val Q2_ORIGINAL = "When did Minh Mang start ruling Vietnam?"
+    private const val Q2_GUESSED =
+        "When did Minh Mang start ruling Vietnam? Want to guess again?"
+    private const val Q2_LOOKED_UP =
+        "When did Minh Mang start ruling Vietnam?\nLook it up again, or want to try guessing?"
+
+    /**
+     * Rewrites Q2 to match how Q1 went, wherever its text is about to be shown.
+     *
+     * A player who needed a second go at the Battle of Anjar has already found
+     * out that guessing is allowed, so Q2 just offers it again. One who got it
+     * first time looked it up, and is told plainly that guessing is an option —
+     * otherwise nothing in the script ever says so.
+     *
+     * Applied at the point of display rather than in the config, because the
+     * same sentence is reached both as Q2's own prompt and as the tail of Q1's
+     * success line.
+     */
+    fun resolveQuestionText(text: String): String {
+        if (!text.contains(Q2_ORIGINAL)) return text
+        return text.replace(Q2_ORIGINAL, if (guessedQ1()) Q2_GUESSED else Q2_LOOKED_UP)
+    }
+
     /** Assembles the three parts. [hint] is lower-case; it starts a sentence here. */
     fun compose(opener: String, connector: String, hint: String): String =
         "$opener $connector... " + hint.replaceFirstChar { it.uppercase() }

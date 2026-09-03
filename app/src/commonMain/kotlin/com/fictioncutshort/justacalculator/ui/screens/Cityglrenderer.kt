@@ -2,6 +2,7 @@ package com.fictioncutshort.justacalculator.ui.screens
 
 import kotlin.math.PI
 import com.fictioncutshort.justacalculator.gl.throttleRenderThread
+import com.fictioncutshort.justacalculator.gl.hitchRenderThread
 import com.fictioncutshort.justacalculator.gl.toGlBuffer
 import kotlin.concurrent.Volatile
 import com.fictioncutshort.justacalculator.platform.nowMillis
@@ -495,12 +496,6 @@ class CityGLRenderer : GlRenderer {
          * an invisible wall across an obviously open doorway.
          */
         val stepDown: Float = 30f,
-        /**
-         * Building 10's tunnel/hold/damaged-room shell. Its AABB spans the whole
-         * underground run, most of which lies under intact city ground, so the
-         * walk code must not let it answer for the floor up on the surface.
-         */
-        val underground: Boolean = false,
     )
     private val damagedList = ArrayList<DamagedInterior>()
     val damagedInteriors: List<DamagedInterior> get() = damagedList
@@ -1121,7 +1116,7 @@ class CityGLRenderer : GlRenderer {
         // Post-Building-4 glitch: some frames hitch for a random beat, dropping the
         // effective frame-rate raggedly so the world stutters with the voiceover.
         if (glitchStutter && kotlin.random.Random.nextFloat() < 0.30f) {
-            throttleRenderThread(45L + kotlin.random.Random.nextInt(160).toLong())
+            hitchRenderThread(45L + kotlin.random.Random.nextInt(160).toLong())
         }
         lastFrameMs = monotonicMillis()
         if (needsRebuild) { needsRebuild = false; releaseMeshBuffers(); buildScene() }
@@ -3358,12 +3353,6 @@ class CityGLRenderer : GlRenderer {
      */
     @Volatile var holdHole: FloatArray? = null
 
-    /**
-     * Building 10's drum as [centreX, centreZ, outerRadius], once it is built.
-     * Inside it the underground shell supplies the room floor and the mouth of
-     * the descent; outside it the city slab is what the player stands on.
-     */
-    @Volatile var radDrum: FloatArray? = null
 
     // ── The second, hidden doorway ────────────────────────────────────────────
     // A panel in the drum wall, authored in mutebutton.blend as its own material
@@ -3410,7 +3399,6 @@ class CityGLRenderer : GlRenderer {
         val sides = 16
         val fog   = 0.06f
         radBx = bx; radBz = bz; radOuterR = r0
-        radDrum = floatArrayOf(bx, bz, r0)
 
         // Colors
         val tR=1.00f; val tG=1.00f; val tB=1.00f   // top face white
@@ -4050,7 +4038,6 @@ class CityGLRenderer : GlRenderer {
                     // The drop from the tunnel mouth into the hold measures ~135
                     // world units; 220 covers it and the shallower drops further in.
                     stepDown = 220f,
-                    underground = true,
                 ))
             }
 

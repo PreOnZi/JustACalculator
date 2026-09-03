@@ -117,6 +117,13 @@ android {
     // The Assets seam gives both platforms the same "models/x.obj" path scheme.
     sourceSets["main"].assets.srcDirs("src/commonMain/assets")
 
+    // Story logic logs through android.util.Log, which is a stub that throws in
+    // JVM unit tests. Returning defaults instead lets tests drive the real input
+    // handler rather than only the pure helpers around it.
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     defaultConfig {
         applicationId = "com.fictioncutshort.justacalculator"
         minSdk = 24

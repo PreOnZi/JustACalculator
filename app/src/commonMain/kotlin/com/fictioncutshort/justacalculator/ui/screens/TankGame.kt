@@ -1021,7 +1021,7 @@ private fun AppDuolingo(addGiftcards: (Int) -> Unit, onClose: () -> Unit) {
                 Text(
                     when {
                         attempts >= 3 -> "Buy premium for infinite lives"
-                        attempts >= 2 -> "I don't actually care what's correct. have you heard about AI?"
+                        attempts >= 2 -> "I don't actually care what's correct. Have you heard about AI?"
                         else -> "Oops! That's not right."
                     },
                     color = Color(0xFFCC2929), fontSize = 15.sp, fontWeight = FontWeight.Bold
@@ -1795,10 +1795,18 @@ private fun AppTetris(addGiftcards: (Int) -> Unit, giftcards: Int, onClose: () -
             }
         }
         Spacer(modifier = Modifier.height(12.dp))
+        // The board is sized from the space LEFT OVER, not from the screen width.
+        // A 6x12 well at full width is twice as tall as the screen is wide, so
+        // sizing it off the width pushed the controls off the bottom and left the
+        // game unplayable. weight(1f) hands it whatever the header and the
+        // controls do not use, and matchHeightConstraintsFirst derives the width
+        // from that height instead of the other way round — so the well is always
+        // fully visible with its buttons under it, on any screen shape.
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(cols.toFloat() / rows.toFloat())
+                .weight(1f)
+                .aspectRatio(cols.toFloat() / rows.toFloat(), matchHeightConstraintsFirst = true)
+                .align(Alignment.CenterHorizontally)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color(0xFF1A2440))
         ) {

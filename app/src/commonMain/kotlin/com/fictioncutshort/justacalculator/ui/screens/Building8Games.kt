@@ -418,8 +418,18 @@ fun ArcadeBrowser(onExitToRoom: () -> Unit, onAllDone: () -> Unit, onGameReturne
                     Modifier.clip(RoundedCornerShape(4.dp)).background(Color(0xFFF5F4EC))
                         .border(1.dp, Color(0xFF8D8A80), RoundedCornerShape(4.dp))
                         .clickable {
-                            // Back never leaves — it just taunts (home included).
-                            taunt = tauntFor(if (page == "home") Currency.entries.random() else currencyOf(page))
+                            // Back taunts while there is still something to lose.
+                            // Once the currency is gone the game is over, and the
+                            // only way out is the "back to games" link at the foot
+                            // of the page — which is off-screen on shorter phones,
+                            // leaving the player shut in with a taunt. So when the
+                            // balance is spent, Back does what that link does.
+                            val spent = page != "home" &&
+                                CurrencyStore.balance(context, currencyOf(page)) <= 0
+                            if (spent) onDone()
+                            else taunt = tauntFor(
+                                if (page == "home") Currency.entries.random() else currencyOf(page)
+                            )
                         }
                         .padding(horizontal = 10.dp, vertical = 5.dp)
                 ) {
