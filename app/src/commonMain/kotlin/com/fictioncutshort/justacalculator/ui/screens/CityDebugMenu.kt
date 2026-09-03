@@ -76,6 +76,20 @@ private const val DEBUG_PASSCODE = "17102020"
 /** Entry order the city enforces — shown so the gating is legible while testing. */
 private val DEBUG_ENTRY_ORDER = listOf(1, 7, 4, 3, 6, 2, 5, 8, 9)
 
+/**
+ * A stash big enough to actually gamble with, for the bulk "complete all" button.
+ * The five games each drain one currency, so an empty balance is indistinguishable
+ * from a spent one at the door. Values match DebugSeed's, which is already this
+ * project's answer to "enough to play Building 8 with".
+ */
+private val DEBUG_CURRENCY_FLOOR = listOf(
+    Currency.COINS to 50,
+    Currency.KEYS to 6,
+    Currency.GIFTCARDS to 25,
+    Currency.COOKIES to 30,
+    Currency.STARS to 40,
+)
+
 /** What each building changes about the city when it is completed. */
 private val BUILDING_EFFECTS = mapOf(
     1 to "tower defence - lays bridge piece, door turns green",
@@ -562,6 +576,27 @@ fun CityDebugMenu(
                                 putBoolean("td_b6_done", true); putBoolean("b3_night_active", true)
                                 putInt("bridge_pieces", 9)
                                 putInt("entry_progress", 9)
+
+                                // Completing the buildings has to bring their winnings
+                                // with it. Marking them done alone left every balance
+                                // at zero, and Building 8's games open with "No <x>
+                                // left." on an empty balance — so the one button meant
+                                // to set up the endgame made the endgame unplayable.
+                                // Top up rather than overwrite, so this never robs a
+                                // real playthrough that came through here.
+                                for ((c, floor) in DEBUG_CURRENCY_FLOOR) {
+                                    val have = CurrencyStore.balance(context, c)
+                                    if (have < floor) putInt(c.prefKey, floor)
+                                }
+
+                                // The coins draw is part of that endgame: clear its
+                                // one-shot flags so the city popup can arm again and
+                                // the arcade counts as unplayed.
+                                remove("b8_lottery_shown")
+                                remove("b8_lottery_staked")
+                                remove("b8_lottery_settled")
+                                remove("b8_lottery_numbers")
+                                remove("b8_games_played")
                             }
                         }
                     )

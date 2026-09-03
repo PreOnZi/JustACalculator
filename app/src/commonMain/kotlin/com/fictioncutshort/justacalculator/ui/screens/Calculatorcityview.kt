@@ -214,6 +214,14 @@ private const val SHOW_COLLISION_PROBE = false
 // the clamp would land on that face and re-create the same invisible wall a few
 // units further out.
 private const val UG_BOUND_PAD     = 60f
+
+/**
+ * Slack around the cut in the ground above Building 10's descent, so stepping
+ * onto the lip reads as the ramp rather than the slab fighting it. About a
+ * player's own radius — any more and it starts re-opening ground that is
+ * supposed to be solid.
+ */
+private const val UG_HOLE_PAD      = 24f
 private const val WALL_COLLIDE_R   = 10f   // world units from a wall segment
 private const val WALL_STEP_OVER   = 20f   // walls shorter than this (a step) don't block
 private const val WALL_DUCK_FRAC   = 0.26f // overhead clearance, × building height
@@ -2922,11 +2930,33 @@ fun CalculatorCityView(
                 val ruinsF = renderer.damagedInteriors
                 var floors: List<FloatArray> = emptyList()
                 var stepDownLimit = 30f
+                // Building 10's underground shell is one flat XZ box around the
+                // whole run — measured at x -1160..744, z -2449..-1694 — but the
+                // ground is only actually cut open over `holdHole` (x -146..668,
+                // z -2428..-2200) and only inside the drum (r 264 about the
+                // centre) is there a room floor instead of city slab. The rest of
+                // that box is intact ground with the tunnel passing far beneath.
+                //
+                // Letting the shell answer for the floor across the whole box is
+                // what left no floor outside the button: a sweep of the box at
+                // surface level found 745 of 3648 points handing back a floor off
+                // the slab, as deep as -216 — so the player sank through solid
+                // ground and could walk the tunnel roof. Underground it must still
+                // own the floor, or there is nothing to stand on down there.
+                val ugDrum = renderer.radDrum
+                val ugHole = renderer.holdHole
+                val ugOwnsFloor = cRoomFloorY < -40f ||
+                    (ugDrum != null &&
+                        (pX - ugDrum[0]) * (pX - ugDrum[0]) +
+                        (pZ - ugDrum[1]) * (pZ - ugDrum[1]) <= ugDrum[2] * ugDrum[2]) ||
+                    (ugHole != null &&
+                        pX >= ugHole[0] - UG_HOLE_PAD && pX <= ugHole[1] + UG_HOLE_PAD &&
+                        pZ >= ugHole[2] - UG_HOLE_PAD && pZ <= ugHole[3] + UG_HOLE_PAD)
                 for (ri in ruinsF.indices) {
                     val d = ruinsF[ri]
-                    if (pX >= d.minX && pX <= d.maxX && pZ >= d.minZ && pZ <= d.maxZ) {
-                        floors = d.floors; stepDownLimit = d.stepDown; break
-                    }
+                    if (pX < d.minX || pX > d.maxX || pZ < d.minZ || pZ > d.maxZ) continue
+                    if (d.underground && !ugOwnsFloor) continue
+                    floors = d.floors; stepDownLimit = d.stepDown; break
                 }
                 val eyeTarget: Float
                 if (floors.isNotEmpty()) {
@@ -3969,6 +3999,14 @@ fun CalculatorCityView(
                     crossedBridge         = ONE_WAY_BRIDGE && prefs.getBoolean("bridge_crossed", false)
                     radDoorOpen           = prefs.getBoolean("b10_door_open", false)
                     entryProgress         = prefs.getInt("entry_progress", 0)
+                    // These three were left out, and each is the sole gate on
+                    // something the player then waits for that never comes. b5Done
+                    // is the worst of them: it arms the coins lottery, so marking
+                    // the buildings complete from here left the popup permanently
+                    // unarmed for the session.
+                    b5Done                = prefs.getBoolean("td_b5_done", false)
+                    gunGrabbed            = cityPrefs.getBoolean("gun_grabbed", false)
+                    monsterKilled         = cityPrefs.getBoolean("monster_killed", false)
                     for (d in 1..9) {
                         renderer.buildingCompleted[d - 1] = prefs.getBoolean("building_done_$d", false)
                     }

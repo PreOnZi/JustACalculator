@@ -495,6 +495,12 @@ class CityGLRenderer : GlRenderer {
          * an invisible wall across an obviously open doorway.
          */
         val stepDown: Float = 30f,
+        /**
+         * Building 10's tunnel/hold/damaged-room shell. Its AABB spans the whole
+         * underground run, most of which lies under intact city ground, so the
+         * walk code must not let it answer for the floor up on the surface.
+         */
+        val underground: Boolean = false,
     )
     private val damagedList = ArrayList<DamagedInterior>()
     val damagedInteriors: List<DamagedInterior> get() = damagedList
@@ -1700,6 +1706,14 @@ class CityGLRenderer : GlRenderer {
         Gl.glViewport(0, 0, sw, sh)
         Gl.glUniformMatrix4fv(uMVP, 1, false, mvpMain, 0)
         Gl.glUniform1f(uAerial, aerialBlend)
+        // Each feed extracted its own camera's planes into the shared `frustum`,
+        // and the passes that follow cull against that array. Left as it was, the
+        // room around the player was being culled to what a security camera can
+        // see — and since one feed refreshes per frame, round-robin, it was a
+        // different camera every frame. That is the flicker on entering
+        // Building 10: geometry passing the cull on one frame and failing it on
+        // the next. Put the player's frustum back before anything else is drawn.
+        extractFrustum(mvpMain)
         setXform(null)
         if (lightingOn) {
             Gl.glUniform3f(uCamPos, camX, camY, camZ)
@@ -3344,6 +3358,13 @@ class CityGLRenderer : GlRenderer {
      */
     @Volatile var holdHole: FloatArray? = null
 
+    /**
+     * Building 10's drum as [centreX, centreZ, outerRadius], once it is built.
+     * Inside it the underground shell supplies the room floor and the mouth of
+     * the descent; outside it the city slab is what the player stands on.
+     */
+    @Volatile var radDrum: FloatArray? = null
+
     // ── The second, hidden doorway ────────────────────────────────────────────
     // A panel in the drum wall, authored in mutebutton.blend as its own material
     // (Material.072, a tan a shade off the wall around it) and exactly as wide as
@@ -3389,6 +3410,7 @@ class CityGLRenderer : GlRenderer {
         val sides = 16
         val fog   = 0.06f
         radBx = bx; radBz = bz; radOuterR = r0
+        radDrum = floatArrayOf(bx, bz, r0)
 
         // Colors
         val tR=1.00f; val tG=1.00f; val tB=1.00f   // top face white
@@ -4028,6 +4050,7 @@ class CityGLRenderer : GlRenderer {
                     // The drop from the tunnel mouth into the hold measures ~135
                     // world units; 220 covers it and the shallower drops further in.
                     stepDown = 220f,
+                    underground = true,
                 ))
             }
 

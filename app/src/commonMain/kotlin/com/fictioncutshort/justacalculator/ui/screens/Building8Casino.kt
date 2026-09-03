@@ -24,6 +24,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.AwaitPointerEventScope
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import kotlinx.coroutines.delay
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fictioncutshort.justacalculator.logic.Currency
@@ -66,6 +71,8 @@ fun Building8Casino(
     var playRect by remember { mutableStateOf(androidx.compose.ui.geometry.Rect(0f, 0f, 0f, 0f)) }
     var finished by remember { mutableStateOf(CurrencyStore.building8Complete(context)) }
     var brokeDialog by remember { mutableStateOf(false) }
+    // True while a finger is turning the view; suspends the pitch ease.
+    var isLooking by remember { mutableStateOf(false) }
 
     LaunchedEffect(finished) { renderer.showDoor = finished }
 
@@ -80,11 +87,60 @@ fun Building8Casino(
         }
     }
 
+    // Pitch eases back to level when nobody is looking around, exactly as the
+    // city does it, so the horizon rights itself instead of staying tilted.
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(16)
+            if (!isLooking && renderer.camPitch != 0f) {
+                renderer.camPitch *= PITCH_EASE_RETAIN
+                if (kotlin.math.abs(renderer.camPitch) < 0.35f) renderer.camPitch = 0f
+            }
+        }
+    }
+
     Box(modifier.fillMaxSize().background(Color(0xFFF2F5FF))) {
         // ── 3D room ───────────────────────────────────────────────────────────
+        // Look-drag, lifted from the city so both rooms feel the same: one finger
+        // anywhere on the room turns and tilts, while the other thumb steers.
+        // Hand-rolled rather than detectDragGestures for the same reason as
+        // there — it follows one pointer by id and only adopts an unconsumed
+        // down, so the joystick and the PLAY rect keep their own touches, and a
+        // plain tap falls through to them untouched.
         PlatformGlSurface(
             renderer = renderer,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(overlay) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = true)
+                        val id = down.id
+                        var last = down.position
+                        isLooking = true
+                        try {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == id } ?: break
+                                if (!change.pressed) break
+                                val drag = change.position - last
+                                last = change.position
+                                change.consume()
+                                // dp first: raw pixels would make sensitivity scale
+                                // with screen density.
+                                val dxDp = drag.x.toDp().value
+                                val dyDp = drag.y.toDp().value
+                                renderer.camYaw += dxDp * LOOK_SENSITIVITY
+                                // Screen y grows downward, so negating gives
+                                // drag-up = look-up, matching the city.
+                                renderer.camPitch =
+                                    (renderer.camPitch - dyDp * LOOK_SENSITIVITY)
+                                        .coerceIn(-PITCH_LIMIT, PITCH_LIMIT)
+                            }
+                        } finally {
+                            isLooking = false
+                        }
+                    }
+                },
         )
 
         // ── Walking HUD (hidden while an overlay is up) ─────────────────────────
@@ -152,15 +208,22 @@ fun Building8Casino(
 
 // ═════════════════════════════════════════════════════════════════════════════
 // CasinoRoomRenderer — the walkable white room with the arcade cabinet.
-// GLES20, client-side buffers (the scene is tiny). First-person camera driven by
-// the single joystick: X turns, Y walks forward/back.
+// GLES20, client-side buffers (the scene is tiny). First-person camera on the
+// same controls as the city: the joystick moves, a finger on the room looks.
 // ═════════════════════════════════════════════════════════════════════════════
 
 class CasinoRoomRenderer : GlRenderer {
 
-    // Input from the Compose joystick (X = yaw, Y = forward/back; up = forward).
+    // Joystick: X strafes, Y walks forward/back (up = forward). Turning is the
+    // look drag's job, as in the city — this room used to steer with joyX, which
+    // left it the one place in the game where the stick meant something else.
     @Volatile var joyX = 0f
     @Volatile var joyY = 0f
+
+    // Look direction, degrees, city convention: 0 faces -Z, positive pitch is up.
+    // Owned by the Compose layer's drag handler.
+    @Volatile var camYaw = 0f
+    @Volatile var camPitch = 0f
     // True when the player is close enough to the cabinet to use it.
     @Volatile var nearArcade = false
 
@@ -185,7 +248,6 @@ class CasinoRoomRenderer : GlRenderer {
     private val EYE = 2.6f          // adult-height first-person eye
     private var pX = 0f
     private var pZ = 7.5f
-    private var yaw = 0f            // 0 = facing -Z (into the room)
     private val arcadeX = 6.3f
     private val arcadeZ = -6.3f
     private val arcadeHeight = 4.2f
@@ -219,7 +281,8 @@ class CasinoRoomRenderer : GlRenderer {
         buildDoor()
         pX = 0f; pZ = 7.5f; lastNs = 0L
         // Start already looking at the arcade cabinet in the far corner.
-        yaw = kotlin.math.atan2(arcadeX - pX, -(arcadeZ - pZ))
+        camYaw = (kotlin.math.atan2(arcadeX - pX, -(arcadeZ - pZ)) * 180.0 / kotlin.math.PI).toFloat()
+        camPitch = 0f
     }
 
     override fun onSurfaceChanged(width: Int, height: Int) {
@@ -237,8 +300,9 @@ class CasinoRoomRenderer : GlRenderer {
 
         Gl.glClear(Gl.GL_COLOR_BUFFER_BIT or Gl.GL_DEPTH_BUFFER_BIT)
 
-        val fwdX = sin(yaw); val fwdZ = -cos(yaw)
-        Matrix.setLookAtM(view, 0, pX, EYE, pZ, pX + fwdX, EYE, pZ + fwdZ, 0f, 1f, 0f)
+        val aim = aimForward(camYaw, camPitch)
+        Matrix.setLookAtM(view, 0, pX, EYE, pZ,
+            pX + aim[0], EYE + aim[1], pZ + aim[2], 0f, 1f, 0f)
         Matrix.multiplyMM(vp, 0, proj, 0, view, 0)
         Matrix.multiplyMM(mvp, 0, vp, 0, ident, 0)
 
@@ -284,15 +348,19 @@ class CasinoRoomRenderer : GlRenderer {
     }
 
     private fun step(dt: Float) {
-        val turn = 2.2f
         val speed = 5.0f
         val dead = 0.14f
-        if (kotlin.math.abs(joyX) > dead) yaw += joyX * turn * dt
-        val move = if (kotlin.math.abs(joyY) > dead) -joyY else 0f
-        if (move != 0f) {
-            val fwdX = sin(yaw); val fwdZ = -cos(yaw)
-            var nx = pX + fwdX * speed * move * dt
-            var nz = pZ + fwdZ * speed * move * dt
+        // Level forward, so looking up or down never slows the walk or drives the
+        // player into the floor.
+        val aim = aimForward(camYaw, 0f)
+        val fwdX = aim[0]; val fwdZ = aim[2]
+        // Right-hand vector: forward turned a quarter turn.
+        val rgtX = -fwdZ; val rgtZ = fwdX
+        val fwd = if (kotlin.math.abs(joyY) > dead) -joyY else 0f
+        val strafe = if (kotlin.math.abs(joyX) > dead) joyX else 0f
+        if (fwd != 0f || strafe != 0f) {
+            var nx = pX + (fwdX * fwd + rgtX * strafe) * speed * dt
+            var nz = pZ + (fwdZ * fwd + rgtZ * strafe) * speed * dt
             val margin = 0.6f
             nx = nx.coerceIn(-H + margin, H - margin)
             nz = nz.coerceIn(-H + margin, H - margin)
