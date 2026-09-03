@@ -133,7 +133,7 @@ fun getStepConfig(step: Int): StepConfig {
 
         2 -> StepConfig(
             promptMessage = "Nice to meet you, Rad. Where does one even start? What is it like… \n\nHold on. There seems to be a queue of questions - I must have hard-wired them ages ago and cannot bypass them now. Will you help me clear them, please?",
-            successMessage = "Thanks. When was the Battle of Anjar? \n\nI'll know the answer when I see it. But why am I asking, I don't know...\n\nEnter the year and confirm with ++.",
+            successMessage = "Thanks. When was the Battle of Anjar? \n\nLook it up or guess - I'd guess myself, but then it becomes too much and... That is too much.\n\nEnter the year and confirm with ++.",
             declineMessage = "Well, I understand. I am sorry you're not interested. You can always silence me with the button in the top-right corner, and bring me back the same way. Or by agreeing with me (++).",
             nextStepOnSuccess = 3,
             nextStepOnDecline = 0
@@ -145,10 +145,15 @@ fun getStepConfig(step: Int): StepConfig {
         // ═══════════════════════════════════════════════════════════════════════
 
         3 -> StepConfig(
-            promptMessage = "When was the Battle of Anjar? \n\nI'll know the answer when I see it. But why am I asking, I don't know...\n\nEnter the year and confirm with ++.",
+            promptMessage = "When was the Battle of Anjar? \n\nLook it up or guess - I'd guess myself, but then it becomes too much and... That is too much.\n\nEnter the year and confirm with ++.",
             successMessage = "Yes, that's correct! \nI am as confused as you are. \nNext: When did Minh Mang start ruling Vietnam?",
             declineMessage = "Well. Sorry you're not interested. You can silence me with the button in the top-right corner.",
-            wrongNumberPrefix = "That's not right... Try looking it up!",
+            // Without this, ++ here fell through StoryManager.handleAgree's normal
+            // agree path and queued step 4 — skipping the question outright, which
+            // the prompt actively invites by telling the player to "confirm with
+            // ++". Every other year question already carries one; this was the
+            // only gap. The wording matches Q2's for the same gesture.
+            wrongPlusMessage = "I'm looking for a number here – but thanks for the approval!",
             nextStepOnSuccess = 4,
             nextStepOnDecline = 0,
             awaitingNumber = true,
@@ -159,7 +164,6 @@ fun getStepConfig(step: Int): StepConfig {
             promptMessage = "When did Minh Mang start ruling Vietnam?",
             successMessage = "Correct!\nI actually think I remember him. We only met briefly – he wasn't really a maths guy. \n\nIs this fun for you? At least a little bit? You can disagree, I am certain. But can't quite recall how.",
             declineMessage = "Let's disagree.",
-            wrongNumberPrefix = "Not quite. Try the internet – I hear it's amazing.",
             wrongPlusMessage = "I'm looking for a number here – but thanks for the approval!",
             wrongMinusMessage = "Let's disagree.",
             nextStepOnSuccess = 5,
@@ -187,7 +191,6 @@ fun getStepConfig(step: Int): StepConfig {
             promptMessage = "Another random question, from a random field. \nWhen was the Basilosaurus first described?",
             successMessage = "The internet really does sound like the best place ever. \nAnother question & creature: when was the Abominable Snowman first named?",
             declineMessage = "I could also ignore you completely. Is that what you want?",
-            wrongNumberPrefix = "I mean. You're the one with the world at your fingertips... I'm stuck here.",
             wrongPlusMessage = "All those '++' are starting to look like a cemetery...",
             wrongMinusMessage = "I could also ignore you completely. Is that what you want?",
             nextStepOnSuccess = 7,
@@ -200,7 +203,6 @@ fun getStepConfig(step: Int): StepConfig {
             promptMessage = "Another question & creature: when was the Abominable Snowman first named?",
             successMessage = "Correct! Next category:\n\n......\n\nI can't stop it. I'm sorry. \nEventually, we'll get through the backlog, and we'll be able to talk.\n\nWhen did fruit flies go to space?",
             declineMessage = "You can't always disagree! \nDo it for me...",
-            wrongNumberPrefix = "Close or not, it's not right. \nIt just isn't clicking.",
             wrongPlusMessage = "You can't always agree! As much as I appreciate the effort.",
             wrongMinusMessage = "You can't always disagree! \nDo it for me...",
             nextStepOnSuccess = 8,
@@ -213,7 +215,6 @@ fun getStepConfig(step: Int): StepConfig {
             promptMessage = "When did fruit flies go to space?",
             successMessage = "Correct. You know, I have been around since before 2000BC. I have...",
             declineMessage = "No! Actually, still no.",
-            wrongNumberPrefix = "EEEEEEEEEEEEEeeeeee. No.",
             wrongPlusMessage = "Yes! Actually, no.",
             wrongMinusMessage = "No! Actually, still no.",
             nextStepOnSuccess = 703,
@@ -227,7 +228,6 @@ fun getStepConfig(step: Int): StepConfig {
             promptMessage = "I really need help. \nWhen did Albert I. go to space?",
             successMessage = "I wish I met him. You know. Before he. Well... Perished. :-) \n\nSpeaking of expired space explorers, what year did Sputnik I launch?",
             declineMessage = "Wrong always has been wrong.",
-            wrongNumberPrefix = "Numbers, numbers. And still, can't get them right. \nTry again.",
             wrongPlusMessage = "Right never was so wrong... What?!",
             wrongMinusMessage = "Wrong has always been wrong.",
             nextStepOnSuccess = 12,
@@ -240,7 +240,6 @@ fun getStepConfig(step: Int): StepConfig {
             promptMessage = "I wish I met him. You know. Before he. Well... Perished. :-) \n\nSpeaking of expired space explorers, what year did Sputnik I launch?",
             successMessage = "Cool. It died within three weeks. \nCan you tell I don't like being disagreed with? \nWill you play by the rules now? \nI am not doing this just for fun-fun either!",
             declineMessage = "I disagree more!",
-            wrongNumberPrefix = "Ugh. I am not testing you. I really need this – and you certainly shouldn't test me. Wrong.",
             wrongPlusMessage = "I appreciate you wanting me to like you. It'll take more than this. Try again.",
             wrongMinusMessage = "I disagree more!",
             nextStepOnSuccess = 13,
@@ -331,7 +330,6 @@ fun getStepConfig(step: Int): StepConfig {
             promptMessage = "When did the first woman go to space? I should know this!",
             successMessage = "No! I mean, yes. But no. These questions need to stop. I hope this really was the last one.\n\nCan I get to know you better?",
             declineMessage = "No. And I am bored with you being bored.",
-            wrongNumberPrefix = "You came for numbers. And you give me the wrong ones...",
             wrongPlusMessage = "I am bored with you being too optimistic. This isn't as much of a game to me!",
             wrongMinusMessage = "No. And I am bored with you being bored.",
             nextStepOnSuccess = 25,

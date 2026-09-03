@@ -3303,6 +3303,17 @@ object CalculatorActions {
     fun loadRedButtonAttempts(): Int = prefs?.getInt("red_button_attempts", 0) ?: 0
 
     /**
+     * Whether the Battle of Anjar took more than one attempt — i.e. the player
+     * guessed at it instead of looking it up. Q2 is worded off this, so it has
+     * to survive closing the app between the two questions.
+     */
+    fun persistQ1Guessed(guessed: Boolean) {
+        prefs?.edit()?.putBoolean("trivia_q1_guessed", guessed)?.commit()
+    }
+
+    fun loadQ1Guessed(): Boolean = prefs?.getBoolean("trivia_q1_guessed", false) ?: false
+
+    /**
      * Debug only: show the red button in the DEL ruin regardless of the software
      * update, the attempt count or whether the door is already open, and let it
      * be stepped on repeatedly. Purely for checking that it renders in the right

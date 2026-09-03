@@ -1,6 +1,6 @@
 package com.fictioncutshort.justacalculator
 
-import com.fictioncutshort.justacalculator.ui.screens.NamePool
+import com.fictioncutshort.justacalculator.util.NamePool
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull

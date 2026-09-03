@@ -171,6 +171,7 @@ object StateManager {
             remove(PREF_TOTAL_CALCULATIONS)
             remove(PREF_DARK_BUTTONS)
             remove(PREF_STORY_COMPLETE)
+            remove("trivia_q1_guessed")
             // Note: Don't remove PREF_TERMS_ACCEPTED
             apply()
         }
