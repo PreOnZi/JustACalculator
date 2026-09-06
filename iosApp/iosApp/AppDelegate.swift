@@ -37,6 +37,28 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         IosOrientationLock.shared.onChange = { [weak self] in
             self?.lockChanged()
         }
+
+        // Ask UIKit to re-read once a scene is actually on screen.
+        //
+        // Without this the launch lock below never engaged. UIKit asks for the
+        // supported orientations several times while the app is starting, before
+        // any scene is foreground-active; `activeOrientationMask` correctly
+        // declines to answer then, so the app is left unrestricted — and UIKit
+        // caches that and does not ask again on its own. The result was an app
+        // that rotated freely everywhere EXCEPT the two screens that take the
+        // per-screen lock, because only those invalidate the cache. Waiting for
+        // the scene to activate and then invalidating gives the launch lock a
+        // real orientation to freeze, and the app holds it from then on.
+        NotificationCenter.default.addObserver(
+            forName: UIScene.didActivateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // Once only: after the mask is set there is nothing left to sample,
+            // and this fires again on every return from the background.
+            guard let self, self.launchMask == nil else { return }
+            Self.invalidateSupportedOrientations()
+        }
         return true
     }
 

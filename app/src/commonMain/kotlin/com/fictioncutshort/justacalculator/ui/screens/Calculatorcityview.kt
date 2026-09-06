@@ -427,6 +427,24 @@ private const val CONF_CREDIT_HOLD = 2000L
 
 private const val HOLD_CELL_R      = 70f
 private const val DAMAGED_ROOM_X   = -600f
+// …and how far DOWN it has to be. Measured off mutebutton.obj at RAD_SCALE: the
+// damaged room's floor sits at world y -470 and the tallest thing you can stand
+// on inside it reaches -340, while its roof is a flat lid at -200 — and that lid
+// is walkable from the void under the camera piece. The old test was depth alone
+// (`< -40`), so walking over the room's roof started the confrontation and shut
+// the player in a cell for it. -300 clears the lid by 100 and the furniture by 40.
+private const val DAMAGED_ROOM_Y   = -300f
+// The depth that separates the two halves of the underground. Everything from the
+// hold down — the hold's own floor is at -364, the damaged room's at -470, and the
+// passage between them never comes shallower than about -360 — is on one side of
+// it; the tunnel, the camera's shell at -47 and every other pocket under the
+// ground are on the other. Reaching it at all IS arriving at the hold, which is
+// what makes it serve as both the "you have been here" mark and the line the
+// fail-safe watches.
+private const val HOLD_DEPTH_Y     = -300f
+// …and how far under the ground counts as being under it at all. The catch plane
+// sits at -5.5 and the room floor at +3, so neither trips this.
+private const val UNDER_GROUND_Y   = -40f
 private const val CONF_START_DELAY = 5000L
 private const val CONF_GAP_MS      = 3000L   // conf01 ends → conf02 starts
 private const val CONF_POPUP_OUT   = 2000L   // conf02 starts → popup goes
@@ -597,6 +615,10 @@ fun CalculatorCityView(
     // Persist intro completion so it doesn't replay on rotation / remount
     val cityPrefs = remember { context.openPrefs("calc_city") }
     val introAlreadyDone = remember { cityPrefs.getBoolean("intro_done", false) }
+    // Has the player been down to the hold? Persisted, because it shuts the way
+    // back up for good — a save that reloaded without it would hand them a second
+    // route to an ending they have already committed to.
+    var holdEntered by remember { mutableStateOf(cityPrefs.getBoolean("hold_entered", false)) }
     val intro = remember { Animatable(if (introAlreadyDone) 1f else 0f) }
     var introDone by remember { mutableStateOf(introAlreadyDone) }
     // Tracks the brief 0.5 s "settle" from the landing pose down to the
@@ -1157,13 +1179,13 @@ fun CalculatorCityView(
     LaunchedEffect(Unit) {
         while (!confDone) {
             delay(250)
-            val inRoom = cRoomFloorY < -40f && pX < DAMAGED_ROOM_X
+            val inRoom = cRoomFloorY < DAMAGED_ROOM_Y && pX < DAMAGED_ROOM_X
             if (!inRoom) continue
             // Five seconds of nothing, and it has to be five seconds SPENT there.
             var held = 0L
             while (held < CONF_START_DELAY) {
                 delay(100); held += 100
-                if (!(cRoomFloorY < -40f && pX < DAMAGED_ROOM_X)) { held = -1; break }
+                if (!(cRoomFloorY < DAMAGED_ROOM_Y && pX < DAMAGED_ROOM_X)) { held = -1; break }
             }
             if (held < 0) continue
             confDone = true
@@ -1313,8 +1335,17 @@ fun CalculatorCityView(
             confMosaicFlip = 0
             confMosaicSaved = false
             loc = elsewhere(loc)
+            // Written mid-line rather than after it — see CONF_MOSAIC_SAVE_MS.
+            // The caption still waits for the edit to finish; only the file
+            // moves, and nobody can see the gallery from in here.
+            var mosWritten = false
+            var mosSavedOk = false
             playAt("conf10", loc) { e, _ ->
                 if (e >= CONF_MOSAIC_SHOW_MS && confMosaic == null) confMosaic = mosCap
+                if (e >= CONF_MOSAIC_SAVE_MS && !mosWritten) {
+                    mosWritten = true
+                    mosSavedOk = saveConfMosaic(mosCap, mosEdit, confTextMeasurer)
+                }
                 if (e >= CONF_MOSAIC_EDIT_MS) {
                     val k = ((e - CONF_MOSAIC_EDIT_MS).toFloat() /
                         CONF_MOSAIC_EDIT_DUR_MS).coerceIn(0f, 1f)
@@ -1339,10 +1370,21 @@ fun CalculatorCityView(
             }
             // Saved without being asked, under their date and Building 5's own
             // file name, so it sits in the camera roll looking like one of theirs.
-            confMosaicSaved = saveConfMosaic(mosCap, mosEdit, confTextMeasurer)
-            delay(CONF_MOSAIC_HOLD_MS)
-            confMosaic = null
+            // Normally already written, mid-line; this covers the short-track
+            // path above, where the cue at 20 s never arrived.
+            if (!mosWritten) {
+                mosWritten = true
+                mosSavedOk = saveConfMosaic(mosCap, mosEdit, confTextMeasurer)
+            }
+            confMosaicSaved = mosSavedOk
             loc = elsewhere(loc)
+
+            // The picture holds over the OPENING of conf11 instead of over
+            // silence. conf10 ends on a hard cut — the take carries a tenth of a
+            // second of tail — so a beat of nothing after it does not read as a
+            // pause, it reads as the line having been dropped. The voice comes
+            // straight back and the mosaic goes while it is talking.
+            launch { delay(CONF_MOSAIC_HOLD_MS); confMosaic = null }
 
             // conf11 closes the distance: it starts across the room and finishes
             // standing over the player.
@@ -1906,7 +1948,18 @@ fun CalculatorCityView(
                 // the underground walls (the tunnel interior) are what contain the
                 // player, so the box just widens to the region the model covers.
                 val ugHr = renderer.holdRegion
-                val ugFree = ugHr != null && cRoomFloorY < -40f &&
+                // Over Building 10's own model the bounds follow the MODEL, at any
+                // height — not just once the player is underground.
+                //
+                // The city's x bound stops at 700 (PC4 + BW_V + 10), eight units
+                // short of the camera bolted to that building, which reaches 708.
+                // Walking round the end of it only ever worked because the player
+                // had FALLEN to the shell underneath, which put them past -40 and
+                // lifted the bound to the model's own footprint. Now that nobody
+                // falls, the old depth test never fires and the end of the camera
+                // is an invisible wall. The ground slab covers this whole footprint,
+                // so there is nothing to walk off.
+                val ugFree = ugHr != null &&
                     pX >= ugHr[0] - UG_BOUND_PAD && pX <= ugHr[1] + UG_BOUND_PAD &&
                     pZ >= ugHr[2] - UG_BOUND_PAD && pZ <= ugHr[3] + UG_BOUND_PAD
                 val xBoundsMin = (if (isLandscape) -CELL_V * 2.5f       else PC1 - BW_V - 150f)
@@ -2062,8 +2115,12 @@ fun CalculatorCityView(
                         val degs = (atan2(rdz.toDouble(), rdx.toDouble()) * 180.0 / kotlin.math.PI).toFloat()
                         val off = abs(((degs - RAD_DOOR_DEG + 540f) % 360f) - 180f)
                         val off2 = abs(((degs - RAD_DOOR2_DEG + 540f) % 360f) - 180f)
+                        // The hidden door is one-way once the hold has been reached:
+                        // the endgame down there and the one up here must never be
+                        // able to run at the same time.
                         val throughDoorway = off < RAD_DOOR_HALF_DEG ||
-                            (renderer.secretDoorOpen && off2 < RAD_DOOR2_HALF_DEG)
+                            (renderer.secretDoorOpen && !holdEntered &&
+                                off2 < RAD_DOOR2_HALF_DEG)
                         if (rd2 < RAD_R * RAD_R && rd2 > RAD_WALL_INNER * RAD_WALL_INNER &&
                             !throughDoorway) {
                             dbgWhy = "DRUM SHELL off=${off.toInt()} off2=${off2.toInt()}"
@@ -2249,8 +2306,30 @@ fun CalculatorCityView(
                         return false
                     }
 
-                    var freed = movedToCell
-                    if (!movedToCell) {
+                    // Underground and NOT in a cell — a tunnel, or the rooms they
+                    // run between. The ring search below is written for the city,
+                    // where "nothing blocked me" means open street; down here the
+                    // passages are one body wide and the honest answer to "I am
+                    // stuck" is not a nudge sideways, it is somewhere known. One
+                    // fixed spot, in the middle of the hold, which every route
+                    // underground passes through. Its own rule and not the cells':
+                    // being shut in a cell is a different kind of stuck, and that
+                    // one is answered above.
+                    var movedToHold = false
+                    if (!movedToCell && cRoomFloorY < -40f) {
+                        val rp = renderer.holdRespawn
+                        if (rp != null) {
+                            pX = rp[0]; pZ = rp[2]
+                            cRoomFloorY = rp[1]
+                            eyeY = rp[1] + CAM_EYE_H
+                            camYaw = (atan2(rp[3].toDouble(), -rp[4].toDouble())
+                                * 180.0 / kotlin.math.PI).toFloat()
+                            movedToHold = true
+                        }
+                    }
+
+                    var freed = movedToCell || movedToHold
+                    if (!freed) {
                         for (step in intArrayOf(45, 90, 150, 230)) {
                             for (dir in dirs) {
                                 val tx = (pX + dir[0] * step).coerceIn(xBoundsMin, xBoundsMax)
@@ -2724,6 +2803,17 @@ fun CalculatorCityView(
                                 val d = ruins[ri]
                                 if (x < d.minX || x > d.maxX || z < d.minZ || z > d.maxZ) continue
                                 for (t in d.floors) {
+                                    // Cheap XZ box reject before the barycentric test —
+                                    // the same one the player's own footing does, and for
+                                    // the same reason: Building 10's interior carries
+                                    // ~52k walkable triangles, and every live round asks
+                                    // this question every frame. Without it that is a
+                                    // quarter of a million full tests a frame with five
+                                    // rounds down; with it, a handful.
+                                    val ax = t[0]; val bx2 = t[3]; val cx2 = t[6]
+                                    if (x < minOf(ax, bx2, cx2) || x > maxOf(ax, bx2, cx2)) continue
+                                    val az = t[2]; val bz2 = t[5]; val cz2 = t[8]
+                                    if (z < minOf(az, bz2, cz2) || z > maxOf(az, bz2, cz2)) continue
                                     val y = triHt(x, z, t) ?: continue
                                     if (y <= below + PROJ_R + 4f && (best.isNaN() || y > best)) best = y
                                 }
@@ -2999,7 +3089,8 @@ fun CalculatorCityView(
                         // doesn't cover. HOLD the current height rather than dropping:
                         // the ruins are sealed shells, so there's nowhere legitimate to
                         // fall to, and dropping was sinking the player through the floor
-                        // and trapping them under the ramp.
+                        // and trapping them under the ramp. Building 10's opening is no
+                        // longer one of these: the catch lid is real floor now.
                         best = cRoomFloorY
                     }
                     // Never sink fast. Clamp downward change per frame so a hole or a
@@ -3018,11 +3109,42 @@ fun CalculatorCityView(
                         abs(best - rbw[1]) < 45f
                     eyeTarget = best + CAM_EYE_H +
                         (if (onRedButton) renderer.redButtonStepHeight else 0f)
+                } else if (cRoomFloorY < -40f) {
+                    // Underground with no interior underfoot. There is no city
+                    // floor down here to fall back on, so "no floors" can only
+                    // mean the renderer has not published its interiors yet (a
+                    // scene rebuild in flight). Snapping to 0 in that window is
+                    // what used to throw the player out of the hold and back up
+                    // onto the drum. Hold the height and wait for the list.
+                    eyeTarget = cRoomFloorY + CAM_EYE_H
                 } else {
                     cRoomFloorY = 0f
                     eyeTarget = (if (onSidewalk) CAM_EYE_H + SIDEWALK_BUMP else CAM_EYE_H) + bridgeRise
                 }
                 eyeY += (eyeTarget - eyeY) * 0.20f
+
+                // ── Down the hold, and staying there ─────────────────────────
+                // Reaching the hold's own depth is the mark: from then on the way
+                // back up is shut (see the drum's doorway rules in blocked()) and
+                // anything shallower than the hold means the player has come out of
+                // it somewhere they should not be — the shell under the camera, one
+                // of the pockets under the ground, or the tunnel they can no longer
+                // use. Whatever it is, they go back to the cone.
+                if (cRoomFloorY < HOLD_DEPTH_Y) {
+                    if (!holdEntered) {
+                        holdEntered = true
+                        cityPrefs.edit().putBoolean("hold_entered", true).apply()
+                    }
+                } else if (holdEntered && cRoomFloorY < UNDER_GROUND_Y) {
+                    val rp = renderer.holdRespawn
+                    if (rp != null) {
+                        pX = rp[0]; pZ = rp[2]
+                        cRoomFloorY = rp[1]
+                        eyeY = rp[1] + CAM_EYE_H
+                        camYaw = (atan2(rp[3].toDouble(), -rp[4].toDouble())
+                            * 180.0 / kotlin.math.PI).toFloat()
+                    }
+                }
 
                 // Landing position (end of intro, start of the 0.5 s settle).
                 // MUST match the intro animation's landEye* values so the

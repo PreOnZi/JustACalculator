@@ -498,7 +498,27 @@ class CityGLRenderer : GlRenderer {
         val stepDown: Float = 30f,
     )
     private val damagedList = ArrayList<DamagedInterior>()
-    val damagedInteriors: List<DamagedInterior> get() = damagedList
+
+    /**
+     * Published copy of [damagedList], swapped in whole at the end of a build.
+     *
+     * The player's floor height, its collision and the unstuck search all read
+     * this from the COMPOSITION thread, while `buildScene` fills it on the GL
+     * thread — a separate thread on Android (GLSurfaceView), the main thread on
+     * iOS (GLKView calls its delegate inline). Exposing the accumulator directly
+     * meant that for as long as a rebuild took, an Android reader saw a list that
+     * had been cleared and not yet refilled — "no interior underfoot" — and
+     * Calculatorcityview answered that by putting the player back on the surface.
+     * That is what threw the player out of the hold cell at the end of the
+     * confrontation: the teleport lands, `needsRebuild` fires 900 ms later for the
+     * cell lights, and the rebuild window bounced them up to the drum floor. iOS
+     * never saw the window, so it worked there and only there.
+     *
+     * A whole-list swap means a reader gets either the previous complete scene or
+     * the next one, never a half-built one.
+     */
+    @Volatile private var damagedPublished: List<DamagedInterior> = emptyList()
+    val damagedInteriors: List<DamagedInterior> get() = damagedPublished
     // ── Red button (DEL ruin, top interior floor) ─────────────────────────────
     // Only exists once the player has run the optional console software update;
     // CalculatorCityView reflects that persisted flag into [showRedButton].
@@ -1345,6 +1365,11 @@ class CityGLRenderer : GlRenderer {
         // it reads as a dark shape in the gloom rather than a self-lit cut-out.
         drawMonster()
 
+        // The camera's eyelids, for the same reason: they are made of its housing
+        // and have to take the same light, or the eye blinks in a lighter grey
+        // than the thing it is set into.
+        drawRadCamLids()
+
         // The wall-mounted gun (solid) sits in the world until grabbed; dimmed by
         // the night like any other prop, so it rewards actually exploring the lane.
         drawWallGun()
@@ -1496,6 +1521,10 @@ class CityGLRenderer : GlRenderer {
             Gl.glDepthMask(true)
             Gl.glDepthFunc(Gl.GL_LESS)
         }
+
+        // The camera on Building 10 blinking. After the night scrim, because a
+        // recording light is a light — but before the gun, which clears depth.
+        drawRadCamBlink()
 
         // First-person held gun, on top of everything (day or night).
         drawHeldGun()
@@ -1888,6 +1917,8 @@ class CityGLRenderer : GlRenderer {
     // CCTV cull needs, and the feed cameras, which are picked from the security
     // cameras addCameras just hung on the buildings.
     private fun finishScene() {
+        // Publish the interiors as one atomic swap — see [damagedPublished].
+        damagedPublished = damagedList.toList()
         meshSpheres = FloatArray(meshes.size * 4)
         for (i in meshes.indices) {
             val m = meshes[i]
@@ -2096,6 +2127,13 @@ class CityGLRenderer : GlRenderer {
         }
     }
 
+    // The city ground's cream. Named because the catch slab under Building 10
+    // has to match it exactly — it sits in the hole the ground cuts for the
+    // tunnel, and anything else reads as a patch.
+    private val GROUND_R = 0.96f
+    private val GROUND_G = 0.94f
+    private val GROUND_B = 0.88f
+
     // ── Ground ────────────────────────────────────────────────────────────────
 
     /**
@@ -2109,10 +2147,15 @@ class CityGLRenderer : GlRenderer {
      * tunnel, which otherwise roofs the descent over with cream and you stand
      * looking at a slab where the ramp should be.
      */
+    // How far the ground slab reaches. Named because the underground interior
+    // collides against these same strips — see the catch floor in addRadButton.
+    private val GROUND_X0 = -1400f; private val GROUND_X1 = 800f
+    private val GROUND_Z0 = -2700f; private val GROUND_Z1 = 800f
+
     private fun addGroundBase() {
-        val x0 = -1400f; val x1 = 800f
-        val z0 = -2700f; val z1 = 800f
-        val r = 0.96f; val g = 0.94f; val b = 0.88f
+        val x0 = GROUND_X0; val x1 = GROUND_X1
+        val z0 = GROUND_Z0; val z1 = GROUND_Z1
+        val r = GROUND_R; val g = GROUND_G; val b = GROUND_B
         val hole = holdHole
         if (hole == null) {
             addQ(x0,0f,z0, x1,0f,z0, x1,0f,z1, x0,0f,z1, r,g,b, fog=0.0f)
@@ -3319,6 +3362,59 @@ class CityGLRenderer : GlRenderer {
      */
     @Volatile var holdCells: List<FloatArray> = emptyList()
 
+
+    /**
+     * The recording light on the big camera bolted to Building 10's east side —
+     * its own triangles, in world space, so they can be lit additively on top of
+     * the shaded ones and the thing reads as switched on rather than painted red.
+     *
+     * Found by shape rather than by name. The camera is the only object in the
+     * model standing clear of the drum that still reaches above the room floor
+     * (measured: its centre is 492 world units out, it is 466 long, and its top
+     * is at +153); the light is the smallest material group lying wholly inside
+     * it — 12 world units across, against 80 for the lens under it and 150 for
+     * the panel it is set into, which the camera shares with the catch plane.
+     */
+    private var radCamLight: FloatArray = FloatArray(0)
+
+    /**
+     * The camera's big blue lens, as an eye: centre, outward normal, and the two
+     * in-plane axes, so eyelids can be swept across it.
+     *
+     * 9 floats — cx, cy, cz, nx, ny, nz, radius, and the "up" axis is (0,1,0)
+     * projected into the plane (the lens's normal is measured horizontal, so that
+     * is exact). The lens is the largest material group inside the camera once the
+     * body is excluded: 80 world units across against the recording light's 12.
+     */
+    private var radCamEye: FloatArray = FloatArray(0)
+    /** The camera's housing colour, which is what an eyelid is made of. */
+    private var radCamBodyCol = floatArrayOf(0.25f, 0.25f, 0.25f)
+    private val radCamLidBuf = FloatArray(36)
+
+    /** One blink every five seconds: a third of a second lit, easing either side. */
+    private val RAD_CAM_BLINK_MS   = 5_000L
+    private val RAD_CAM_BLINK_ON   = 340L
+    private val RAD_CAM_BLINK_FADE = 90L
+    // An eye blink is quick: shut, a beat closed, open. Same five-second cycle as
+    // the recording light, offset so the two do not fire together and read as one
+    // event.
+    private val RAD_CAM_LID_AT     = 2_300L
+    private val RAD_CAM_LID_SHUT   = 110L
+    private val RAD_CAM_LID_HOLD   = 45L
+    private val RAD_CAM_LID_OPEN   = 140L
+
+    /**
+     * Where UNSTUCK puts a player who is underground but not shut in a cell.
+     *
+     * Five floats, the same shape as a [holdCells] entry: x, floor y, z, and the
+     * direction to face. Beside the hold's cone lamp — the one lit thing down
+     * there, so wherever you were stuck you come round somewhere you recognise.
+     * Stepped clear of the cone itself and then checked against the floor
+     * triangles at build time rather than trusted, so a re-export that moves the
+     * room cannot strand anyone inside the lamp or in the rock.
+     */
+    @Volatile var holdRespawn: FloatArray? = null
+
     /** World position of the hold's cone, and of the damaged room's screen. */
     @Volatile var holdConeWorld: FloatArray? = null
     /** World position of the hold's monitor, by the entrance. */
@@ -3469,6 +3565,32 @@ class CityGLRenderer : GlRenderer {
                 coneBox = floatArrayOf(ob.minX, ob.maxX, ob.minY, ob.maxY, ob.minZ, ob.maxZ)
                 break
             }
+            // The catch plane, in MODEL space — see [roomCatchY] for what it is
+            // for and why it is kept out of the geometry.
+            //
+            // Found by shape, not by name: it is the only flat horizontal slab
+            // below the room floor whose footprint is wider than the drum.
+            // Measured against the model, the next widest such slab is 84 world
+            // units across against its 1987, and no other horizontal triangle in
+            // the whole file sits within a world unit of its height — so a
+            // centroid test on that height identifies its triangles exactly.
+            var catchModelY = Float.NaN
+            var catchModelLo = Float.NaN
+            for (ob in muteButtonBounds) {
+                if ((ob.maxY - ob.minY) * scl > 30f) continue                // a slab, not a room
+                val wy = (ob.maxY - mnY) * scl + baseY
+                if (wy > baseY - 1f || wy < baseY - 80f) continue            // just under the floor
+                if (maxOf(ob.maxX - ob.minX, ob.maxZ - ob.minZ) * scl < 2f * r0) continue
+                catchModelY = ob.maxY
+                catchModelLo = ob.minY
+                break
+            }
+
+            // The catch plane, in world space, kept aside as the underground pass
+            // skips it: [catchTop] is the floor the player lands on, [catchDraw] is
+            // the slab as authored. See the catch floor below.
+            val catchTop = ArrayList<FloatArray>(256)
+            val catchDraw = ArrayList<Float>(2048)
             val underFloors = ArrayList<FloatArray>(512)
             val underWalls = ArrayList<Float>(2048)
             var uMinX = 1e9f; var uMaxX = -1e9f; var uMinZ = 1e9f; var uMaxZ = -1e9f
@@ -3630,6 +3752,17 @@ class CityGLRenderer : GlRenderer {
                             cY >= coneBox[2] && cY <= coneBox[3] &&
                             cZ >= coneBox[4] && cZ <= coneBox[5] ->
                             for (v in 0 until 9) litCone.add(g.verts[k + v])
+                        // The catch plane. Never drawn as it stands: it is
+                        // authored ~1990 world units across in 130-unit triangles,
+                        // which is both far past the building and far too coarse to
+                        // leave the tunnel alone. It is read for its HEIGHT and the
+                        // lid below is laid at that height instead, so this bucket
+                        // exists only to keep its triangles out of everything else.
+                        !catchModelY.isNaN() &&
+                            g.verts[k + 1] <= catchModelY + 0.15f && g.verts[k + 1] >= catchModelLo - 0.15f &&
+                            g.verts[k + 4] <= catchModelY + 0.15f && g.verts[k + 4] >= catchModelLo - 0.15f &&
+                            g.verts[k + 7] <= catchModelY + 0.15f && g.verts[k + 7] >= catchModelLo - 0.15f ->
+                            Unit                       // dropped; the lid below replaces it
                         !underTri && (rLoc > shellR || (cY - mnY) > shellY) ->
                             for (v in 0 until 9) shell.add(g.verts[k + v])
                         cid < 0 -> for (v in 0 until 9) fixedInner.add(g.verts[k + v])
@@ -3671,6 +3804,28 @@ class CityGLRenderer : GlRenderer {
                             var nz = ux2 * vy2 - uy2 * vx2
                             val nl = sqrt(nx * nx + ny * ny + nz * nz)
                             if (nl > 1e-6f) { nx /= nl; ny /= nl; nz /= nl }
+                            // The catch plane takes no part in ANY of this: not the
+                            // walkable floors, not the walls, not the underground's
+                            // bounds, and not the hole cut in the ground slab. See
+                            // [roomCatchY].
+                            if (!catchModelY.isNaN() &&
+                                g.verts[t + 1] <= catchModelY + 0.15f && g.verts[t + 1] >= catchModelLo - 0.15f &&
+                                g.verts[t + 4] <= catchModelY + 0.15f && g.verts[t + 4] >= catchModelLo - 0.15f &&
+                                g.verts[t + 7] <= catchModelY + 0.15f && g.verts[t + 7] >= catchModelLo - 0.15f) {
+                                // The TOP face, picked by height and not by which
+                                // way it is wound: the slab is solidified in Blender
+                                // and its normals come out inverted, so the face
+                                // pointing "up" is the underside. Standing on that
+                                // would put the player inside the slab.
+                                val topY = (catchModelY - mnY) * scl + baseY
+                                if (abs(wy0 - topY) < 0.5f && abs(wy1 - topY) < 0.5f &&
+                                    abs(wy2 - topY) < 0.5f) catchTop.add(
+                                    floatArrayOf(ax, wy0, az, bx2, wy1, bz2, cx2, wy2, cz2))
+                                catchDraw.add(ax);  catchDraw.add(wy0); catchDraw.add(az)
+                                catchDraw.add(bx2); catchDraw.add(wy1); catchDraw.add(bz2)
+                                catchDraw.add(cx2); catchDraw.add(wy2); catchDraw.add(cz2)
+                                t += 9; continue
+                            }
                             if (ax < uMinX) uMinX = ax; if (ax > uMaxX) uMaxX = ax
                             if (bx2 < uMinX) uMinX = bx2; if (bx2 > uMaxX) uMaxX = bx2
                             if (cx2 < uMinX) uMinX = cx2; if (cx2 > uMaxX) uMaxX = cx2
@@ -3949,6 +4104,63 @@ class CityGLRenderer : GlRenderer {
                             mz2 - nz2 * HOLD_CELL_DEPTH, nx2, nz2))
                     }
                     holdCells = cellsOut
+
+                    // …and the one place UNSTUCK sends a player who is underground
+                    // but not shut in a cell: beside the cone lamp. (rcx, rcz) above
+                    // is the room centre at the cell floor, which is only used here
+                    // to decide which way to step off the lamp.
+                    if (rn > 0 && coneBox != null) {
+                        fun floorAt(px: Float, pz: Float): Float {
+                            for (tr in underFloors) {
+                                if (abs(tr[1] - barBotW) > 60f) continue
+                                val ax3 = tr[0]; val bx3 = tr[3]; val cx3 = tr[6]
+                                if (px < minOf(ax3, bx3, cx3) || px > maxOf(ax3, bx3, cx3)) continue
+                                val az3 = tr[2]; val bz3 = tr[5]; val cz3 = tr[8]
+                                if (pz < minOf(az3, bz3, cz3) || pz > maxOf(az3, bz3, cz3)) continue
+                                val den = (bz3 - cz3) * (ax3 - cx3) + (cx3 - bx3) * (az3 - cz3)
+                                if (abs(den) < 1e-4f) continue
+                                val u = ((bz3 - cz3) * (px - cx3) + (cx3 - bx3) * (pz - cz3)) / den
+                                val v = ((cz3 - az3) * (px - cx3) + (ax3 - cx3) * (pz - cz3)) / den
+                                val w = 1f - u - v
+                                if (u < -0.02f || v < -0.02f || w < -0.02f) continue
+                                return u * tr[1] + v * tr[4] + w * tr[7]
+                            }
+                            return Float.NaN
+                        }
+                        // Beside the cone, not under it: standing inside the lamp
+                        // is no better an answer than standing in the rock. Step
+                        // off it toward the middle of the room, by its own radius
+                        // and a body's width again.
+                        val cnx = ((coneBox[0] + coneBox[1]) * 0.5f - cxL) * scl + bx
+                        val cnz = ((coneBox[4] + coneBox[5]) * 0.5f - czL) * scl + bz
+                        val cnr = maxOf(coneBox[1] - coneBox[0], coneBox[5] - coneBox[4]) * scl * 0.5f
+                        var offX = rcx - cnx; var offZ = rcz - cnz
+                        val offL = sqrt(offX * offX + offZ * offZ)
+                        if (offL > 1f) { offX /= offL; offZ /= offL } else { offX = 1f; offZ = 0f }
+                        val step3 = cnr + 45f
+                        var sx3 = cnx + offX * step3
+                        var sz3 = cnz + offZ * step3
+                        var sy3 = floorAt(sx3, sz3)
+                        var ring = 25f
+                        while (sy3.isNaN() && ring <= 200f) {
+                            for (kk in 0 until 12) {
+                                val a3 = kk * (2f * PI.toFloat() / 12f)
+                                val px3 = cnx + offX * step3 + cos(a3) * ring
+                                val pz3 = cnz + offZ * step3 + sin(a3) * ring
+                                val y3 = floorAt(px3, pz3)
+                                if (!y3.isNaN()) { sx3 = px3; sz3 = pz3; sy3 = y3; break }
+                            }
+                            ring += 25f
+                        }
+                        if (!sy3.isNaN()) {
+                            // Facing the lamp you just stepped off, so the first
+                            // thing in shot is the one thing down here that is lit.
+                            var fx3 = cnx - sx3; var fz3 = cnz - sz3
+                            val fl3 = sqrt(fx3 * fx3 + fz3 * fz3)
+                            if (fl3 > 1f) { fx3 /= fl3; fz3 /= fl3 } else { fx3 = 0f; fz3 = -1f }
+                            holdRespawn = floatArrayOf(sx3, sy3, sz3, fx3, fz3)
+                        }
+                    }
                 }
 
                 // The rick set, standing exactly where the monitor was. Its own local
@@ -4018,6 +4230,60 @@ class CityGLRenderer : GlRenderer {
                 }
             }
 
+            // ── The catch floor ──────────────────────────────────────────────
+            // The city's ground slab is cut open over this building on purpose, so
+            // the ramp out of the secret door is not roofed over in cream — and
+            // that open cut is what the player walks off the street into.
+            // Plane.007 in mutebutton.blend fills it: a slab a few units under the
+            // ground with the tunnel's mouth cut out of it, so the descent stays
+            // open. Every earlier attempt at sealing this opening sealed the
+            // descent with it; the hole in the plane is what makes the difference,
+            // and it has to stay big enough — measured, the ramp leaves the door at
+            // -1.5 and stays within the player's 30-unit step-up of the plane for
+            // about 70 units, which is exactly the stretch a solid slab would pull
+            // them back up out of.
+            //
+            // Taken exactly as authored, at its own size and with its own outline.
+            // It is kept out of the underground's BOUNDS and out of the cut those
+            // bounds make in the ground (it reaches ~1990 units across, and either
+            // would balloon to match) — but as floor and as something to look at,
+            // it is simply the plane.
+            if (catchTop.isNotEmpty()) {
+                for (t in catchTop) underFloors.add(t)
+                if (catchDraw.isNotEmpty()) {
+                    val out = FloatArray(catchDraw.size) { catchDraw[it] }
+                    // fog 0, exactly as addGroundBase lays the slab it is filling.
+                    meshes.add(Mesh(out.toFB(), Gl.GL_TRIANGLES, out.size / 3,
+                        GROUND_R, GROUND_G, GROUND_B, 1f, 0f, radShell = false))
+                }
+                // …and the ground itself, as floor. Without this the plane would be
+                // the only thing under anyone standing on the street anywhere near
+                // this building — the underground's bounds reach well past the cut —
+                // and they would walk the whole north approach sunk its own depth
+                // into the road. The ground is a floor; this says so, and it wins
+                // over the plane everywhere it has not been cut away.
+                // The cut taken from the values just measured, NOT from holdHole:
+                // that field is only assigned below, so reading it here would use
+                // the previous build's — or nothing at all on the first one.
+                fun slab(qx0: Float, qz0: Float, qx1: Float, qz1: Float) {
+                    if (qx1 <= qx0 || qz1 <= qz0) return
+                    underFloors.add(floatArrayOf(qx0, 0f, qz0, qx1, 0f, qz0, qx1, 0f, qz1))
+                    underFloors.add(floatArrayOf(qx0, 0f, qz0, qx1, 0f, qz1, qx0, 0f, qz1))
+                }
+                if (hMinX > hMaxX) {
+                    slab(GROUND_X0, GROUND_Z0, GROUND_X1, GROUND_Z1)
+                } else {
+                    val hx0 = hMinX.coerceIn(GROUND_X0, GROUND_X1)
+                    val hx1 = hMaxX.coerceIn(GROUND_X0, GROUND_X1)
+                    val hz0 = hMinZ.coerceIn(GROUND_Z0, GROUND_Z1)
+                    val hz1 = hMaxZ.coerceIn(GROUND_Z0, GROUND_Z1)
+                    slab(GROUND_X0, GROUND_Z0, GROUND_X1, hz0)
+                    slab(GROUND_X0, hz1, GROUND_X1, GROUND_Z1)
+                    slab(GROUND_X0, hz0, hx0, hz1)
+                    slab(hx1, hz0, GROUND_X1, hz1)
+                }
+            }
+
             if (underFloors.isNotEmpty()) {
                 holdRegion = floatArrayOf(uMinX, uMaxX, uMinZ, uMaxZ)
                 if (hMinX <= hMaxX) holdHole = floatArrayOf(hMinX, hMaxX, hMinZ, hMaxZ)
@@ -4041,6 +4307,109 @@ class CityGLRenderer : GlRenderer {
                 ))
             }
 
+            // The camera's recording light, kept aside so it can blink. Both the
+            // camera and the light are identified by shape — see [radCamLight].
+            run {
+                var cam: ObjBounds? = null
+                var camSpan = 0f
+                for (ob in muteButtonBounds) {
+                    val wx0 = (ob.minX - cxL) * scl + bx; val wx1 = (ob.maxX - cxL) * scl + bx
+                    val wz0 = (ob.minZ - czL) * scl + bz; val wz1 = (ob.maxZ - czL) * scl + bz
+                    val wy1 = (ob.maxY - mnY) * scl + baseY
+                    if (wy1 <= baseY) continue                       // underground, not the camera
+                    val cdx = (wx0 + wx1) * 0.5f - bx; val cdz = (wz0 + wz1) * 0.5f - bz
+                    if (cdx * cdx + cdz * cdz < r0 * r0) continue    // inside the drum: the room
+                    val span = maxOf(wx1 - wx0, wz1 - wz0)
+                    if (span > camSpan) { camSpan = span; cam = ob }
+                }
+                val c = cam
+                if (c != null) {
+                    var best: ObjGroup? = null
+                    var bestSpan = Float.MAX_VALUE
+                    var lens: ObjGroup? = null
+                    var lensSpan = -1f
+                    var bodySpan = -1f
+                    for (g in mute) {
+                        val v = g.verts
+                        if (v.isEmpty()) continue
+                        var mnx = Float.MAX_VALUE; var mxx = -Float.MAX_VALUE
+                        var mnz = Float.MAX_VALUE; var mxz = -Float.MAX_VALUE
+                        var mny = Float.MAX_VALUE; var mxy = -Float.MAX_VALUE
+                        var i = 0
+                        var inside = true
+                        while (i + 2 < v.size) {
+                            val vx = v[i]; val vy = v[i + 1]; val vz = v[i + 2]
+                            if (vx < c.minX - 0.05f || vx > c.maxX + 0.05f ||
+                                vy < c.minY - 0.05f || vy > c.maxY + 0.05f ||
+                                vz < c.minZ - 0.05f || vz > c.maxZ + 0.05f) { inside = false; break }
+                            if (vx < mnx) mnx = vx; if (vx > mxx) mxx = vx
+                            if (vy < mny) mny = vy; if (vy > mxy) mxy = vy
+                            if (vz < mnz) mnz = vz; if (vz > mxz) mxz = vz
+                            i += 3
+                        }
+                        if (!inside) continue
+                        val span = maxOf(mxx - mnx, maxOf(mxy - mny, mxz - mnz)) * scl
+                        // The housing is whatever is biggest inside the camera, and
+                        // an eyelid is made of its colour.
+                        if (span > bodySpan) { bodySpan = span; radCamBodyCol =
+                            floatArrayOf(g.r, g.g, g.b) }
+                        // A quarter of the camera is the most a detail on it can be.
+                        // The box test alone is loose — the drum's hidden door panel
+                        // happens to fall inside the camera's AABB — and this drops
+                        // that (135 units) along with the body (466), leaving the
+                        // lens (80) and the light (12) to be told apart on size.
+                        if (span > camSpan * 0.25f) continue
+                        if (span < bestSpan) { bestSpan = span; best = g }
+                        if (span > lensSpan) { lensSpan = span; lens = g }
+                    }
+                    radCamLight = best?.let { modelToWorld(it.verts.toList()) } ?: FloatArray(0)
+
+                    // The lens, reduced to a disc: centre, outward normal, radius.
+                    radCamEye = FloatArray(0)
+                    val ln = lens
+                    if (ln != null && ln !== best && ln.verts.size >= 9) {
+                        val w = modelToWorld(ln.verts.toList())
+                        var mnx2 = Float.MAX_VALUE; var mxx2 = -Float.MAX_VALUE
+                        var mny2 = Float.MAX_VALUE; var mxy2 = -Float.MAX_VALUE
+                        var mnz2 = Float.MAX_VALUE; var mxz2 = -Float.MAX_VALUE
+                        var i2 = 0
+                        while (i2 + 2 < w.size) {
+                            if (w[i2] < mnx2) mnx2 = w[i2]; if (w[i2] > mxx2) mxx2 = w[i2]
+                            if (w[i2+1] < mny2) mny2 = w[i2+1]; if (w[i2+1] > mxy2) mxy2 = w[i2+1]
+                            if (w[i2+2] < mnz2) mnz2 = w[i2+2]; if (w[i2+2] > mxz2) mxz2 = w[i2+2]
+                            i2 += 3
+                        }
+                        val ecx = (mnx2 + mxx2) * 0.5f
+                        val ecy = (mny2 + mxy2) * 0.5f
+                        val ecz = (mnz2 + mxz2) * 0.5f
+                        var nx2 = (w[4] - w[1]) * (w[8] - w[2]) - (w[5] - w[2]) * (w[7] - w[1])
+                        var ny2 = (w[5] - w[2]) * (w[6] - w[0]) - (w[3] - w[0]) * (w[8] - w[2])
+                        var nz2 = (w[3] - w[0]) * (w[7] - w[1]) - (w[4] - w[1]) * (w[6] - w[0])
+                        val nl2 = sqrt(nx2 * nx2 + ny2 * ny2 + nz2 * nz2)
+                        if (nl2 > 1e-5f) {
+                            nx2 /= nl2; ny2 /= nl2; nz2 /= nl2
+                            // Point it OUT of the camera: away from the housing's
+                            // own centre, whichever way the triangle happened to wind.
+                            val bcx = ((c.minX + c.maxX) * 0.5f - cxL) * scl + bx
+                            val bcz = ((c.minZ + c.maxZ) * 0.5f - czL) * scl + bz
+                            val bcy = ((c.minY + c.maxY) * 0.5f - mnY) * scl + baseY
+                            if (nx2 * (ecx - bcx) + ny2 * (ecy - bcy) + nz2 * (ecz - bcz) < 0f) {
+                                nx2 = -nx2; ny2 = -ny2; nz2 = -nz2
+                            }
+                            var rad = 0f
+                            i2 = 0
+                            while (i2 + 2 < w.size) {
+                                val dx3 = w[i2] - ecx; val dy3 = w[i2+1] - ecy; val dz3 = w[i2+2] - ecz
+                                val d3 = sqrt(dx3 * dx3 + dy3 * dy3 + dz3 * dz3)
+                                if (d3 > rad) rad = d3
+                                i2 += 3
+                            }
+                            radCamEye = floatArrayOf(ecx, ecy, ecz, nx2, ny2, nz2, rad, 0f, 0f)
+                        }
+                    }
+                }
+            }
+
             // The desk. Only the enterable Building 10 gets live monitors — the
             // landscape scene keeps the button as a 1x decoration you never walk into.
             if (scale > 1f && supportsOffscreenFeeds) buildCctvScreens(mute, cxL, czL, mnY, scl, bx, baseY, bz)
@@ -4053,9 +4422,20 @@ class CityGLRenderer : GlRenderer {
                 if (ob.maxY - mnY < (mxY - mnY) * 0.03f) continue    // too flat to block
                 val wx0 = (ob.minX - cxL) * scl + bx; val wx1 = (ob.maxX - cxL) * scl + bx
                 val wz0 = (ob.minZ - czL) * scl + bz; val wz1 = (ob.maxZ - czL) * scl + bz
-                props.add(floatArrayOf(
-                    (wx0 + wx1) * 0.5f, (wz0 + wz1) * 0.5f,
-                    abs(wx1 - wx0) * 0.5f, abs(wz1 - wz0) * 0.5f))
+                val pcx = (wx0 + wx1) * 0.5f; val pcz = (wz0 + wz1) * 0.5f
+                val phx = abs(wx1 - wx0) * 0.5f; val phz = abs(wz1 - wz0) * 0.5f
+                // FURNITURE, and only furniture. This list is consulted for targets
+                // inside the room, so anything whose box merely reaches into the room
+                // seals part of it without ever being visible there. Two of them did:
+                // the camera bolted to the outside (x 242..708) covers the hidden
+                // doorway from within, which is why that door took several attempts
+                // to walk through and had to be approached sideways; and the catch
+                // plane arrives as a 1986-unit box centred on the drum. A thing you
+                // can walk into inside this room is centred inside it and is smaller
+                // than it — both of those fail that on both counts.
+                if ((pcx - bx) * (pcx - bx) + (pcz - bz) * (pcz - bz) > r0 * r0) continue
+                if (maxOf(phx, phz) >= r0) continue
+                props.add(floatArrayOf(pcx, pcz, phx, phz))
             }
             radPropFootprints = props
         } else for (i in 0 until sides) {
@@ -4829,6 +5209,15 @@ class CityGLRenderer : GlRenderer {
         if (aerialMode || ps.isEmpty() || bulletGroups.isEmpty()) return
         setLit(if (additive) 0f else 1f)
         Gl.glUniform1f(uFog, 0f)
+        // Set its OWN ground-AO term rather than inheriting whatever the last
+        // thing drawn happened to leave. A round is a lit metal ball a few units
+        // off the ground, which is exactly where that AO bites hardest — so
+        // inheriting a 0 from a neighbour took a quarter of its brightness away,
+        // and which neighbour ran last depended on whether the wall gun and the
+        // red button were on screen. Every other self-contained draw here sets
+        // this; this one did not.
+        Gl.glUniform1f(uAerial, 1f)
+        setXform(null)
         for (p in ps) {
             val cx = p[0]; val cy = p[1]; val cz = p[2]; val r = p[3]
             val spin = if (p.size > 4) p[4] else 0f
@@ -5728,6 +6117,104 @@ class CityGLRenderer : GlRenderer {
         Gl.glUniform3fv(uLightPos, MAX_LIGHTS, lightPosBuf, 0)
         Gl.glUniform1fv(uLightRad, MAX_LIGHTS, lightRadBuf, 0)
         Gl.glUniform1fv(uLightCold, MAX_LIGHTS, lightColdBuf, 0)
+    }
+
+    /**
+     * The camera's lens blinking like an eye: two lids in the housing's own colour
+     * sweeping in from top and bottom across the blue disc and back out.
+     *
+     * Built each frame rather than kept, because it is four triangles and the only
+     * thing that changes is how far in they have come. Drawn a whisker in front of
+     * the disc along its own normal, so depth keeps them on the eye and nowhere else.
+     */
+    private fun drawRadCamLids() {
+        val e = radCamEye
+        if (e.size < 7 || aerialMode || collapse > 0f) return
+        val t = nowMillis() % RAD_CAM_BLINK_MS - RAD_CAM_LID_AT
+        val shut = when {
+            t < 0L -> 0f
+            t < RAD_CAM_LID_SHUT -> t.toFloat() / RAD_CAM_LID_SHUT
+            t < RAD_CAM_LID_SHUT + RAD_CAM_LID_HOLD -> 1f
+            t < RAD_CAM_LID_SHUT + RAD_CAM_LID_HOLD + RAD_CAM_LID_OPEN ->
+                1f - (t - RAD_CAM_LID_SHUT - RAD_CAM_LID_HOLD).toFloat() / RAD_CAM_LID_OPEN
+            else -> 0f
+        }
+        if (shut <= 0.001f) return
+
+        val cx = e[0]; val cy = e[1]; val cz = e[2]
+        val nx = e[3]; val ny = e[4]; val nz = e[5]
+        val rad = e[6] * 1.04f                    // a shade proud of the rim
+        // In-plane axes. The lens's normal is horizontal, so world up is already in
+        // the plane; re-projected anyway in case a re-export tilts it.
+        var ux = -nx * ny; var uy = 1f - ny * ny; var uz = -nz * ny
+        val ul = sqrt(ux * ux + uy * uy + uz * uz)
+        if (ul < 1e-4f) return
+        ux /= ul; uy /= ul; uz /= ul
+        val rx = ny * uz - nz * uy
+        val ry = nz * ux - nx * uz
+        val rz = nx * uy - ny * ux
+        // The lid edges, meeting in the middle when fully shut.
+        val gap = rad * (1f - shut)
+        val ox = cx + nx * 1.2f; val oy = cy + ny * 1.2f; val oz = cz + nz * 1.2f
+        var w = 0
+        fun corner(u: Float, v: Float) {
+            radCamLidBuf[w++] = ox + rx * u + ux * v
+            radCamLidBuf[w++] = oy + ry * u + uy * v
+            radCamLidBuf[w++] = oz + rz * u + uz * v
+        }
+        fun quad(v0: Float, v1: Float) {
+            corner(-rad, v0); corner(rad, v0); corner(rad, v1)
+            corner(-rad, v0); corner(rad, v1); corner(-rad, v1)
+        }
+        quad(gap, rad)        // upper lid, coming down
+        w = 18
+        quad(-rad, -gap)      // lower lid, coming up
+
+        setXform(null)
+        setLit(1f)
+        Gl.glUniform1f(uFog, 0.06f)
+        Gl.glUniform1f(uAerial, aerialBlend)
+        Gl.glUniform4f(uCol, radCamBodyCol[0], radCamBodyCol[1], radCamBodyCol[2], 1f)
+        val fb = scratch(radCamLidBuf, slot = 1)
+        fb.position(0)
+        Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
+        Gl.glEnableVertexAttribArray(aPos)
+        Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, 12)
+    }
+
+    /** The camera's recording light, blinking. Additive over its shaded self, so
+     *  it pops without the surrounding panel changing colour. */
+    private fun drawRadCamBlink() {
+        val arr = radCamLight
+        // Nothing to blink while the city is coming down — the camera rides its
+        // building over and a light left burning in mid-air reads as a stray.
+        if (arr.isEmpty() || aerialMode || collapse > 0f) return
+        val ms = nowMillis() % RAD_CAM_BLINK_MS
+        val a = when {
+            ms < RAD_CAM_BLINK_FADE -> ms.toFloat() / RAD_CAM_BLINK_FADE
+            ms < RAD_CAM_BLINK_ON   -> 1f
+            ms < RAD_CAM_BLINK_ON + RAD_CAM_BLINK_FADE ->
+                1f - (ms - RAD_CAM_BLINK_ON).toFloat() / RAD_CAM_BLINK_FADE
+            else -> 0f
+        }
+        if (a <= 0.01f) return
+        setXform(null)
+        setLit(0f)                       // a light source, never shaded
+        Gl.glUniform1f(uFog, 0f)
+        Gl.glUniform1f(uAerial, 1f)
+        Gl.glUniform4f(uCol, 1.0f, 0.07f, 0.06f, a)
+        Gl.glEnable(Gl.GL_BLEND)
+        Gl.glBlendFunc(Gl.GL_SRC_ALPHA, Gl.GL_ONE)
+        Gl.glDepthMask(false)
+        Gl.glDepthFunc(Gl.GL_LEQUAL)     // it sits exactly on the faces it lights
+        val fb = scratch(arr)
+        fb.position(0)
+        Gl.glVertexAttribPointer(aPos, 3, Gl.GL_FLOAT, false, 12, fb)
+        Gl.glEnableVertexAttribArray(aPos)
+        Gl.glDrawArrays(Gl.GL_TRIANGLES, 0, arr.size / 3)
+        Gl.glDisable(Gl.GL_BLEND)
+        Gl.glDepthMask(true)
+        Gl.glDepthFunc(Gl.GL_LESS)
     }
 
     // Returns 0 if anything fails to compile or link, so callers can fall back

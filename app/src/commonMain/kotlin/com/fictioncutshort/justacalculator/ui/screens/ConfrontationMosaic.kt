@@ -60,7 +60,24 @@ import kotlin.random.Random
 internal const val CONF_MOSAIC_SHOW_MS     = 17_000L
 internal const val CONF_MOSAIC_EDIT_MS     = 27_000L
 internal const val CONF_MOSAIC_EDIT_DUR_MS = 4_200L        // done at 31.2 s
-internal const val CONF_MOSAIC_HOLD_MS     = 1_800L        // after the save, before conf11
+/**
+ * When the file is actually written — while the picture is just SITTING there,
+ * three seconds after it appears and seven before the edit starts.
+ *
+ * [saveConfMosaic] renders an 890x950 bitmap, PNG-encodes it and pushes it into
+ * the photo library, all synchronously: a few hundred milliseconds of blocked
+ * main thread, more on a slow device, and on iOS it can stop to ask for library
+ * permission. That used to happen BETWEEN conf10 and conf11, on top of the hold
+ * below — two to three seconds of silence in a monologue that otherwise runs
+ * line into line (conf04 through conf10 have no gap at all), and whose takes are
+ * trimmed to a tenth of a second of tail, so conf10 stopped at full voice with no
+ * cadence and the pause read as the line having been dropped rather than as a
+ * beat. Here it lands under a static panel and costs nothing anyone can hear.
+ */
+internal const val CONF_MOSAIC_SAVE_MS     = 20_000L
+/** How long the finished picture stays up. It now holds over the opening of
+ *  conf11 rather than over silence — see the ordering in CalculatorCityView. */
+internal const val CONF_MOSAIC_HOLD_MS     = 1_800L
 
 /** Tiles in a mosaic — the number the edit counts up to. */
 internal const val CONF_MOSAIC_CELLS = M_ROWS * M_COLS
