@@ -201,14 +201,16 @@ fun ScrambleGameOverlay(
                             ),
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier
-                                .width(220.dp)
+                                .widthIn(min = 220.dp)
                                 .height(56.dp)
                         ) {
                             Text(
                                 text = "Back to decisions",
                                 fontSize = 18.sp,
                                 fontFamily = CalculatorDisplayFont,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }

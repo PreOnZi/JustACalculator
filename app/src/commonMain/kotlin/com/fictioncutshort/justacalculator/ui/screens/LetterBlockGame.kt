@@ -111,11 +111,11 @@ fun LetterBlockGame(
         //               bottom edge.
         val isLandscape = playAreaWidthPx > playAreaHeightPx
         val targetCols = if (isLandscape) 10 else 6
-        val maxBlocksPerColumn = if (isLandscape) 6 else 11
+        val maxBlocksPerColumn = if (isLandscape) 6 else 10
         // Prefill matches the per-column cap so the grid opens full
         // (no half-empty columns at the start). Capped at maxBlocksPerColumn
         // so the runtime invariant in spawnIfNeeded still holds.
-        val prefillRows = if (isLandscape) 6 else 11
+        val prefillRows = if (isLandscape) 6 else 10
         // Pick the largest block size that still fits both targets — width
         // bound (cols × size ≤ width) and height bound (maxStack × size ≤
         // height). Landscape reserves 1.5 cells of vertical headroom for the
@@ -128,10 +128,18 @@ fun LetterBlockGame(
         // ≈166 either way — and eleven rows then occupy 1826 of 1920 pixels,
         // burying the question under the letters.
         //
-        // 2.5 cells reserves the message area explicitly. It changes nothing on
-        // a phone (2400/13.5 ≈ 178 is still above the 166 width bound, so the
-        // same size wins) and only binds on the shorter screens that need it.
-        val verticalHeadroom = if (isLandscape) 1.5f else 2.5f
+        // 2.5 cells reserved the message area explicitly, and that was still
+        // not enough. The reasoning above assumed the width bound wins on a
+        // phone, but the play area is NOT the screen — it is the weight(1f) band
+        // under the bezel bar — so on a normal-width handset the height bound is
+        // what binds, and 11 rows plus 2.5 cells left only 18% of that band for
+        // the narration. The narration is 24sp on 28sp leading, capped at 300dp
+        // wide, and runs to four or five lines, which is more like 25%.
+        //
+        // Ten rows and four cells of headroom leaves 29% clear, and the blocks
+        // come out within a couple of dp of the size they were — the row that
+        // came off is what paid for it, not the letters getting smaller.
+        val verticalHeadroom = if (isLandscape) 1.5f else 4f
         val widthBoundedSize = playAreaWidthPx / (targetCols + 0.5f)
         val heightBoundedSize = playAreaHeightPx / (maxBlocksPerColumn + verticalHeadroom)
         val blockSize = kotlin.math.min(widthBoundedSize, heightBoundedSize)

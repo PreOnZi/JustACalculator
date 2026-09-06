@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
@@ -252,13 +253,17 @@ fun FlappyBirdGame(
         }
 
         // Score
+        // 40dp was a guess at the status bar and it is short of a modern one:
+        // the safe-area top on a phone with a cutout is around 59dp, so the score
+        // sat behind the Dynamic Island. Take the real inset, then a small gap.
         Text("$score", color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace,
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 40.dp))
+            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 8.dp))
 
         // Finger tally — cumulative across every attempt in this round.
         Row(
-            modifier = Modifier.align(Alignment.TopStart).padding(start = 16.dp, top = 40.dp),
+            modifier = Modifier.align(Alignment.TopStart)
+                .statusBarsPadding().padding(start = 16.dp, top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (fingerBmp != null) {

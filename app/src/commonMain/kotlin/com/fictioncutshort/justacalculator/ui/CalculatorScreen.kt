@@ -1102,15 +1102,20 @@ fun CalculatorScreen() {
                 modifier = Modifier.padding(32.dp)
             ) {
                 // App Title
+                // "Just A Calculator" is wider than any phone at 40sp, so it
+                // always wraps — and the display face's default leading packs the
+                // two lines tight enough to touch. Set it explicitly rather than
+                // shrinking the title, which is the first thing anyone sees.
                 Text(
                     text = "Just A Calculator",
                     fontSize = 40.sp,
+                    lineHeight = 50.sp,
                     fontFamily = CalculatorDisplayFont,
                     color = AccentOrange,
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(22.dp))
+                Spacer(modifier = Modifier.height(30.dp))
 
                 Text(
                     text = "While effort was put into adapting the calculator for horizontal screens, it has been developed with vertical view-first in mind.",
@@ -1130,7 +1135,7 @@ fun CalculatorScreen() {
                         showTermsPopup = true
                     },
                     modifier = Modifier
-                        .width(130.dp)
+                        .widthIn(min = 130.dp)
                         .height(45.dp),
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(
@@ -1142,7 +1147,9 @@ fun CalculatorScreen() {
                     Text(
                         text = "Privacy Policy",
                         fontSize = 10.sp,
-                        fontFamily = CalculatorDisplayFont
+                        fontFamily = CalculatorDisplayFont,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
 
@@ -1159,8 +1166,13 @@ fun CalculatorScreen() {
                             showTermsWarning = true
                         }
                     },
+                    // Sized to its label, not to a guess. At a fixed 200dp the
+                    // label did not fit at 18sp and broke across two lines, so the
+                    // button read "Accept &" over "Continue" on every phone. A
+                    // floor keeps it looking deliberate on a wide screen; the
+                    // label decides the rest, and is not allowed to wrap.
                     modifier = Modifier
-                        .width(200.dp)
+                        .widthIn(min = 200.dp)
                         .height(58.dp),
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(
@@ -1173,7 +1185,9 @@ fun CalculatorScreen() {
                         text = "Accept & Continue",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
-                        fontFamily = CalculatorDisplayFont
+                        fontFamily = CalculatorDisplayFont,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
             }

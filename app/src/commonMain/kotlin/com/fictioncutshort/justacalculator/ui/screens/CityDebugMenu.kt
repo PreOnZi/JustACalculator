@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -124,6 +125,10 @@ fun DebugPasswordGate(onUnlock: () -> Unit, onCancel: () -> Unit) {
     ) {
         Column(
             modifier = Modifier
+                // Keep the PANEL out of the cutout and the home indicator while
+                // the scrim behind it still covers the screen edge to edge. On a
+                // phone with a Dynamic Island the title sat underneath it.
+                .safeDrawingPadding()
                 .fillMaxWidth(0.86f)
                 .background(Color(0xFF101010), RoundedCornerShape(6.dp))
                 .border(1.dp, Color(0xFF33FF66), RoundedCornerShape(6.dp))
@@ -230,6 +235,7 @@ fun CityDebugMenu(
     ) {
         Column(
             modifier = Modifier
+                .safeDrawingPadding()
                 .fillMaxWidth(0.94f)
                 .background(Color(0xFF0C0C0C), RoundedCornerShape(6.dp))
                 .border(1.dp, Color(0xFF33FF66), RoundedCornerShape(6.dp))

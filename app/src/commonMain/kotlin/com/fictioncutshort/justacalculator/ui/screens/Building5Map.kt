@@ -115,8 +115,16 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
     // the walk beat sends the player out of the app by design.
     val locGranted = rememberPermissionState(AppPermission.LOCATION)
     var hasLocPerm by locGranted
+    // Declining is a real answer and has to be told apart from "not asked yet":
+    // on the way in this screen is already showing while the system prompt is up,
+    // and the chapter should not editorialise before the player has replied.
+    // Both platforms report through this callback either way — CoreLocation's
+    // delegate fires on assignment with the standing status, so a refusal carried
+    // over from an earlier session arrives here too, not just a fresh one.
+    var locDeclined by remember { mutableStateOf(false) }
     val requestLocPerm = rememberPermissionRequest(AppPermission.LOCATION) { granted ->
         hasLocPerm = granted
+        locDeclined = !granted
     }
     LaunchedEffect(hasLocPerm) { if (!hasLocPerm) requestLocPerm() }
 
@@ -364,7 +372,9 @@ fun Building5Map(onComplete: () -> Unit, onExit: () -> Unit) {
         if (hasStarted) {
             if (!hasLocPerm) {
                 FallbackSketchMap(
-                    onRequestPerm = { requestLocPerm() }
+                    declined = locDeclined,
+                    onRequestPerm = { requestLocPerm() },
+                    onExit = onExit,
                 )
             } else {
                 PlatformBuildingMapView(
@@ -725,7 +735,11 @@ private fun ParkedScreen(onContinue: () -> Unit) {
 }
 
 @Composable
-private fun FallbackSketchMap(onRequestPerm: () -> Unit) {
+private fun FallbackSketchMap(
+    declined: Boolean,
+    onRequestPerm: () -> Unit,
+    onExit: () -> Unit,
+) {
     Box(Modifier.fillMaxSize().background(CON_BG)) {
         Canvas(Modifier.fillMaxSize()) {
             val cx = size.width / 2f; val cy = size.height / 2f
@@ -759,6 +773,37 @@ private fun FallbackSketchMap(onRequestPerm: () -> Unit) {
                 Text("[ ALLOW LOCATION ]",
                      color = Color.White, fontSize = 13.sp,
                      fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+            }
+            // The way out, once the player has said no.
+            //
+            // This chapter is walked, not played — without a position there is
+            // nothing here to do, and the walk is the only thing that ends it. So
+            // a refusal used to leave the player holding a screen with one button
+            // on it that the system would never answer again, and nothing to do
+            // but delete the app. Being shut in a building is the design; being
+            // shut in one you declined your way out of is not.
+            if (declined) {
+                Spacer(Modifier.height(30.dp))
+                Text(
+                    "Your privacy. Fair. I'd say I have my ways to find you, " +
+                        "but let's not get into that. It is your loss after all.",
+                    color = CON_AMBER, fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 19.sp,
+                    modifier = Modifier.fillMaxWidth(0.78f),
+                )
+                Spacer(Modifier.height(20.dp))
+                Box(
+                    Modifier
+                        .border(1.dp, CON_GREEN_D, RoundedCornerShape(3.dp))
+                        .clickable { onExit() }
+                        .padding(horizontal = 22.dp, vertical = 10.dp)
+                ) {
+                    Text("[ RETURN TO THE CITY ]",
+                         color = CON_GREEN, fontSize = 13.sp,
+                         fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                }
             }
         }
     }

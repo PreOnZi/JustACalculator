@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -106,7 +107,6 @@ fun Building6Runner(onComplete: () -> Unit, onExit: () -> Unit) {
     val sJump = remember { soundPool.load(Sounds.path("jump").orEmpty()) }
     val sCoin = remember { soundPool.load(Sounds.path("coin").orEmpty()) }
     val sFight = remember { soundPool.load(Sounds.path("fight").orEmpty()) }
-    val sPush = remember { soundPool.load(Sounds.path("stonepushing").orEmpty()) }
     val sEn5 = remember { soundPool.load(Sounds.path("en5").orEmpty()) }
     val runPlayer = remember { createSoundPlayer(Sounds.path("run").orEmpty())?.apply { setLooping(true); setVolume(0.1f, 0.1f) } }
     val pushPlayer = remember { createSoundPlayer(Sounds.path("stonepushing").orEmpty())?.apply { setLooping(true); setVolume(0.2f, 0.2f) } }
@@ -189,7 +189,7 @@ fun Building6Runner(onComplete: () -> Unit, onExit: () -> Unit) {
     var labels by remember { mutableStateOf<List<RunnerRenderer.ScreenLabel>>(emptyList()) }
     var atFinish by remember { mutableStateOf(false) }
     LaunchedEffect(renderer) {
-        var pJump = 0; var pCoin = 0; var pFight = 0; var pPush = 0; var pMsg = 0
+        var pJump = 0; var pCoin = 0; var pFight = 0; var pMsg = 0
         fun loop(mp: SoundPlayer?, on: Boolean) { mp?.let { if (on && !it.isPlaying) it.start(); if (!on && it.isPlaying) it.pause() } }
         while (true) {
             withFrameNanos { }
@@ -198,7 +198,13 @@ fun Building6Runner(onComplete: () -> Unit, onExit: () -> Unit) {
             if (renderer.jumpSfx != pJump) { pJump = renderer.jumpSfx; soundPool.play(sJump, 0.12f) }
             if (renderer.coinSfx != pCoin) { pCoin = renderer.coinSfx; soundPool.play(sCoin, 0.11f) }
             if (renderer.fightSfx != pFight) { pFight = renderer.fightSfx; soundPool.play(sFight, 0.15f) }
-            if (renderer.pushSfx != pPush) { pPush = renderer.pushSfx; soundPool.play(sPush, 0.15f) }
+            // No one-shot for the boulder: stonepushing.mp3 runs 42.7 s, and a
+            // SoundPool one-shot plays a sample right through with no handle to
+            // stop it. Pressing PUSH therefore started a three-quarter-minute
+            // drone alongside the loop below — the loop stopped with the
+            // animation, the one-shot carried on over everything after it. The
+            // looping player is the only source now, so the sound is exactly as
+            // long as the shoving is.
             if (renderer.msgPopupSfx != pMsg) { pMsg = renderer.msgPopupSfx; soundPool.play(sEn5, 0.13f) }
             // looping sounds (all silenced while paused): run / phone ring / on-the-phone / texting
             val pd = renderer.paused
@@ -306,7 +312,10 @@ fun Building6Runner(onComplete: () -> Unit, onExit: () -> Unit) {
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(top = 30.dp, end = 12.dp)
+                // 30dp cleared an old status bar but not a cutout's ~59dp, so the
+                // counter was tucked under the system bar on a modern phone.
+                .statusBarsPadding()
+                .padding(top = 6.dp, end = 12.dp)
                 .clip(RoundedCornerShape(14.dp))
                 .background(Color(0xFFFFC107).copy(alpha = 0.92f))
                 .padding(horizontal = 12.dp, vertical = 6.dp),
@@ -825,7 +834,7 @@ private class RunnerRenderer(private val context: AppContext) : GlRenderer {
     private val COUNTDOWN_GO = 0.6f                  // player starts running when "Race!" shows
     // Sound events (Compose plays them): counters bump on each one-shot; runningSfx loops the run.
     @Volatile var jumpSfx = 0; @Volatile var coinSfx = 0; @Volatile var fightSfx = 0
-    @Volatile var pushSfx = 0; @Volatile var fallSfx = 0; @Volatile var runningSfx = false
+    @Volatile var fallSfx = 0; @Volatile var runningSfx = false
     @Volatile var boulderPushing = false   // true while the boulder is being shoved uphill
     @Volatile var fightingSfxActive = false // true through the whole fight animation
     @Volatile var hazardRollingCount = 0    // little boulders currently rolling down the hill
@@ -1198,16 +1207,20 @@ private class RunnerRenderer(private val context: AppContext) : GlRenderer {
         floatArrayOf(-1.3f, 1.1f), floatArrayOf(1.3f, 1.1f),   // extra rows for bigger boulders
     )
 
+    /** How long the boulder grunts back at a heave it will not budge for. */
+    private val HEAVE_SFX = 0.9f
+    private var heaveTimer = 0f
+
     fun pushBoulder() = postPending(::doPushBoulder)
     private fun doPushBoulder() {
         if (runState != RunState.HILL_PROMPT) return
         if (arrivedPushers() >= hillNeeded) {
             runState = RunState.HILL_PUSH
             boulderMaxY = boulderY
-            pushSfx++
+            // No sound cue here: HILL_PUSH turns the looping one on by itself.
         } else {
             refuseTimer = 1.3f                        // play the head-shake
-            pushSfx++                                 // still heave at it — the boulder
+            heaveTimer = HEAVE_SFX                    // still heave at it — the boulder
                                                       // grunts even when it won't budge alone
         }
     }
@@ -1809,11 +1822,16 @@ private class RunnerRenderer(private val context: AppContext) : GlRenderer {
         // Both shoving states: the player leans on the boulder alone across the flat
         // (HILL_SOLO) well before anyone is called, and that stretch used to play
         // silent under the push animation.
-        boulderPushing = runState == RunState.HILL_SOLO || runState == RunState.HILL_PUSH
+        // Exactly as long as the push ANIMATION, which is these two states — plus
+        // the short grunt of a heave that failed, which has no push animation of
+        // its own (the character shakes their head instead).
+        boulderPushing = runState == RunState.HILL_SOLO || runState == RunState.HILL_PUSH ||
+            heaveTimer > 0f
         fightingSfxActive = runState == RunState.FIGHTING // fight sound repeats through the scrap
         atFinish = runState == RunState.FINISH
         publishLabels()
         if (refuseTimer > 0f) refuseTimer -= dt
+        if (heaveTimer > 0f) heaveTimer -= dt
         // The boulder popup only appears AFTER the head-shake at the heel finishes.
         hillActive = runState == RunState.HILL_PROMPT && refuseTimer <= 0f
         gapActive = runState == RunState.GAP_PROMPT
